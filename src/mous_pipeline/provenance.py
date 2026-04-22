@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import platform
 import sys
 from datetime import datetime, timezone
@@ -23,3 +24,8 @@ def build_run_manifest(subject: str, stage: str, params: dict[str, Any]) -> dict
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     path.write_text(json.dumps(manifest, indent=2))
+
+
+def config_fingerprint(config_path: Path) -> str:
+    data = config_path.read_bytes()
+    return hashlib.sha256(data).hexdigest()
