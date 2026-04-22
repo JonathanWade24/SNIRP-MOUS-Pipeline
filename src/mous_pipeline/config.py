@@ -40,11 +40,20 @@ class FeatureConfig:
 
 
 @dataclass
+class RdrConfig:
+    """Radboud Data Repository: subject folders live under collection_path on WebDAV."""
+
+    collection_path: str = ""
+    notes: str = ""
+
+
+@dataclass
 class PipelineConfig:
     data_root: Path = Path(".")
     derivatives_root: Path = Path("derivatives/mous_pipeline")
     subjects: list[str] = field(default_factory=list)
     paths: dict[str, str] = field(default_factory=dict)
+    rdr: RdrConfig = field(default_factory=RdrConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     epoching: EpochingConfig = field(default_factory=EpochingConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -73,11 +82,18 @@ def load_config(path: str | Path) -> PipelineConfig:
     bands = _to_tuple_bands(feat_raw.get("bands", FeatureConfig().bands))
     features = FeatureConfig(bands=bands)
 
+    rdr_raw = raw.get("rdr", {})
+    rdr = RdrConfig(
+        collection_path=str(rdr_raw.get("collection_path", "")),
+        notes=str(rdr_raw.get("notes", "")),
+    )
+
     return PipelineConfig(
         data_root=Path(raw.get("data_root", ".")),
         derivatives_root=Path(raw.get("derivatives_root", "derivatives/mous_pipeline")),
         subjects=raw.get("subjects", []),
         paths=raw.get("paths", {}),
+        rdr=rdr,
         preprocess=preprocess,
         epoching=epoching,
         features=features,

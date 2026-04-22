@@ -37,3 +37,30 @@ mous-pipeline fetch-subject \
 ```
 
 The command prints an executable `duck` command. Add `--execute` to run it immediately.
+
+## Download subjects from RDR (Repocli)
+
+1. Install `repocli` from [Donders-Institute/dr-tools releases](https://github.com/Donders-Institute/dr-tools/releases) (e.g. `repocli.x86_64` for Linux).
+2. Configure once:
+
+```bash
+repocli config
+```
+
+At `repo baseurl:` enter `https://webdav.data.ru.nl`, then your RDR **Data access** credentials.
+
+3. Set `rdr.collection_path` in your YAML to the collection folder (e.g. `dccn/DSC_3011020.09_236_v1`), matching the path under WebDAV after `dccn/`.
+
+4. Pull a subject into `data_root`:
+
+```bash
+mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+```
+
+Or override the collection path:
+
+```bash
+mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
+```
+
+Then run the pipeline as usual (`mous-pipeline run ...`).

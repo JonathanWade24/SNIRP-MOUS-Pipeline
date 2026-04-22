@@ -1,6 +1,10 @@
 data_root: "."
 derivatives_root: "derivatives/mous_pipeline"
 subjects: ["A2002"]
+# RDR (Repocli): one-time `repocli config` with base URL https://webdav.data.ru.nl
+# Then: mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+rdr:
+  collection_path: "dccn/DSC_3011020.09_236_v1"
 paths:
   task_ds: "sub-A2002/meg/sub-A2002_task-auditory_meg.ds"
   rest_ds: "sub-A2002/meg/sub-A2002_task-rest_meg.ds"

@@ -9,6 +9,12 @@ from pathlib import Path
 
 from .config import load_config
 from .m0_intake.cyberduck import build_duck_download_command, duck_available, execute_duck_command
+from .m0_intake.repocli_rdr import (
+    build_repocli_get_command,
+    execute_repocli_command,
+    remote_subject_path,
+    repocli_available,
+)
 from .m9_orchestration.runner import run_subject
 
 
@@ -35,6 +41,28 @@ def main() -> None:
         "--execute",
         action="store_true",
         help="Execute duck command immediately (requires duck installed and authentication configured)",
+    )
+
+    rdr_parser = sub.add_parser(
+        "fetch-rdr",
+        help="Download a subject folder from RDR via repocli (run `repocli config` once; base URL https://webdav.data.ru.nl)",
+    )
+    rdr_parser.add_argument("--config", default=None, help="YAML config with rdr.collection_path and data_root")
+    rdr_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
+    rdr_parser.add_argument(
+        "--collection-path",
+        default=None,
+        help="RDR path under WebDAV root, e.g., dccn/DSC_3011020.09_236_v1 (overrides config)",
+    )
+    rdr_parser.add_argument(
+        "--dest",
+        default=None,
+        help="Local directory where sub-*/ will be placed (default: config data_root or current directory)",
+    )
+    rdr_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Run repocli immediately (otherwise print the command only)",
     )
 
     args = parser.parse_args()
@@ -71,6 +99,40 @@ def main() -> None:
             print("duck is not installed or not on PATH. Install Cyberduck CLI first.", file=sys.stderr)
             sys.exit(1)
         proc = execute_duck_command(cmd)
+        if proc.stdout:
+            print(proc.stdout)
+        if proc.returncode != 0:
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+            sys.exit(proc.returncode)
+    elif args.cmd == "fetch-rdr":
+        collection_path = args.collection_path
+        dest: Path
+        if args.config:
+            cfg = load_config(args.config)
+            if not collection_path:
+                collection_path = cfg.rdr.collection_path
+            dest = Path(args.dest) if args.dest else cfg.data_root
+        else:
+            dest = Path(args.dest) if args.dest else Path(".")
+        if not collection_path:
+            print(
+                "Missing collection path: set rdr.collection_path in config or pass --collection-path.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        remote = remote_subject_path(collection_path, args.subject)
+        cmd = build_repocli_get_command(remote_path=remote, local_dir=dest.resolve())
+        print("Repocli command (credentials: repocli config; base URL https://webdav.data.ru.nl):")
+        print(" ".join(shlex.quote(c) for c in cmd))
+        if not args.execute:
+            print("Preview only. Add --execute to run.")
+            return
+        if not repocli_available():
+            print("repocli is not on PATH. Install from Donders-Institute/dr-tools releases.", file=sys.stderr)
+            sys.exit(1)
+        dest.mkdir(parents=True, exist_ok=True)
+        proc = execute_repocli_command(cmd)
         if proc.stdout:
             print(proc.stdout)
         if proc.returncode != 0:
