@@ -17,3 +17,5 @@ derivatives/
 .pytest_cache/
 __pycache__/
 *.pyc
+sub-A2002.tar.gz
+*.tar.gz
