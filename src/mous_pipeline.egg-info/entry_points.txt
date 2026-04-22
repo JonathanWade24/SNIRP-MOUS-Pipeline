@@ -1,0 +1,2 @@
+[console_scripts]
+mous-pipeline = mous_pipeline.cli:main

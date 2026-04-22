@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mous-pipeline"
+version = "0.1.0"
+description = "Modular MOUS analysis pipeline for oscillatory and wave dynamics"
+requires-python = ">=3.10"
+dependencies = [
+  "mne",
+  "mne-bids",
+  "pycircstat",
+  "tensorpac",
+  "scikit-learn",
+  "scipy",
+  "numpy",
+  "pandas",
+  "matplotlib",
+  "pyyaml",
+  "pydantic",
+  "pytest",
+  "nibabel",
+]
+
+[project.scripts]
+mous-pipeline = "mous_pipeline.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

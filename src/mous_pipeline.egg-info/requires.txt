@@ -1,0 +1,13 @@
+mne
+mne-bids
+pycircstat
+tensorpac
+scikit-learn
+scipy
+numpy
+pandas
+matplotlib
+pyyaml
+pydantic
+pytest
+nibabel

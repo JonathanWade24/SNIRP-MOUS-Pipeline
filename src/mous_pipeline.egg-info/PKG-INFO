@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: mous-pipeline
+Version: 0.1.0
+Summary: Modular MOUS analysis pipeline for oscillatory and wave dynamics
+Requires-Python: >=3.10
+Requires-Dist: mne
+Requires-Dist: mne-bids
+Requires-Dist: pycircstat
+Requires-Dist: tensorpac
+Requires-Dist: scikit-learn
+Requires-Dist: scipy
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: pyyaml
+Requires-Dist: pydantic
+Requires-Dist: pytest
+Requires-Dist: nibabel

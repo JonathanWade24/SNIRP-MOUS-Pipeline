@@ -1,0 +1,26 @@
+data_root: "."
+derivatives_root: "derivatives/mous_pipeline"
+subjects: ["A2002"]
+paths:
+  task_ds: "sub-A2002/meg/sub-A2002_task-auditory_meg.ds"
+  rest_ds: "sub-A2002/meg/sub-A2002_task-rest_meg.ds"
+  events_tsv: "sub-A2002/meg/sub-A2002_task-auditory_events.tsv"
+  t1_nii: "sub-A2002/anat/sub-A2002_T1w.nii"
+preprocess:
+  backend: "inhouse"
+  notch_freqs: [50, 100, 150]
+  resample_hz: 300.0
+  ica_n_components: 40
+  ecg_threshold: 0.9
+  ecg_max_components: 3
+epoching:
+  tmin: -0.5
+  tmax: 3.0
+  baseline: [-0.5, 0.0]
+  min_trials_per_condition: 50
+features:
+  bands:
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta: [13.0, 30.0]
+    gamma: [30.0, 80.0]
