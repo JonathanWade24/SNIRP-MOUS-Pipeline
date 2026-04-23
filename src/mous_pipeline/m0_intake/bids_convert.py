@@ -126,16 +126,22 @@ def _normalize_subject_anat_filenames(subject: str, root: Path) -> list[Path]:
             new_rel = f"anat/{dst.name}"
             renames.append((old_rel, new_rel))
 
-    # Update sub-*_scans.tsv to reflect renamed anat filenames.
-    if renames:
-        for scans_tsv in (root / f"sub-{sub}").glob("*_scans.tsv"):
-            try:
-                text = scans_tsv.read_text()
-                for old_rel, new_rel in renames:
-                    text = text.replace(old_rel, new_rel)
-                scans_tsv.write_text(text)
-            except Exception:
-                pass
+    # Update sub-*_scans.tsv unconditionally — patch any residual space-CTF
+    # references even when the file rename already happened on a prior run.
+    _ANAT_RENAME_PAIRS = [
+        (f"anat/sub-{sub}_space-CTF_T1w.nii.gz", f"anat/sub-{sub}_acq-CTF_T1w.nii.gz"),
+        (f"anat/sub-{sub}_space-CTF_T1w.nii",    f"anat/sub-{sub}_acq-CTF_T1w.nii"),
+    ]
+    for scans_tsv in (root / f"sub-{sub}").glob("*_scans.tsv"):
+        try:
+            text = scans_tsv.read_text()
+            updated = text
+            for old_rel, new_rel in _ANAT_RENAME_PAIRS:
+                updated = updated.replace(old_rel, new_rel)
+            if updated != text:
+                scans_tsv.write_text(updated)
+        except Exception:
+            pass
 
     return renamed
 
