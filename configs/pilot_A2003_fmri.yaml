@@ -1,10 +1,12 @@
 data_root: "~/MOUS/Pipeline WIP/mous_data/"
 derivatives_root: "derivatives/mous_pipeline"
-subjects: []
+subjects: ["A2003"]
+
 # RDR (Repocli): one-time `repocli config` with base URL https://webdav.data.ru.nl
 # Then: mous-pipeline fetch-rdr --config configs/pilot_A2003_fmri.yaml --subject A2003 --execute
 rdr:
   collection_path: "dccn/DSC_3011020.09_236_v1"
+
 preprocess:
   backend: "inhouse"  # or "mne_bids_pipeline"
   bids_pipeline_deriv_root: ""
@@ -13,11 +15,13 @@ preprocess:
   ica_n_components: 40
   ecg_threshold: 0.9
   ecg_max_components: 3
+
 epoching:
   tmin: -0.85
   tmax: 3.0
   baseline: [-0.5, 0.0]
   min_trials_per_condition: 50
+
 features:
   bands:
     theta: [4.0, 8.0]
@@ -25,25 +29,38 @@ features:
     beta: [13.0, 30.0]
     gamma: [30.0, 80.0]
 
+# Aim 1 / m5 source reconstruction.
+# Set subjects_dir once FreeSurfer recon-all has been run for sub-A2003.
+source:
+  subjects_dir: ""          # e.g. /neurodesktop-storage/freesurfer/subjects
+  use_fsaverage: true
+  beamformer: "lcmv"
+  spacing: "oct6"
+  trans: "fsaverage"
+  conductivity: [0.3]
+  reg: 0.05
+  pick_ori: "max-power"
+  weight_norm: "unit-noise-gain"
+
 # Aim 2 fMRI coupling configuration.
 # fMRIPrep on this system runs from CVMFS via Neurodesk:
 #   which fmriprep -> /cvmfs/neurodesk.ardc.edu.au/containers/fmriprep_25.2.5_20260413/fmriprep
 # No container needed — pipeline calls the binary directly after `ml fmriprep`.
 fmri:
-  bold_path: ""            # leave empty — pipeline auto-discovers sub-*/func/*auditory_bold.nii
+  bold_path: ""              # leave empty — pipeline auto-discovers sub-*/func/*auditory_bold.nii
   tr: 2.0
   atlas: "glasser"
   roi: "L_TE1a"
-  fmriprep_container: ""   # empty = use PATH binary (CVMFS/Neurodesk)
+  fmriprep_container: ""     # empty = use PATH binary (CVMFS/Neurodesk)
   fmriprep_output: "derivatives/fmriprep"
-  skip_fmriprep: false     # set to true once fMRIPrep has already been run successfully
-  neurodesk_module: "fmriprep"   # loaded via `ml fmriprep` if fmriprep not yet on PATH
-  fs_license_file: ""      # REQUIRED: set to your FreeSurfer license path, e.g.:
-                            #   /neurodesktop-storage/freesurfer/license.txt
+  skip_fmriprep: false       # set to true once fMRIPrep has already been run successfully
+  neurodesk_module: "fmriprep"  # loaded via `ml fmriprep` before calling fmriprep binary
+  fs_license_file: ""        # REQUIRED for fMRIPrep: path to FreeSurfer license.txt
+                              #   e.g. /neurodesktop-storage/freesurfer/license.txt
 
-# Optional Aim 3 null-wave validation stage.
-# wave_validation:
-#   enabled: false
-#   n_trials: 60
-#   snr: 1.0
-#   random_state: 42
+# Aim 3 null-wave validation (m12).
+wave_validation:
+  enabled: true
+  n_trials: 60
+  snr: 1.0
+  random_state: 42
