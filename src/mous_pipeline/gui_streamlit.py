@@ -245,6 +245,26 @@ def _fmt_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _run_state_candidates(cfg: PipelineConfig, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        cfg.derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_state.json",
+        cfg.derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_state.json",
+    ]
+
+
+def _read_run_state(cfg: PipelineConfig, subject: str) -> dict[str, Any] | None:
+    for path in _run_state_candidates(cfg, subject):
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text())
+            except Exception:
+                return None
+            payload["_path"] = str(path)
+            return payload
+    return None
+
+
 def _load_stage_estimates(cfg: PipelineConfig, subject: str, selected: list[str]) -> dict[str, float]:
     """Estimate stage durations from last subject manifest; fallback to defaults."""
     defaults = {stage: 8.0 for stage in selected}
@@ -594,6 +614,24 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             "error": None,
         }
     except Exception as exc:
+        state_path = _run_state_candidates(cfg, subject)[0]
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "subject": subject.removeprefix("sub-"),
+                    "status": "failed",
+                    "selected_stages": selected,
+                    "current_stage": None,
+                    "stage_index": 0,
+                    "stage_total": len(selected),
+                    "completed_stages": list(completed),
+                    "stage_timings_s": {},
+                    "error": str(exc),
+                },
+                indent=2,
+            )
+        )
         progress.empty()
         logs.append(f"[ERROR] {exc}\n")
         log_box.code("".join(logs))
@@ -620,6 +658,33 @@ def _run_section() -> None:
             return
         subjects_to_run = [s.strip().removeprefix("sub-") for s in cfg.subjects if s.strip()]
         st.info(f"Will run: {', '.join(subjects_to_run)}")
+
+    st.divider()
+    st.subheader("Live monitor")
+    monitor_subject = subjects_to_run[0] if subjects_to_run else ""
+    auto_refresh = st.checkbox("Auto-refresh live monitor (2s)", value=True)
+    if auto_refresh and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=2000, key=f"live-monitor-{monitor_subject}")
+    st.button("Refresh live monitor", width="content")
+    if monitor_subject:
+        live = _read_run_state(cfg, monitor_subject)
+        if live:
+            idx = int(live.get("stage_index") or 0)
+            total = int(live.get("stage_total") or 0)
+            status = str(live.get("status") or "unknown")
+            current = live.get("current_stage") or "—"
+            done = len(live.get("completed_stages") or [])
+            st.markdown(
+                f"**sub-{monitor_subject}:** `{status}` • stage `{current}` "
+                f"({idx}/{total}) • completed `{done}`"
+            )
+            if live.get("error"):
+                st.error(str(live.get("error")))
+            with st.expander("Live state JSON"):
+                st.json({k: v for k, v in live.items() if k != "_path"})
+                st.caption(f"Source: `{live.get('_path')}`")
+        else:
+            st.caption(f"No live run state found yet for sub-{monitor_subject}.")
 
     st.divider()
 
