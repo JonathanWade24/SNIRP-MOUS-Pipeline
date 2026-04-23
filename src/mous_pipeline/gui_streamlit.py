@@ -274,16 +274,6 @@ def _init_state() -> None:
     st.session_state.setdefault("cfg_loaded_path", None)
     st.session_state.setdefault("run_history", [])
     st.session_state.setdefault("remote_subject_options", [])
-    # #region agent log
-    try:
-        import time as _t, json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "A_E", "location": "gui_streamlit.py:_init_state", "message": "GUI init CWD and env", "data": {"cwd": str(Path.cwd()), "config_path": st.session_state.get("config_path", ""), "gui_config_env": os.environ.get("MOUS_GUI_CONFIG", "")}, "timestamp": int(_t.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
     st.session_state.setdefault("remote_subject_error", "")
 
 
@@ -320,21 +310,9 @@ def _smart_defaults(cfg: PipelineConfig) -> list[str]:
     fmri_cfg = getattr(cfg, "fmri", None)
     # Include m10/m11 when either a bold_path is provided OR auto-discovery is
     # enabled (skip_fmriprep=false means fMRIPrep will produce the BOLD output).
-    fmri_enabled = bool(fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)))
-    if fmri_enabled:
+    if fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)):
         defaults += ["m10", "m11"]
-    result = [s for s in STAGES if s in defaults]
-    # #region agent log
-    try:
-        import time as _t, json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "E", "location": "gui_streamlit.py:_smart_defaults", "message": "smart defaults computed", "data": {"fmri_enabled": fmri_enabled, "skip_fmriprep": getattr(fmri_cfg, "skip_fmriprep", None), "bold_path": getattr(fmri_cfg, "bold_path", ""), "fmriprep_output": getattr(fmri_cfg, "fmriprep_output", ""), "defaults": result}, "timestamp": int(_t.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    return result
+    return [s for s in STAGES if s in defaults]
 
 
 def _discover_config_files() -> list[str]:

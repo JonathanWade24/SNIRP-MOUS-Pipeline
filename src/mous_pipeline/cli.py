@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shlex
@@ -347,8 +348,20 @@ def main() -> None:
             base_url_path = ""
         cfg_path = str(Path(args.config).expanduser().resolve())
         os.environ["MOUS_GUI_CONFIG"] = cfg_path
-        cmd = [
-            "streamlit",
+        streamlit_bin = shutil.which("streamlit")
+        if streamlit_bin:
+            cmd = [streamlit_bin]
+        else:
+            # Prefer the active interpreter when the console-script is missing.
+            if importlib.util.find_spec("streamlit") is None:
+                print(
+                    "Streamlit is not installed in this environment.\n"
+                    "Install it with: python -m pip install streamlit",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            cmd = [sys.executable, "-m", "streamlit"]
+        cmd += [
             "run",
             "src/mous_pipeline/gui_streamlit.py",
             "--server.headless",
