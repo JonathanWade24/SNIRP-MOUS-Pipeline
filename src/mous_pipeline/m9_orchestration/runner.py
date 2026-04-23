@@ -132,22 +132,33 @@ def run_subject(
         "dci_r":     out_dir / f"sub-{subject}_dci_rest.npy",
         "sliding_t": out_dir / f"sub-{subject}_sliding_t.npy",
     }
+    # sensor_xy + epoch shape cached alongside m6a so m12 can simulate without
+    # reloading raw/epoch data.
+    _m6a_sensor_xy   = out_dir / f"sub-{subject}_sensor_xy.npy"
+    _m6a_epoch_shape = out_dir / f"sub-{subject}_epoch_shape.npz"
     out_files = list(_m6a_paths.values())
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
     _m4trial_hit = not force and _m4t_prestim.exists() and _m4t_n400m.exists()
-    _m6a_hit     = not force and all(p.exists() for p in _m6a_paths.values())
+    _m6a_hit     = (
+        not force
+        and all(p.exists() for p in _m6a_paths.values())
+        and _m6a_sensor_xy.exists()
+        and _m6a_epoch_shape.exists()
+    )
 
     # m2/m3 (epochs) are only needed when at least one epoch-dependent stage
-    # requires fresh computation.  m12 always needs epochs for simulation.
+    # requires fresh computation.
+    # - m6_extra only needs analytic_features (m4 cache satisfies it)
+    # - m12 only needs sensor_xy + epoch shape (m6a cache satisfies it)
     _needs_epochs = any([
         _stage_selected("m4",       only, skip) and not _m4_hit,
         _stage_selected("m4_trial", only, skip) and not _m4trial_hit,
         _stage_selected("m6a",      only, skip) and not _m6a_hit,
         _stage_selected("m5",       only, skip),
-        _stage_selected("m6_extra", only, skip),
-        _stage_selected("m12",      only, skip),
+        _stage_selected("m6_extra", only, skip) and not _m4_hit,
+        _stage_selected("m12",      only, skip) and not _m6a_hit,
     ])
 
     # ── m2: preprocess ────────────────────────────────────────────────────────
@@ -252,9 +263,7 @@ def run_subject(
         dci_w     = np.load(_m6a_paths["dci_w"])
         dci_r     = np.load(_m6a_paths["dci_r"])
         sliding_t = np.load(_m6a_paths["sliding_t"])
-        # sensor_xy/meg_picks needed only for m12 which also requires epochs
-        if _stage_selected("m12", only, skip) and epochs is not None:
-            sensor_xy, meg_picks = get_sensor_positions(epochs.info)
+        sensor_xy = np.load(_m6a_sensor_xy)
     else:
         assert epochs is not None and epochs_rest is not None
         sensor_xy, meg_picks = get_sensor_positions(epochs.info)
@@ -454,13 +463,27 @@ def run_subject(
         try:
             wv = getattr(cfg, "wave_validation", None)
             if wv and getattr(wv, "enabled", False):
+                if epochs is not None:
+                    _sim_source = epochs["ZINNEN"]
+                    _sensor_xy_m12 = sensor_xy
+                else:
+                    # Use cached epoch shape + sensor positions — no raw reload needed.
+                    _shape = np.load(_m6a_epoch_shape)
+                    _sensor_xy_m12 = np.load(_m6a_sensor_xy)
+
+                    class _FakeEpochs:
+                        def get_data(self, picks=None):
+                            return np.zeros((1, int(_shape["n_ch"]), int(_shape["n_t"])))
+                        info = {"sfreq": float(_shape["sfreq"])}
+
+                    _sim_source = _FakeEpochs()
                 sim_data = simulate_two_dipoles(
-                    epochs["ZINNEN"],
+                    _sim_source,
                     n_trials=int(getattr(wv, "n_trials", 60)),
                     snr=float(getattr(wv, "snr", 1.0)),
                     random_state=int(getattr(wv, "random_state", 42)),
                 )
-                _, null_dci = epochs_to_directions(epochs["ZINNEN"], sensor_xy, data_override=sim_data)
+                _, null_dci = epochs_to_directions(_sim_source, _sensor_xy_m12, data_override=sim_data)
                 null_summary = confound_null_dci(dci_z, null_dci)
                 result.metrics["aim3_two_dipole_z"] = null_summary["z"]
                 result.metrics["m12_null_summary"] = null_summary
@@ -486,6 +509,12 @@ def run_subject(
         np.save(_m6a_paths["dci_w"],     dci_w)
         np.save(_m6a_paths["dci_r"],     dci_r)
         np.save(_m6a_paths["sliding_t"], sliding_t)
+        if sensor_xy is not None:
+            np.save(_m6a_sensor_xy, sensor_xy)
+        if epochs is not None:
+            meg_data = epochs["ZINNEN"].get_data(picks="meg")
+            np.savez(_m6a_epoch_shape, n_ch=meg_data.shape[1], n_t=meg_data.shape[2],
+                     sfreq=epochs.info["sfreq"])
     result.outputs.extend(out_files)
 
     if _stage_selected("m8", only, skip):

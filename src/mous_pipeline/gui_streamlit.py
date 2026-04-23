@@ -256,6 +256,9 @@ def _load_cfg(path_value: str) -> tuple[Path, PipelineConfig] | None:
         cfg = load_config(cfg_path)
         st.session_state["cfg"] = cfg
         st.session_state["cfg_loaded_path"] = cfg_path
+        # Reset stage selector keys so _smart_defaults re-applies for the new config.
+        st.session_state.pop("core_stage_sel", None)
+        st.session_state.pop("opt_stage_sel", None)
         return cfg_path, cfg
     except Exception as exc:
         st.error(f"Failed to load config: {exc}")
@@ -610,7 +613,7 @@ def _run_section() -> None:
                     "outputs": STAGE_IO.get(s, {}).get("outputs", ""),
                 }
             )
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     with st.expander("Full module catalog (m0-m12)"):
         module_rows = []
         for module_id in [* [f"m{i}" for i in range(0, 13)], "bids_pipeline_backend"]:
@@ -623,7 +626,7 @@ def _run_section() -> None:
                     "outputs": meta["outputs"],
                 }
             )
-        st.dataframe(module_rows, use_container_width=True, hide_index=True)
+        st.dataframe(module_rows, width="stretch", hide_index=True)
 
     force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
     st.divider()
@@ -634,7 +637,7 @@ def _run_section() -> None:
             projected_rows.append({"subject": f"sub-{subj}", "output_path": out})
     if projected_rows:
         st.caption(f"Potential artifacts for selected stages across {len(subjects_to_run)} subject(s).")
-        st.dataframe(projected_rows, use_container_width=True, hide_index=True)
+        st.dataframe(projected_rows, width="stretch", hide_index=True)
     else:
         st.info("No file artifacts are projected for current stage selection.")
 
@@ -686,7 +689,7 @@ def _run_section() -> None:
                     "aim1_prestim_auc": _fmt(h.get("aim1_prestim_auc")),
                     "aim3_two_dipole_z": _fmt(h.get("aim3_two_dipole_z")),
                 })
-            st.dataframe(rows, use_container_width=True)
+            st.dataframe(rows, width="stretch")
 
 
 def _fmt(v: Any) -> str:
@@ -841,7 +844,7 @@ def _files_section() -> None:
                     "size_bytes": (e.stat().st_size if e.is_file() else ""),
                 }
             )
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     else:
         st.caption("File preview")
         suffix = target.suffix.lower()
@@ -852,7 +855,7 @@ def _files_section() -> None:
                 import pandas as pd
 
                 sep = "\t" if suffix == ".tsv" else ","
-                st.dataframe(pd.read_csv(target, sep=sep).head(200), use_container_width=True)
+                st.dataframe(pd.read_csv(target, sep=sep).head(200), width="stretch")
             elif suffix in {".txt", ".log", ".md", ".yaml", ".yml", ".py"}:
                 st.code(target.read_text()[:15000])
             else:
