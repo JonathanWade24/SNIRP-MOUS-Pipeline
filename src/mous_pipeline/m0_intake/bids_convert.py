@@ -17,16 +17,20 @@ def _subject_label(subject: str) -> str:
 
 
 _CHANNEL_TYPE_MAP = {
+    # Standard sensor types
     "eeg": "EEG",
     "eog": "EOG",
     "ecg": "ECG",
     "emg": "EMG",
     "trigger": "TRIG",
     "stim": "TRIG",
-    "refmag": "MEGREFMAG",
-    "refgrad": "MEGREFGRAD",
+    # CTF MEG sensor types — BIDS requires fully qualified gradiometer subtypes.
+    # CTF uses axial gradiometers for both primary sensors and reference channels.
     "megmag": "MEGMAG",
-    "meggrad": "MEGGRAD",
+    "meggrad": "MEGGRADAXIAL",
+    "refmag": "MEGREFMAG",
+    "refgrad": "MEGREFGRADAXIAL",
+    # Catch-all for non-standard / vendor-specific labels
     "misc": "MISC",
     "unknown": "MISC",
     "adc": "MISC",
@@ -38,10 +42,12 @@ _ALLOWED_CHANNEL_TYPES = {
     "ECG",
     "EMG",
     "TRIG",
-    "MEGREFMAG",
-    "MEGREFGRAD",
     "MEGMAG",
-    "MEGGRAD",
+    "MEGGRADAXIAL",
+    "MEGGRADPLANAR",
+    "MEGREFMAG",
+    "MEGREFGRADAXIAL",
+    "MEGREFGRADPLANAR",
     "MISC",
 }
 
@@ -95,12 +101,17 @@ def _ensure_dataset_level_files(root: Path) -> None:
 
 
 def _normalize_subject_anat_filenames(subject: str, root: Path) -> list[Path]:
-    """Rename non-BIDS `space-CTF` T1w files to BIDS-compatible `acq-CTF`."""
+    """Rename non-BIDS `space-CTF` T1w files to BIDS-compatible `acq-CTF`.
+
+    Also updates any subject-level scans.tsv that references the old filename,
+    which fMRIPrep's bids-validator checks via SCANS_FILENAME_NOT_MATCH_DATASET.
+    """
     sub = _subject_label(subject)
     anat_dir = root / f"sub-{sub}" / "anat"
     if not anat_dir.exists():
         return []
     renamed: list[Path] = []
+    renames: list[tuple[str, str]] = []  # (old_rel, new_rel) for scans.tsv update
     for ext in (".nii.gz", ".nii", ".json"):
         src = anat_dir / f"sub-{sub}_space-CTF_T1w{ext}"
         if not src.exists():
@@ -110,6 +121,22 @@ def _normalize_subject_anat_filenames(subject: str, root: Path) -> list[Path]:
             continue
         src.rename(dst)
         renamed.append(dst)
+        if ext in (".nii.gz", ".nii"):
+            old_rel = f"anat/{src.name}"
+            new_rel = f"anat/{dst.name}"
+            renames.append((old_rel, new_rel))
+
+    # Update sub-*_scans.tsv to reflect renamed anat filenames.
+    if renames:
+        for scans_tsv in (root / f"sub-{sub}").glob("*_scans.tsv"):
+            try:
+                text = scans_tsv.read_text()
+                for old_rel, new_rel in renames:
+                    text = text.replace(old_rel, new_rel)
+                scans_tsv.write_text(text)
+            except Exception:
+                pass
+
     return renamed
 
 
