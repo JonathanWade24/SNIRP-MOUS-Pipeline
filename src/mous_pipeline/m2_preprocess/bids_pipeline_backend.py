@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import mne
@@ -75,6 +76,12 @@ def _find_task_epochs(deriv_root: Path, subject: str) -> Path | None:
     return None
 
 
+def _cfg_for_local_ica(cfg):
+    if getattr(cfg.preprocess, "backend", "inhouse") != "mne_bids_pipeline":
+        return cfg
+    return replace(cfg, preprocess=replace(cfg.preprocess, backend="inhouse"))
+
+
 def run_preprocessing(subject: str, cfg) -> tuple[mne.Epochs, mne.Epochs]:
     """
     Run mne_bids_pipeline preprocessing steps and read back task epochs.
@@ -103,7 +110,8 @@ def run_preprocessing(subject: str, cfg) -> tuple[mne.Epochs, mne.Epochs]:
     )
     task_raw_for_ica.apply_gradient_compensation(3)
     task_raw_for_ica = apply_notch_and_resample(task_raw_for_ica, cfg)
-    _, ica = fit_and_apply(task_raw_for_ica, cfg)
+    # Reuse local ICA fitting helper without mutating caller config.
+    _, ica = fit_and_apply(task_raw_for_ica, _cfg_for_local_ica(cfg))
 
     rest_raw = mne.io.read_raw_ctf(
         str(rest_ds(_subject_label(subject), cfg.data_root)),
