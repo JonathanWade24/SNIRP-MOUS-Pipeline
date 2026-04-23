@@ -245,6 +245,26 @@ def _fmt_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _run_state_candidates(cfg: PipelineConfig, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        cfg.derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_state.json",
+        cfg.derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_state.json",
+    ]
+
+
+def _read_run_state(cfg: PipelineConfig, subject: str) -> dict[str, Any] | None:
+    for path in _run_state_candidates(cfg, subject):
+        if path.exists():
+            try:
+                payload = json.loads(path.read_text())
+            except Exception:
+                return None
+            payload["_path"] = str(path)
+            return payload
+    return None
+
+
 def _load_stage_estimates(cfg: PipelineConfig, subject: str, selected: list[str]) -> dict[str, float]:
     """Estimate stage durations from last subject manifest; fallback to defaults."""
     defaults = {stage: 8.0 for stage in selected}
@@ -274,16 +294,6 @@ def _init_state() -> None:
     st.session_state.setdefault("cfg_loaded_path", None)
     st.session_state.setdefault("run_history", [])
     st.session_state.setdefault("remote_subject_options", [])
-    # #region agent log
-    try:
-        import time as _t, json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "A_E", "location": "gui_streamlit.py:_init_state", "message": "GUI init CWD and env", "data": {"cwd": str(Path.cwd()), "config_path": st.session_state.get("config_path", ""), "gui_config_env": os.environ.get("MOUS_GUI_CONFIG", "")}, "timestamp": int(_t.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
     st.session_state.setdefault("remote_subject_error", "")
 
 
@@ -320,21 +330,9 @@ def _smart_defaults(cfg: PipelineConfig) -> list[str]:
     fmri_cfg = getattr(cfg, "fmri", None)
     # Include m10/m11 when either a bold_path is provided OR auto-discovery is
     # enabled (skip_fmriprep=false means fMRIPrep will produce the BOLD output).
-    fmri_enabled = bool(fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)))
-    if fmri_enabled:
+    if fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)):
         defaults += ["m10", "m11"]
-    result = [s for s in STAGES if s in defaults]
-    # #region agent log
-    try:
-        import time as _t, json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "E", "location": "gui_streamlit.py:_smart_defaults", "message": "smart defaults computed", "data": {"fmri_enabled": fmri_enabled, "skip_fmriprep": getattr(fmri_cfg, "skip_fmriprep", None), "bold_path": getattr(fmri_cfg, "bold_path", ""), "fmriprep_output": getattr(fmri_cfg, "fmriprep_output", ""), "defaults": result}, "timestamp": int(_t.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    return result
+    return [s for s in STAGES if s in defaults]
 
 
 def _discover_config_files() -> list[str]:
@@ -616,6 +614,24 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             "error": None,
         }
     except Exception as exc:
+        state_path = _run_state_candidates(cfg, subject)[0]
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "subject": subject.removeprefix("sub-"),
+                    "status": "failed",
+                    "selected_stages": selected,
+                    "current_stage": None,
+                    "stage_index": 0,
+                    "stage_total": len(selected),
+                    "completed_stages": list(completed),
+                    "stage_timings_s": {},
+                    "error": str(exc),
+                },
+                indent=2,
+            )
+        )
         progress.empty()
         logs.append(f"[ERROR] {exc}\n")
         log_box.code("".join(logs))
@@ -642,6 +658,33 @@ def _run_section() -> None:
             return
         subjects_to_run = [s.strip().removeprefix("sub-") for s in cfg.subjects if s.strip()]
         st.info(f"Will run: {', '.join(subjects_to_run)}")
+
+    st.divider()
+    st.subheader("Live monitor")
+    monitor_subject = subjects_to_run[0] if subjects_to_run else ""
+    auto_refresh = st.checkbox("Auto-refresh live monitor (2s)", value=True)
+    if auto_refresh and hasattr(st, "autorefresh"):
+        st.autorefresh(interval=2000, key=f"live-monitor-{monitor_subject}")
+    st.button("Refresh live monitor", width="content")
+    if monitor_subject:
+        live = _read_run_state(cfg, monitor_subject)
+        if live:
+            idx = int(live.get("stage_index") or 0)
+            total = int(live.get("stage_total") or 0)
+            status = str(live.get("status") or "unknown")
+            current = live.get("current_stage") or "—"
+            done = len(live.get("completed_stages") or [])
+            st.markdown(
+                f"**sub-{monitor_subject}:** `{status}` • stage `{current}` "
+                f"({idx}/{total}) • completed `{done}`"
+            )
+            if live.get("error"):
+                st.error(str(live.get("error")))
+            with st.expander("Live state JSON"):
+                st.json({k: v for k, v in live.items() if k != "_path"})
+                st.caption(f"Source: `{live.get('_path')}`")
+        else:
+            st.caption(f"No live run state found yet for sub-{monitor_subject}.")
 
     st.divider()
 

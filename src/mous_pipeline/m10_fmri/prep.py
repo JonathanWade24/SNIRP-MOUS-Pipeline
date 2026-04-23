@@ -18,22 +18,11 @@ def _resolve_output_dir(path_value: str, bids_root: Path, project_root: Path | N
     that FSL/ANTs cannot handle.  If *project_root* is None, falls back to
     ``Path.cwd()``.
     """
-    import time
     out_dir = Path(path_value).expanduser()
-    cwd = Path.cwd()
-    base = project_root if (not out_dir.is_absolute() and project_root is not None) else (cwd if not out_dir.is_absolute() else None)
-    resolved = (base / out_dir).resolve() if base is not None else out_dir
-    # #region agent log
-    try:
-        import json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "A", "location": "prep.py:_resolve_output_dir", "message": "output dir resolution", "data": {"path_value": path_value, "bids_root": str(bids_root), "cwd": str(cwd), "project_root": str(project_root), "resolved": str(resolved), "has_space_in_resolved": " " in str(resolved)}, "timestamp": int(time.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
-    return resolved
+    if not out_dir.is_absolute():
+        base = project_root if project_root is not None else Path.cwd()
+        out_dir = (base / out_dir).resolve()
+    return out_dir
 
 
 def _ensure_bids_dataset_description(bids_root: Path) -> None:
@@ -176,16 +165,6 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     work_dir = _safe_work_dir(cfg, subject, bids_root, out_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # #region agent log
-    try:
-        import time as _t, json as _json
-        _dbg = Path(__file__).resolve().parent.parent.parent.parent / ".cursor" / "debug-524377.log"
-        _dbg.parent.mkdir(parents=True, exist_ok=True)
-        _log = {"sessionId": "524377", "hypothesisId": "B", "location": "prep.py:run_fmriprep", "message": "spaces check before fmriprep", "data": {"bids_root": str(bids_root), "out_dir": str(out_dir), "work_dir": str(work_dir), "bids_has_space": " " in str(bids_root), "out_has_space": " " in str(out_dir), "work_has_space": " " in str(work_dir)}, "timestamp": int(_t.time() * 1000)}
-        _dbg.open("a").write(_json.dumps(_log) + "\n")
-    except Exception:
-        pass
-    # #endregion
     _assert_no_spaces(bids_root, "bids_root (data_root)")
     _assert_no_spaces(out_dir, "fmri.fmriprep_output")
     _assert_no_spaces(work_dir, "fmriprep work_dir")

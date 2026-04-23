@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,6 +27,38 @@ from .m0_intake.repocli_rdr import (
 )
 from .m7_stats.group import run_group_model
 from .m9_orchestration.runner import run_subject
+from .stage_dependencies import STAGE_ORDER
+
+
+def _make_cli_progress_callback(selected_stages: list[str]):
+    stage_to_idx = {stage: idx + 1 for idx, stage in enumerate(selected_stages)}
+    total = len(selected_stages)
+
+    def _cb(event: str, stage: str) -> None:
+        idx = stage_to_idx.get(stage)
+        if idx is None:
+            return
+        tag = "START" if event == "start" else "DONE "
+        print(f"[progress {idx:02d}/{total:02d}] {tag} {stage}", file=sys.stderr, flush=True)
+
+    return _cb
+
+
+def _run_state_candidates(derivatives_root: Path, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_state.json",
+        derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_state.json",
+    ]
+
+
+def _print_watch_line(payload: dict) -> None:
+    idx = int(payload.get("stage_index") or 0)
+    total = int(payload.get("stage_total") or 0)
+    status = str(payload.get("status") or "unknown")
+    current = payload.get("current_stage") or "—"
+    done = len(payload.get("completed_stages") or [])
+    print(f"[watch {idx:02d}/{total:02d}] status={status} current={current} done={done}")
 
 
 def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool = False) -> None:
@@ -137,6 +171,10 @@ def main() -> None:
     run_parser.add_argument("--dry-run", action="store_true", help="Print resolved run plan without processing data")
     run_parser.add_argument("--include-fmri", action="store_true", help="Include m10/m11 stages")
     run_parser.add_argument("--include-waves-validation", action="store_true", help="Include m12 stage")
+    watch_parser = sub.add_parser("watch", help="Watch live run state from run_state.json")
+    watch_parser.add_argument("--config", required=True)
+    watch_parser.add_argument("--subject", required=True)
+    watch_parser.add_argument("--interval", type=float, default=2.0, help="Polling interval in seconds")
 
     fetch_parser = sub.add_parser("fetch-subject", help="Build or execute Cyberduck duck download command")
     fetch_parser.add_argument("--subject", required=True, help="Subject ID without sub- prefix, e.g., A2003")
@@ -211,6 +249,8 @@ def main() -> None:
 
     if args.cmd == "run":
         cfg = load_config(args.config)
+        sid = args.subject.removeprefix("sub-")
+        state_candidates = _run_state_candidates(cfg.derivatives_root, sid)
         only = {s.strip() for s in args.only.split(",") if s.strip()} or None
         skip = {s.strip() for s in args.skip.split(",") if s.strip()} or None
         # --include-fmri / --include-waves-validation are additive: they expand an
@@ -220,16 +260,62 @@ def main() -> None:
             only = only | {"m10", "m11"}
         if args.include_waves_validation and only is not None:
             only = only | {"m12"}
-        result = run_subject(
-            args.subject,
-            cfg,
-            only=only,
-            skip=skip,
-            force=args.force,
-            dry_run=args.dry_run,
-            config_path=Path(args.config),
-        )
+        selected = [s for s in STAGE_ORDER if (not only or s in only) and (not skip or s not in skip)]
+        try:
+            result = run_subject(
+                args.subject,
+                cfg,
+                only=only,
+                skip=skip,
+                force=args.force,
+                dry_run=args.dry_run,
+                config_path=Path(args.config),
+                progress_event_callback=_make_cli_progress_callback(selected),
+            )
+        except Exception as exc:
+            state_path = next((p for p in state_candidates if p.exists()), state_candidates[0])
+            state_path.parent.mkdir(parents=True, exist_ok=True)
+            failed_payload = {
+                "subject": sid,
+                "status": "failed",
+                "selected_stages": selected,
+                "current_stage": None,
+                "stage_index": 0,
+                "stage_total": len(selected),
+                "completed_stages": [],
+                "stage_timings_s": {},
+                "error": str(exc),
+            }
+            state_path.write_text(json.dumps(failed_payload, indent=2))
+            raise
         print(result.summary())
+    elif args.cmd == "watch":
+        cfg = load_config(args.config)
+        candidates = _run_state_candidates(cfg.derivatives_root, args.subject)
+        state_path = next((p for p in candidates if p.exists()), candidates[0])
+        print(f"Watching: {state_path}")
+        last_mtime_ns = -1
+        while True:
+            if not state_path.exists():
+                print("Waiting for run_state.json...", flush=True)
+                time.sleep(max(0.2, args.interval))
+                continue
+            stat = state_path.stat()
+            if stat.st_mtime_ns == last_mtime_ns:
+                time.sleep(max(0.2, args.interval))
+                continue
+            last_mtime_ns = stat.st_mtime_ns
+            try:
+                payload = json.loads(state_path.read_text())
+            except Exception:
+                time.sleep(max(0.2, args.interval))
+                continue
+            _print_watch_line(payload)
+            if payload.get("status") in {"done", "failed", "dry_run"}:
+                err = payload.get("error")
+                if err:
+                    print(f"error: {err}", file=sys.stderr)
+                break
     elif args.cmd == "fetch-subject":
         cmd = build_duck_download_command(
             protocol=args.protocol,
@@ -347,8 +433,20 @@ def main() -> None:
             base_url_path = ""
         cfg_path = str(Path(args.config).expanduser().resolve())
         os.environ["MOUS_GUI_CONFIG"] = cfg_path
-        cmd = [
-            "streamlit",
+        streamlit_bin = shutil.which("streamlit")
+        if streamlit_bin:
+            cmd = [streamlit_bin]
+        else:
+            # Prefer the active interpreter when the console-script is missing.
+            if importlib.util.find_spec("streamlit") is None:
+                print(
+                    "Streamlit is not installed in this environment.\n"
+                    "Install it with: python -m pip install streamlit",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            cmd = [sys.executable, "-m", "streamlit"]
+        cmd += [
             "run",
             "src/mous_pipeline/gui_streamlit.py",
             "--server.headless",

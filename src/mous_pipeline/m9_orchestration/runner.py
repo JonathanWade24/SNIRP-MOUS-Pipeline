@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -81,6 +82,13 @@ def _validate_stage_dependencies(selected: list[str]) -> None:
         raise ValueError("Invalid stage selection: " + "; ".join(errs))
 
 
+def _write_run_state(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)
+
+
 def run_subject(
     subject: str,
     cfg,
@@ -91,31 +99,66 @@ def run_subject(
     dry_run: bool = False,
     config_path: Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    progress_event_callback: Callable[[str, str], None] | None = None,
 ) -> RunResult:
     result = RunResult(subject=subject)
     selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
     _validate_stage_dependencies(selected)
     result.metrics["selected_stages"] = selected
+    out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
+    m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
+    state_path = out_dir / f"sub-{subject}_run_state.json"
+    stage_index = {s: i + 1 for i, s in enumerate(selected)}
+    completed: list[str] = []
+    state: dict[str, object] = {
+        "subject": subject,
+        "status": "running",
+        "selected_stages": selected,
+        "current_stage": None,
+        "stage_index": 0,
+        "stage_total": len(selected),
+        "completed_stages": completed,
+        "stage_timings_s": {},
+        "error": None,
+    }
+    _write_run_state(state_path, state)
+
+    def _emit(event: str, stage: str) -> None:
+        if progress_event_callback and _stage_selected(stage, only, skip):
+            progress_event_callback(event, stage)
+        if not _stage_selected(stage, only, skip):
+            return
+        if event == "start":
+            state["current_stage"] = stage
+            state["stage_index"] = stage_index.get(stage, 0)
+        elif event == "done":
+            if stage not in completed:
+                completed.append(stage)
+            state["stage_timings_s"] = dict(result.stage_timings_s)
+        _write_run_state(state_path, state)
+
     if dry_run:
         result.metrics["dry_run"] = True
+        state["status"] = "dry_run"
+        state["current_stage"] = None
+        _write_run_state(state_path, state)
         return result
 
     events_path = _resolve_path(cfg, subject, "events_tsv", events_tsv(subject, cfg.data_root))
     task_path = _resolve_path(cfg, subject, "task_ds", task_ds(subject, cfg.data_root))
     rest_path = _resolve_path(cfg, subject, "rest_ds", rest_ds(subject, cfg.data_root))
 
+    _emit("start", "m1")
     t0 = perf_counter()
     trials = parse_events(str(events_path), strict=True)
     result.stage_timings_s["m1"] = perf_counter() - t0
+    _emit("done", "m1")
     if progress_callback and _stage_selected("m1", only, skip):
         progress_callback("m1")
     result.metrics["n_trials"] = len(trials)
     result.metrics["n_zinnen"] = int((trials["condition"] == "ZINNEN").sum())
     result.metrics["n_woorden"] = int((trials["condition"] == "WOORDEN").sum())
     trial_meta = make_events_metadata(trials)
-
-    out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
-    m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
 
     # ── Per-stage output file paths ───────────────────────────────────────────
     _m4_analytic  = m4_out_dir / f"{subject}_beta_analytic.npz"
@@ -162,6 +205,7 @@ def run_subject(
     ])
 
     # ── m2: preprocess ────────────────────────────────────────────────────────
+    _emit("start", "m2")
     t0 = perf_counter()
     backend = getattr(cfg.preprocess, "backend", "inhouse")
     epochs = None
@@ -182,15 +226,18 @@ def run_subject(
     else:
         result.metrics["m2_cache_skip"] = True
     result.stage_timings_s["m2"] = perf_counter() - t0
+    _emit("done", "m2")
     if progress_callback and _stage_selected("m2", only, skip):
         progress_callback("m2")
 
     # ── m3: epoch ─────────────────────────────────────────────────────────────
+    _emit("start", "m3")
     t0 = perf_counter()
     if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
         epochs = make_epochs(task_raw, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
+    _emit("done", "m3")
     if progress_callback and _stage_selected("m3", only, skip):
         progress_callback("m3")
 
@@ -198,6 +245,7 @@ def run_subject(
     analytic_features = None
     trial_df = trial_meta.copy()
     if _stage_selected("m4", only, skip):
+        _emit("start", "m4")
         t0 = perf_counter()
         if _m4_hit:
             result.metrics["m4_cache_hit"] = True
@@ -208,6 +256,7 @@ def run_subject(
             analytic_features = analytic_signal(epochs, subject, cfg, "beta")
             psd(epochs, subject, cfg, "beta", 13.0, 30.0)
         result.stage_timings_s["m4"] = perf_counter() - t0
+        _emit("done", "m4")
         if progress_callback:
             progress_callback("m4")
     else:
@@ -215,6 +264,7 @@ def run_subject(
 
     # ── m4_trial: pre-stim beta / N400m ───────────────────────────────────────
     if _stage_selected("m4_trial", only, skip):
+        _emit("start", "m4_trial")
         t0 = perf_counter()
         if _m4trial_hit:
             result.metrics["m4_trial_cache_hit"] = True
@@ -233,6 +283,7 @@ def run_subject(
         trial_df["prestim_beta"] = prestim_beta
         trial_df["n400m"] = n400m
         result.stage_timings_s["m4_trial"] = perf_counter() - t0
+        _emit("done", "m4_trial")
         if progress_callback:
             progress_callback("m4_trial")
     else:
@@ -250,6 +301,7 @@ def run_subject(
         epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
 
     # ── m6a: phase-gradient waves + DCI ───────────────────────────────────────
+    _emit("start", "m6a")
     t0 = perf_counter()
     sensor_xy = None
     meg_picks: list[int] = []
@@ -278,6 +330,7 @@ def run_subject(
             step=5,
         )
     result.stage_timings_s["m6a"] = perf_counter() - t0
+    _emit("done", "m6a")
     if progress_callback and _stage_selected("m6a", only, skip):
         progress_callback("m6a")
     result.metrics["dci_zinnen"] = float(np.mean(dci_z))
@@ -291,6 +344,7 @@ def run_subject(
         trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
 
     if _stage_selected("m5", only, skip):
+        _emit("start", "m5")
         if backend == "mne_bids_pipeline":
             t0 = perf_counter()
             try:
@@ -300,6 +354,7 @@ def run_subject(
             except Exception as exc:
                 result.metrics["m5_error"] = str(exc)
             result.stage_timings_s["m5"] = perf_counter() - t0
+            _emit("done", "m5")
             if progress_callback:
                 progress_callback("m5")
         else:
@@ -333,6 +388,7 @@ def run_subject(
                 except Exception as exc:
                     result.metrics["m5_error"] = str(exc)
                 result.stage_timings_s["m5"] = perf_counter() - t0
+                _emit("done", "m5")
                 if progress_callback:
                     progress_callback("m5")
             else:
@@ -342,6 +398,7 @@ def run_subject(
         result.skipped_stages.append("m5")
 
     if _stage_selected("m6_extra", only, skip):
+        _emit("start", "m6_extra")
         t0 = perf_counter()
         if analytic_features is None:
             analytic_features = analytic_signal(epochs, subject, cfg, "beta")
@@ -357,11 +414,13 @@ def run_subject(
                 extra_metrics[f"{detector.name}_error"] = str(exc)
         result.metrics.update(extra_metrics)
         result.stage_timings_s["m6_extra"] = perf_counter() - t0
+        _emit("done", "m6_extra")
         if progress_callback:
             progress_callback("m6_extra")
     else:
         result.skipped_stages.append("m6_extra")
 
+    _emit("start", "m7")
     t0 = perf_counter()
     _, p_sz = perm_test_dci(dci_z, dci_r)
     _, p_wr = perm_test_dci(dci_w, dci_r)
@@ -380,19 +439,23 @@ def run_subject(
             p_block, _ = lme_block_control(model_df, "dci_trial ~ C(condition) + pos_in_block")
             result.metrics["aim1_dci_block_effect_p"] = p_block
     result.stage_timings_s["m7"] = perf_counter() - t0
+    _emit("done", "m7")
     if progress_callback and _stage_selected("m7", only, skip):
         progress_callback("m7")
 
+    _emit("start", "m9")
     t0 = perf_counter()
     gate = PilotGate().evaluate(result.metrics)
     result.metrics["pilot_verdict"] = gate["verdict"]
     result.metrics["pilot_gate"] = gate
     result.stage_timings_s["m9"] = perf_counter() - t0
+    _emit("done", "m9")
     if progress_callback and _stage_selected("m9", only, skip):
         progress_callback("m9")
 
     joined_df: pd.DataFrame | None = None
     if _stage_selected("m10", only, skip):
+        _emit("start", "m10")
         t0 = perf_counter()
         try:
             fmri_cfg = getattr(cfg, "fmri", None)
@@ -441,12 +504,14 @@ def run_subject(
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
         result.stage_timings_s["m10"] = perf_counter() - t0
+        _emit("done", "m10")
         if progress_callback:
             progress_callback("m10")
     else:
         result.skipped_stages.append("m10")
 
     if _stage_selected("m11", only, skip):
+        _emit("start", "m11")
         t0 = perf_counter()
         if joined_df is not None and not joined_df.empty:
             try:
@@ -457,12 +522,14 @@ def run_subject(
         else:
             result.metrics["m11_skipped_reason"] = "No joined MEG-fMRI trial table."
         result.stage_timings_s["m11"] = perf_counter() - t0
+        _emit("done", "m11")
         if progress_callback:
             progress_callback("m11")
     else:
         result.skipped_stages.append("m11")
 
     if _stage_selected("m12", only, skip):
+        _emit("start", "m12")
         t0 = perf_counter()
         try:
             wv = getattr(cfg, "wave_validation", None)
@@ -499,6 +566,7 @@ def run_subject(
         except Exception as exc:
             result.metrics["m12_error"] = str(exc)
         result.stage_timings_s["m12"] = perf_counter() - t0
+        _emit("done", "m12")
         if progress_callback:
             progress_callback("m12")
     else:
@@ -522,6 +590,7 @@ def run_subject(
     result.outputs.extend(out_files)
 
     if _stage_selected("m8", only, skip):
+        _emit("start", "m8")
         t0 = perf_counter()
         export_dir = export_subject_payload(
             subject,
@@ -550,6 +619,7 @@ def run_subject(
             sliding_dci_z=sliding_z,
         )
         result.stage_timings_s["m8"] = perf_counter() - t0
+        _emit("done", "m8")
         result.outputs.append(report_path)
         result.outputs.append(export_dir)
         for quarto_path in render_quarto_suite(subject, cfg):
@@ -574,4 +644,8 @@ def run_subject(
     manifest["metrics"] = result.metrics
     write_manifest(out_dir / f"sub-{subject}_run_manifest.json", manifest)
     result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
+    state["status"] = "done"
+    state["current_stage"] = None
+    state["stage_timings_s"] = dict(result.stage_timings_s)
+    _write_run_state(state_path, state)
     return result
