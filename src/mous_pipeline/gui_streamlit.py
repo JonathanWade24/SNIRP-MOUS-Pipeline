@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -490,20 +491,44 @@ def _fetch_section() -> None:
 
 # ── Run tab ──────────────────────────────────────────────────────────────────
 
-def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[str], force: bool) -> dict:
+def _run_one(
+    subject: str,
+    cfg,
+    cfg_path: Path,
+    skip: set[str],
+    selected: list[str],
+    force: bool,
+    stage_event_cb=None,
+) -> dict:
     """Run a single subject and return a summary dict."""
     progress = st.progress(0, text=f"Running sub-{subject}…")
     log_box = st.empty()
-    logs: list[str] = [f"▶ sub-{subject}  stages: {', '.join(selected)}\n"]
+    t_start = perf_counter()
+    logs: list[str] = [
+        f"▶ [{subject}] starting run\n",
+        f"  selected stages ({len(selected)}): {', '.join(selected)}\n",
+    ]
     completed: set[str] = set()
 
     def callback(stage_name: str) -> None:
         if stage_name not in completed:
             completed.add(stage_name)
             pct = int(len(completed) / max(len(selected), 1) * 100)
-            progress.progress(pct, text=f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)})")
-            logs.append(f"  ✓ {stage_name}\n")
+            elapsed = perf_counter() - t_start
+            progress.progress(
+                pct,
+                text=(
+                    f"sub-{subject}: {stage_name} done "
+                    f"({len(completed)}/{len(selected)}) • {elapsed:.1f}s elapsed"
+                ),
+            )
+            logs.append(
+                f"  ✓ [{elapsed:7.1f}s] {stage_name} — "
+                f"{STAGE_DESCRIPTIONS.get(stage_name, 'stage complete')}\n"
+            )
             log_box.code("".join(logs))
+            if stage_event_cb:
+                stage_event_cb(subject, stage_name, len(completed), len(selected), elapsed)
 
     try:
         result = run_subject(
@@ -513,8 +538,10 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             config_path=cfg_path,
             progress_callback=callback,
         )
-        logs.append(result.summary() + "\n")
-        progress.progress(100, text=f"sub-{subject} — done")
+        elapsed = perf_counter() - t_start
+        logs.append(f"  • summary: {result.summary()}\n")
+        logs.append(f"  • wall time: {elapsed:.1f}s\n")
+        progress.progress(100, text=f"sub-{subject} — done • {elapsed:.1f}s total")
         log_box.code("".join(logs))
         return {
             "subject": subject,
@@ -533,8 +560,9 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             "error": None,
         }
     except Exception as exc:
+        elapsed = perf_counter() - t_start
         progress.empty()
-        logs.append(f"[ERROR] {exc}\n")
+        logs.append(f"  ✗ [{elapsed:7.1f}s] ERROR: {exc}\n")
         log_box.code("".join(logs))
         return {"subject": subject, "verdict": "ERROR", "ok": False, "error": str(exc)}
 
@@ -650,18 +678,55 @@ def _run_section() -> None:
 
         skip = set(STAGES) - set(selected)
         history: list[dict] = st.session_state.get("run_history", [])
+        total_stage_steps = max(len(subjects_to_run) * len(selected), 1)
+        batch_completed_steps = 0
+        batch_progress = st.progress(
+            0,
+            text=(
+                f"Batch progress: 0/{total_stage_steps} stage steps "
+                f"across {len(subjects_to_run)} subject(s)"
+            ),
+        )
+        batch_log_box = st.empty()
+        batch_logs: list[str] = [
+            f"▶ Batch run start: {len(subjects_to_run)} subject(s), {len(selected)} stage(s) selected each\n"
+        ]
+
+        def on_stage_event(subj: str, stage_name: str, done: int, total: int, elapsed_s: float) -> None:
+            nonlocal batch_completed_steps
+            batch_completed_steps += 1
+            pct = int(batch_completed_steps / total_stage_steps * 100)
+            batch_progress.progress(
+                pct,
+                text=(
+                    f"Batch progress: {batch_completed_steps}/{total_stage_steps} stage steps • "
+                    f"current sub-{subj} ({done}/{total}) • {stage_name}"
+                ),
+            )
+            batch_logs.append(
+                f"  ✓ sub-{subj} :: {stage_name} "
+                f"({done}/{total} for subject, {elapsed_s:.1f}s elapsed)\n"
+            )
+            # Keep UI responsive and readable; avoid unbounded growth
+            batch_log_box.code("".join(batch_logs[-400:]))
 
         for subj in subjects_to_run:
             st.markdown(f"---\n#### sub-{subj}")
-            summary = _run_one(subj, cfg, cfg_path, skip, selected, force)
+            batch_logs.append(f"→ starting sub-{subj}\n")
+            batch_log_box.code("".join(batch_logs[-400:]))
+            summary = _run_one(subj, cfg, cfg_path, skip, selected, force, stage_event_cb=on_stage_event)
             history.append(summary)
             if summary["ok"]:
                 v = summary["verdict"]
                 fn = st.success if v == "GO" else (st.warning if v == "MARGINAL" else st.error)
                 fn(f"sub-{subj}: {v}")
+                batch_logs.append(f"  • sub-{subj} complete: {v}\n")
             else:
                 st.error(f"sub-{subj}: pipeline error — {summary['error']}")
+                batch_logs.append(f"  ✗ sub-{subj} failed: {summary['error']}\n")
+            batch_log_box.code("".join(batch_logs[-400:]))
 
+        batch_progress.progress(100, text=f"Batch complete: {len(subjects_to_run)} subject(s) finished")
         st.session_state["run_history"] = history
 
         # ── Batch summary table ──────────────────────────────────────────────
