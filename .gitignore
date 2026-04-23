@@ -1,21 +1,49 @@
-*.zip
-MOUS_A2002_pilot(2)/*.png
-.DS_Store
-.venv/
-.pytest_cache/
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Data and derivatives
 derivatives/
+sub-*/
+*.tar.gz
+*.zip
+
+# Intermediate outputs
 *.fif
 *.npy
 *.npz
-sub-A2002/sub-A2002_scans.tsv
-sub-A2002/*
-derivatives/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# Generated reports (keep examples in docs/ if needed)
+*_report.html
+*_report.html.pdf
+
+# Notebook outputs
+output_*.png
+output_*.jpg
+
+# OS
 .DS_Store
-.venv/
-.pytest_cache/
-__pycache__/
-*.pyc
-sub-A2002.tar.gz
-*.tar.gz
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Pilot artifacts (uncomment if you want to track these)
+# MOUS_A2002_pilot(2)/

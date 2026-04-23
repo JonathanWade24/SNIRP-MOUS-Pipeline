@@ -561,66 +561,121 @@ def _fetch_section() -> None:
 
 # ── Run tab ──────────────────────────────────────────────────────────────────
 
+_GUI_STAGE_LABELS: dict[str, str] = {
+    "m1":       "Parse events",
+    "m2":       "Preprocess  (notch · ICA · filter)",
+    "m3":       "Epoch",
+    "m4":       "Analytic signal + PSD",
+    "m4_trial": "Trial features  (pre-stim β · N400m)",
+    "m5":       "Source reconstruction",
+    "m6a":      "Phase-gradient waves + DCI",
+    "m6_extra": "CFC / FFT2D / rotational detectors",
+    "m10":      "fMRI prep + trial-wise GLM",
+    "m11":      "MEG–fMRI coupling",
+    "m12":      "Wave-validation null model",
+    "m7":       "Statistics  (Rayleigh · permutation)",
+    "m8":       "Reports + exports",
+    "m9":       "Pilot gate  (GO / MARGINAL / NO-GO)",
+}
+
+
 def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[str], force: bool) -> dict:
     """Run a single subject and return a summary dict."""
-    progress = st.progress(0, text=f"Running sub-{subject}…")
-    log_box = st.empty()
     est = _load_stage_estimates(cfg, subject, selected)
     est_total = sum(est.get(s, 8.0) for s in selected)
+
+    progress = st.progress(0, text=f"Starting sub-{subject}…")
+    log_box = st.empty()
+
+    est_note = f"  ~ Estimated: {_fmt_duration(est_total)}" if est_total > 0 else "  ~ No prior timing data"
     logs: list[str] = [
-        f"▶ sub-{subject}  stages: {', '.join(selected)}\n",
-        f"  ~ Estimated total: {_fmt_duration(est_total)} (from prior run timings)\n",
+        f"▶  sub-{subject}  ·  {len(selected)} stage{'s' if len(selected) != 1 else ''}\n",
+        f"{est_note}\n",
+        "\n",
     ]
+    log_box.code("".join(logs))
+
     completed: set[str] = set()
     run_t0 = perf_counter()
-    last_callback_t = run_t0
+    stage_start_t: dict[str, float] = {}
 
     def callback(stage_name: str) -> None:
-        nonlocal last_callback_t
         if stage_name not in completed:
             completed.add(stage_name)
             now = perf_counter()
             elapsed = now - run_t0
-            stage_elapsed = now - last_callback_t
-            last_callback_t = now
+            stage_elapsed = now - stage_start_t.pop(stage_name, now)
             remaining = [s for s in selected if s not in completed]
             eta_s = sum(est.get(s, 8.0) for s in remaining)
             pct = int(len(completed) / max(len(selected), 1) * 100)
+            label = _GUI_STAGE_LABELS.get(stage_name, stage_name)
+
             progress.progress(
                 pct,
                 text=(
-                    f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)}) "
-                    f"• stage {_fmt_duration(stage_elapsed)} • elapsed {_fmt_duration(elapsed)} "
-                    f"• ETA {_fmt_duration(eta_s)}"
+                    f"sub-{subject}  {pct}%  ({len(completed)}/{len(selected)})  "
+                    f"✓ {label}  ·  took {_fmt_duration(stage_elapsed)}  ·  "
+                    + (f"~{_fmt_duration(eta_s)} left" if eta_s > 0 else "last stage")
                 ),
             )
             logs.append(
-                f"  ✓ {stage_name}  stage={_fmt_duration(stage_elapsed)}  "
-                f"elapsed={_fmt_duration(elapsed)}  eta={_fmt_duration(eta_s)}\n"
+                f"  ✓  {label:<38}  {_fmt_duration(stage_elapsed):>6}"
+                + (f"  (ETA {_fmt_duration(eta_s)})\n" if remaining else "\n")
             )
             log_box.code("".join(logs))
+
+    # Wrap run_subject to capture stage start times via the event callback
+    _orig_skip = skip if skip else None
+    _stage_start_ref: dict[str, float] = {}
+
+    def event_callback(event: str, stage_name: str) -> None:
+        if event == "start":
+            label = _GUI_STAGE_LABELS.get(stage_name, stage_name)
+            stage_start_t[stage_name] = perf_counter()
+            pct = int(len(completed) / max(len(selected), 1) * 100)
+            progress.progress(
+                pct,
+                text=f"sub-{subject}  {pct}%  —  {label}…",
+            )
 
     try:
         result = run_subject(
             subject, cfg,
-            skip=skip if skip else None,
+            skip=_orig_skip,
             force=force,
             config_path=cfg_path,
             progress_callback=callback,
+            progress_event_callback=event_callback,
         )
-        logs.append(result.summary() + "\n")
-        logs.append(f"  Total elapsed: {_fmt_duration(perf_counter() - run_t0)}\n")
-        progress.progress(100, text=f"sub-{subject} — done")
+        total_elapsed = perf_counter() - run_t0
+        verdict = result.metrics.get("pilot_verdict", "unknown")
+        verdict_icon = {"GO": "✅", "MARGINAL": "⚠️", "NO-GO": "❌"}.get(verdict, "·")
+        n_trials = result.metrics.get("n_trials")
+        dci = result.metrics.get("dci_zinnen")
+        p_val = result.metrics.get("p_task_vs_rest")
+
+        logs.append("\n")
+        logs.append(f"  {'─'*52}\n")
+        logs.append(f"  {verdict_icon}  Verdict: {verdict}\n")
+        if n_trials is not None:
+            logs.append(f"     Trials: {n_trials}\n")
+        if dci is not None:
+            logs.append(f"     DCI (zinnen): {dci:.4f}\n")
+        if p_val is not None:
+            logs.append(f"     p (task vs rest): {p_val:.4f}\n")
+        logs.append(f"     Total time: {_fmt_duration(total_elapsed)}\n")
+
+        progress.progress(100, text=f"sub-{subject} — {verdict} · {_fmt_duration(total_elapsed)}")
         log_box.code("".join(logs))
         return {
             "subject": subject,
-            "verdict": result.metrics.get("pilot_verdict", "unknown"),
-            "n_trials": result.metrics.get("n_trials"),
+            "verdict": verdict,
+            "n_trials": n_trials,
             "n_zinnen": result.metrics.get("n_zinnen"),
             "n_woorden": result.metrics.get("n_woorden"),
-            "dci_zinnen": result.metrics.get("dci_zinnen"),
+            "dci_zinnen": dci,
             "dci_zinnen_pooled": result.metrics.get("dci_zinnen_pooled"),
-            "p_task_vs_rest": result.metrics.get("p_task_vs_rest"),
+            "p_task_vs_rest": p_val,
             "p_rayleigh_zinnen": result.metrics.get("p_rayleigh_zinnen"),
             "aim1_prestim_auc": result.metrics.get("aim1_prestim_auc"),
             "aim1_n400m_t": result.metrics.get("aim1_n400m_zinnen_vs_woorden_t"),
@@ -630,6 +685,7 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             "error": None,
         }
     except Exception as exc:
+        import traceback
         state_path = _run_state_candidates(cfg, subject)[0]
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(
@@ -652,9 +708,22 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
                 indent=2,
             )
         )
-        progress.empty()
-        logs.append(f"[ERROR] {exc}\n")
+        # Show a short, readable error — full traceback in expander
+        last_line = str(exc).splitlines()[-1] if str(exc) else "unknown error"
+        failed_stage = next((s for s in reversed(selected) if s in completed or True), "?")
+        last_completed = ", ".join(_GUI_STAGE_LABELS.get(s, s) for s in sorted(completed)) or "none"
+        logs.append(f"\n  ✗  Failed: {last_line}\n")
+        logs.append(f"     Completed before failure: {last_completed}\n")
+        logs.append(f"     Elapsed: {_fmt_duration(perf_counter() - run_t0)}\n")
+        full_tb = traceback.format_exc()
+
+        progress.progress(
+            int(len(completed) / max(len(selected), 1) * 100),
+            text=f"sub-{subject} — failed: {last_line[:60]}",
+        )
         log_box.code("".join(logs))
+        with st.expander("Full traceback"):
+            st.code(full_tb, language="python")
         return {"subject": subject, "verdict": "ERROR", "ok": False, "error": str(exc)}
 
 
@@ -682,49 +751,80 @@ def _run_section() -> None:
     st.divider()
     st.subheader("Live monitor")
     monitor_subject = subjects_to_run[0] if subjects_to_run else ""
-    auto_refresh = st.checkbox("Auto-refresh live monitor (2s)", value=True)
-    if auto_refresh and hasattr(st, "autorefresh"):
-        st.autorefresh(interval=2000, key=f"live-monitor-{monitor_subject}")
-    st.button("Refresh live monitor", width="content")
+    
+    # Create two columns for auto-refresh checkbox and manual refresh button
+    col_refresh_1, col_refresh_2 = st.columns([3, 1])
+    with col_refresh_1:
+        auto_refresh = st.checkbox("Auto-refresh live monitor (2s)", value=False, key="auto_refresh_toggle")
+    with col_refresh_2:
+        manual_refresh = st.button("🔄 Refresh", key="manual_refresh_btn", use_container_width=True)
+    
+    # Auto-refresh mechanism
+    if auto_refresh:
+        import time as time_module
+        # Initialize refresh timestamp in session state
+        if "monitor_last_refresh" not in st.session_state:
+            st.session_state.monitor_last_refresh = time_module.time()
+        
+        # Check if 2 seconds have elapsed
+        current_time = time_module.time()
+        if current_time - st.session_state.monitor_last_refresh >= 2.0:
+            st.session_state.monitor_last_refresh = current_time
+            # Trigger rerun (works in Streamlit 1.27+)
+            try:
+                st.rerun()
+            except AttributeError:
+                # Fallback for older Streamlit versions
+                try:
+                    st.experimental_rerun()
+                except AttributeError:
+                    pass
+    
+    # Use empty containers to prevent element stacking on refresh
+    monitor_container = st.container()
+    
     if monitor_subject:
-        live = _read_run_state(cfg, monitor_subject)
-        if live:
-            idx = int(live.get("stage_index") or 0)
-            total = int(live.get("stage_total") or 0)
-            status = str(live.get("status") or "unknown")
-            current = live.get("current_stage") or "—"
-            done = len(live.get("completed_stages") or [])
-            started_at = float(live.get("started_at") or 0.0)
-            stage_started_at = live.get("current_stage_started_at")
-            elapsed_s = max(0.0, wall_time() - started_at) if started_at else 0.0
-            # Keep stage elapsed robust when current stage is missing.
-            stage_elapsed_s = (
-                max(0.0, wall_time() - float(stage_started_at))
-                if stage_started_at is not None
-                else 0.0
-            )
-            progress_pct = int((done / max(total, 1)) * 100)
-            st.progress(progress_pct, text=f"sub-{monitor_subject}: {progress_pct}% ({done}/{total})")
-            st.markdown(
-                f"**Status:** `{status}`  •  **Current stage:** `{current}`  •  "
-                f"**Index:** `{idx}/{total}`  •  **Elapsed:** `{_fmt_duration(elapsed_s)}`  •  "
-                f"**Stage elapsed:** `{_fmt_duration(stage_elapsed_s)}`"
-            )
-            if live.get("error"):
-                st.error(str(live.get("error")))
-            with st.expander("Live state JSON"):
-                st.json({k: v for k, v in live.items() if k != "_path"})
-                st.caption(f"Source: `{live.get('_path')}`")
-            log_path, log_lines = _read_live_log_tail(cfg, monitor_subject, max_lines=80)
-            with st.expander("Live log tail"):
-                if log_path:
-                    st.caption(f"Source: `{log_path}`")
-                if log_lines:
-                    st.code("\n".join(log_lines), language="text")
-                else:
-                    st.caption("No live log lines yet.")
-        else:
-            st.caption(f"No live run state found yet for sub-{monitor_subject}.")
+        with monitor_container:
+            live = _read_run_state(cfg, monitor_subject)
+            if live:
+                idx = int(live.get("stage_index") or 0)
+                total = int(live.get("stage_total") or 0)
+                status = str(live.get("status") or "unknown")
+                current = live.get("current_stage") or "—"
+                done = len(live.get("completed_stages") or [])
+                started_at = float(live.get("started_at") or 0.0)
+                stage_started_at = live.get("current_stage_started_at")
+                elapsed_s = max(0.0, wall_time() - started_at) if started_at else 0.0
+                # Keep stage elapsed robust when current stage is missing.
+                stage_elapsed_s = (
+                    max(0.0, wall_time() - float(stage_started_at))
+                    if stage_started_at is not None
+                    else 0.0
+                )
+                progress_pct = int((done / max(total, 1)) * 100)
+                
+                st.progress(progress_pct, text=f"sub-{monitor_subject}: {progress_pct}% ({done}/{total})")
+                st.markdown(
+                    f"**Status:** `{status}`  •  **Current stage:** `{current}`  •  "
+                    f"**Index:** `{idx}/{total}`  •  **Elapsed:** `{_fmt_duration(elapsed_s)}`  •  "
+                    f"**Stage elapsed:** `{_fmt_duration(stage_elapsed_s)}`"
+                )
+                
+                if live.get("error"):
+                    st.error(str(live.get("error")))
+                with st.expander("Live state JSON"):
+                    st.json({k: v for k, v in live.items() if k != "_path"})
+                    st.caption(f"Source: `{live.get('_path')}`")
+                log_path, log_lines = _read_live_log_tail(cfg, monitor_subject, max_lines=80)
+                with st.expander("Live log tail"):
+                    if log_path:
+                        st.caption(f"Source: `{log_path}`")
+                    if log_lines:
+                        st.code("\n".join(log_lines), language="text")
+                    else:
+                        st.caption("No live log lines yet.")
+            else:
+                st.caption(f"No live run state found yet for sub-{monitor_subject}.")
 
     st.divider()
 

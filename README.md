@@ -1,66 +1,150 @@
 # MOUS Pipeline
 
-Modular analysis pipeline for MOUS oscillatory and traveling-wave analyses.
+**mous-pipeline** is a modular Python toolkit for MOUS MEG analyses: event parsing, preprocessing, epoching, spectral and trial-level features, source imaging, traveling-wave and CFC metrics, statistics, Quarto/HTML reporting, and orchestration. Optional stages add fMRI trial coupling (Aim 2) and simulation-based wave validation (Aim 3).
+
+- **Python:** 3.10+ (see `pyproject.toml`)
+- **Entry point:** `mous-pipeline` (console script)
+- **Authoritative code:** `src/mous_pipeline/` (notebooks are for exploration only; see `AGENTS.md`)
+
+## System requirements
+
+- **Python:** 3.10+
+- **FreeSurfer** (optional): Required for stage **m5** (source reconstruction). Set `source.subjects_dir` in config and ensure `fsaverage` is available.
+- **repocli** (optional): For RDR data fetch. Download from [Donders-Institute/dr-tools releases](https://github.com/Donders-Institute/dr-tools/releases).
+- **Cyberduck CLI (`duck`)** (optional): For SFTP/FTP/WebDAV data fetch.
+
+## Install
+
+From the repository root (required for relative paths used by the GUI CLI):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+```
+
+Optional extras:
+
+```bash
+pip install -e ".[gui]"     # Streamlit UI
+pip install -e ".[bids]"    # MNE-BIDS-Pipeline backend for preprocessing
+pip install -e ".[fmri]"    # Aim 2 fMRI / nilearn stack
+```
+
+## Expected data structure
+
+The pipeline expects CTF `.ds` directories and events TSV under `data_root`:
+
+```
+data_root/
+└── sub-A2002/
+    ├── meg/
+    │   ├── sub-A2002_task-auditory_run-01_meg.ds/  (CTF task recording)
+    │   └── sub-A2002_task-rest_run-01_meg.ds/      (CTF rest recording)
+    └── sub-A2002_task-auditory_events.tsv          (trial metadata)
+```
+
+Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 
 ## Quickstart
 
 ```bash
-pip install -e .
 mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002
 ```
 
-## Neurodesk plug-and-play GUI setup
+Example configs live under `configs/` (e.g. `pilot_A2002.yaml`, `pilot_A2003_fmri.yaml`, `default.yaml`). YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, and optional `fmri` / `wave_validation` blocks.
 
-After clone, only two manual steps are required:
+**Outputs:** Derivatives land under `derivatives_root/<subject>/` organized by stage (e.g. `m4_features/`, `m9_orchestration/`, `m8_reports/`). The HTML report and manifest live in `m8_reports/` and `m9_orchestration/` respectively.
 
-```bash
-git clone https://github.com/JonathanWade24/MOUS.git
-cd MOUS
-bash setup.sh
-repocli config
-```
+## Pipeline stages
 
-At `repocli config`, use:
-- `baseurl`: `https://webdav.data.ru.nl`
-- username/password: your RDR Data Access Credentials
+Stages run in this order (see `src/mous_pipeline/stage_dependencies.py`). Dependencies between stages are enforced when you use `--only`.
 
-Then launch the GUI:
+| Stage | Package folder | Role |
+|-------|----------------|------|
+| **m1** | `m1_events` | Parse events, trial metadata |
+| **m2** | `m2_preprocess` | Notch, resample, ICA (in-house CTF path or `mne_bids_pipeline` backend) |
+| **m3** | `m3_epoching` | Task and rest epochs |
+| **m4** | `m4_features` | Analytic signal, PSD |
+| **m4_trial** | `m4_features` | Pre-stim beta, N400m; Aim 1 trial metrics |
+| **m5** | `m5_source` | Forward / inverse, ROI time series |
+| **m6a** | `m6_waves` | Phase gradient, DCI, sliding metrics |
+| **m6_extra** | `m6_waves` | CFC, 2D FFT, flow, rotational detectors (uses m4 cache when possible) |
+| **m10** | `m10_fmri` | Optional: BOLD prep / trial-wise GLM, MEG–fMRI join |
+| **m11** | `m11_coupling` | Optional: coupling models on joined trials |
+| **m12** | `m12_wave_validation` | Optional: simulation / null DCI (`wave_validation.enabled`) |
+| **m7** | `m7_stats` | Permutation, circular stats, trial-wise models |
+| **m8** | `m8_reports` | Exports, figures, Quarto report, dashboard |
+| **m9** | `m9_orchestration` | Manifest, run state, live log under subject derivatives |
 
-```bash
-source .venv/bin/activate
-streamlit run src/mous_pipeline/gui_streamlit.py
-```
+A full `run` executes every stage in `STAGE_ORDER`. **m10 / m11** need fMRI configuration and data; they may record a skip reason if BOLD or joins are missing. **m12** runs substantive work only when `wave_validation.enabled` is true in config.
 
-Or launch from JupyterLab (no virtual desktop needed):
-
-1. Open `notebooks/mous_gui.ipynb`
-2. Run the cell
-3. Click the generated `/proxy/8501/` link
-
-The Streamlit app launches a tabbed GUI for:
-- Setup: validate config and repocli availability
-- Fetch: download `sub-*` folders from RDR via repocli
-- Run: execute pipeline stages with live stage progress
-- Results: inspect manifest metrics, verdict, timings, and HTML report link
-
-`notebooks/mous_gui.ipynb` now acts as a JupyterLab proxy launcher for Streamlit.
-
-## Runner options
+### Runner flags
 
 ```bash
-# preview selected stages without reading data
+# Plan only: print resolved stages without touching data
 mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --dry-run
 
-# force recompute even when outputs exist
+# Recompute even when caches exist
 mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --force
 
-# skip report generation stage (m8)
+# Skip stages (comma-separated)
 mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --skip m8
+
+# Run a subset (must include dependencies; see stage_dependencies)
+mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m2,m3
+
+# If you use --only, add optional blocks explicitly:
+mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m2,m3,m10,m11 \
+  --include-fmri
+mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m6a,m12 \
+  --include-waves-validation
 ```
 
-## Download more subjects with Cyberduck
+`--include-fmri` / `--include-waves-validation` **add** `m10,m11` or `m12` to an explicit `--only` list. If you omit `--only`, the runner already selects all stages, so those flags are unnecessary.
 
-Use Cyberduck CLI (`duck`) to fetch additional subject archives:
+### Watch a run
+
+Polls `derivatives/.../m9_orchestration/sub-<id>_run_state.json` written during `run`:
+
+```bash
+mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002
+mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002 --verbose
+```
+
+## CLI commands (overview)
+
+| Command | Purpose |
+|---------|---------|
+| `run` | Full or partial subject pipeline |
+| `watch` | Live progress from `run_state.json` |
+| `fetch-subject` | Build or run Cyberduck `duck` download for subject archives |
+| `fetch-rdr` | Build or run `repocli get` for Radboud Data Repository (WebDAV) |
+| `group` | Aggregate manifests under `derivatives_root` → `group_summary.json` (and trial CSV if present) |
+| `bids-convert` | Add in-place BIDS sidecars for a subject |
+| `bids-validate` | Check BIDS layout with `mne_bids` + `bids_validator` (dataset at `data_root` or `--root`) |
+| `gui` | Start Streamlit app; prints proxy/localhost URLs |
+
+## Get data into `data_root`
+
+### RDR (repocli)
+
+1. Install [repocli](https://github.com/Donders-Institute/dr-tools/releases) and run `repocli config` once.
+2. At `repo baseurl:` use `https://webdav.data.ru.nl` and your **Data access** credentials.
+3. Set `rdr.collection_path` in your YAML (e.g. `dccn/DSC_3011020.09_236_v1`).
+4. Pull a subject:
+
+```bash
+mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+```
+
+Override collection path if needed:
+
+```bash
+mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
+```
+
+### Cyberduck CLI (`duck`)
 
 ```bash
 mous-pipeline fetch-subject \
@@ -72,39 +156,72 @@ mous-pipeline fetch-subject \
   --username your_username
 ```
 
-The command prints an executable `duck` command. Add `--execute` to run it immediately.
+Add `--execute` to run the printed command.
 
-## Download subjects from RDR (Repocli)
+## Neurodesk / Jupyter GUI
 
-1. Install `repocli` from [Donders-Institute/dr-tools releases](https://github.com/Donders-Institute/dr-tools/releases) (e.g. `repocli.x86_64` for Linux).
-2. Configure once:
-
-```bash
-repocli config
-```
-
-At `repo baseurl:` enter `https://webdav.data.ru.nl`, then your RDR **Data access** credentials.
-
-3. Set `rdr.collection_path` in your YAML to the collection folder (e.g. `dccn/DSC_3011020.09_236_v1`), matching the path under WebDAV after `dccn/`.
-
-4. Pull a subject into `data_root`:
+Neurodesk-oriented setup script (creates `.venv`, installs `.[gui]`, downloads Linux `repocli` into `~/bin`):
 
 ```bash
-mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+bash setup.sh
+repocli config   # baseurl: https://webdav.data.ru.nl
 ```
 
-Or override the collection path:
+**Platform note:** `setup.sh` is Linux x86_64 only (downloads `repocli.x86_64`). On **macOS**, **Windows**, or other platforms, skip the script and install manually (`pip install -e ".[gui]"` + download `repocli` from [releases](https://github.com/Donders-Institute/dr-tools/releases)).
+
+Launch the Streamlit UI from the **repo root**:
 
 ```bash
-mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
+source .venv/bin/activate
+mous-pipeline gui
+# or: streamlit run src/mous_pipeline/gui_streamlit.py
 ```
 
-Then run the pipeline as usual (`mous-pipeline run ...`).
+JupyterLab: open `notebooks/mous_gui.ipynb`, run the cell, then use the `/proxy/8501/` link your hub provides.
 
-## GUI dependencies
+Tabs cover setup validation, RDR fetch, pipeline run with stage progress, and results (manifest, timings, report links).
 
-GUI extras are provided through optional dependencies:
+## Group-level analysis
+
+After subject runs, manifests live under `<derivatives_root>/<subject>/m9_orchestration/*_run_manifest.json`. Then:
 
 ```bash
-pip install -e ".[gui]"
+mous-pipeline group --derivatives-root derivatives/mous_pipeline
+mous-pipeline group --derivatives-root derivatives/mous_pipeline --test lme
 ```
+
+## Testing
+
+The `tests/` directory contains pytest-based tests covering stages, CLI commands, and edge cases:
+
+```bash
+pip install -e .  # pytest is included in base dependencies
+pytest tests/
+pytest tests/test_m1_events.py -v  # run specific test
+```
+
+Tests use fixtures in `tests/conftest.py` for sample data and configs.
+
+## Troubleshooting
+
+**"subjects_dir does not exist"** (m5)
+: Set `source.subjects_dir` in your YAML to a valid FreeSurfer `SUBJECTS_DIR` containing `fsaverage/`. Or skip m5 with `--skip m5`.
+
+**"No BOLD file found"** (m10)
+: Stage m10 requires fMRI data. Either configure `fmri.bold_path` in your YAML, run fMRIPrep, or skip m10/m11 with `--skip m10,m11`.
+
+**"repocli is not on PATH"**
+: Install [repocli](https://github.com/Donders-Institute/dr-tools/releases) and run `repocli config` once with base URL `https://webdav.data.ru.nl`.
+
+**GUI shows "Streamlit not installed"**
+: Install with `pip install -e ".[gui]"`.
+
+**Import errors for nilearn/templateflow**
+: Install fMRI extras: `pip install -e ".[fmri]"`.
+
+**Watch command shows "Waiting for run_state.json"**
+: Start a `run` in another terminal first. The `watch` command polls the live state file written during pipeline execution.
+
+## Contributing
+
+Module ownership and notebook policy: **`AGENTS.md`**.
