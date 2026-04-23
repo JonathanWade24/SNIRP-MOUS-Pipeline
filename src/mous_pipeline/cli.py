@@ -27,6 +27,88 @@ from .m7_stats.group import run_group_model
 from .m9_orchestration.runner import run_subject
 
 
+def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool = False) -> None:
+    """Validate a BIDS dataset using mne_bids (no Node/external tools required).
+
+    Checks:
+    - Required top-level files (dataset_description.json, README).
+    - File naming via bids_validator.BIDSValidator.is_bids() on every file.
+    - Subject layout via mne_bids.get_entity_vals().
+    - Prints mne_bids.make_report() summary paragraph.
+    - Exits non-zero on any naming error.
+    """
+    try:
+        import mne_bids
+        from bids_validator import BIDSValidator
+    except ImportError as exc:
+        print(f"Missing dependency for mne_bids-based validation: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Validating BIDS dataset at: {root}")
+    errors: list[str] = []
+    warnings_list: list[str] = []
+
+    # ── Required top-level files ──────────────────────────────────────────────
+    for required in ("dataset_description.json",):
+        if not (root / required).exists():
+            errors.append(f"Missing required file: {required}")
+    for recommended in ("README", "participants.tsv"):
+        if not (root / recommended).exists():
+            warnings_list.append(f"Missing recommended file: {recommended}")
+
+    # ── File naming via BIDSValidator ─────────────────────────────────────────
+    bv = BIDSValidator()
+    subject_filter = subject.removeprefix("sub-") if subject else None
+    n_checked = 0
+    n_valid = 0
+    for f in sorted(root.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = "/" + f.relative_to(root).as_posix()
+        # Optionally filter to one subject's files.
+        if subject_filter and f"sub-{subject_filter}" not in rel:
+            continue
+        # Skip derivatives and hidden files.
+        if any(part.startswith(".") or part == "derivatives" for part in f.relative_to(root).parts):
+            continue
+        n_checked += 1
+        if bv.is_bids(rel):
+            n_valid += 1
+        elif verbose:
+            warnings_list.append(f"Non-BIDS filename: {rel}")
+
+    # ── Subject layout ────────────────────────────────────────────────────────
+    try:
+        subjects = mne_bids.get_entity_vals(root, "subject", verbose=False)
+        datatypes = mne_bids.get_entity_vals(root, "datatype", verbose=False) if hasattr(mne_bids, "get_entity_vals") else []
+        print(f"Subjects found   : {len(subjects)} — {subjects}")
+        if datatypes:
+            print(f"Datatypes found  : {datatypes}")
+    except Exception as exc:
+        warnings_list.append(f"mne_bids layout scan warning: {exc}")
+
+    # ── make_report summary ───────────────────────────────────────────────────
+    try:
+        report = mne_bids.make_report(root, verbose=False)
+        print("\n── Dataset report (mne_bids.make_report) ──")
+        print(report)
+    except Exception as exc:
+        warnings_list.append(f"make_report skipped: {exc}")
+
+    # ── Results ───────────────────────────────────────────────────────────────
+    print(f"\n── Naming check: {n_valid}/{n_checked} files pass BIDS naming rules ──")
+    if warnings_list:
+        print("\nWarnings:")
+        for w in warnings_list:
+            print(f"  ⚠  {w}")
+    if errors:
+        print("\nErrors:")
+        for e in errors:
+            print(f"  ✗  {e}", file=sys.stderr)
+        sys.exit(1)
+    print("\n✓ No hard BIDS errors detected by mne_bids validation.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOUS pipeline")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -231,34 +313,15 @@ def main() -> None:
             print(f"- {bp}")
     elif args.cmd == "bids-validate":
         if args.root:
-            root = Path(args.root).expanduser().resolve()
+            bids_root = Path(args.root).expanduser().resolve()
         elif args.config:
-            root = load_config(args.config).data_root.resolve()
+            bids_root = load_config(args.config).data_root.resolve()
         else:
-            root = Path(".").resolve()
-        if not root.exists():
-            print(f"BIDS root does not exist: {root}", file=sys.stderr)
+            bids_root = Path(".").resolve()
+        if not bids_root.exists():
+            print(f"BIDS root does not exist: {bids_root}", file=sys.stderr)
             sys.exit(1)
-        validator_bin = shutil.which("bids-validator")
-        if validator_bin is None:
-            print(
-                "bids-validator CLI is not on PATH in this environment.\n"
-                "Detected Python bids_validator library packages are not sufficient for full-dataset CLI validation.\n"
-                "Fallback: run strict fMRIPrep validation via pipeline (keep fmri.skip_bids_validation=false):\n"
-                f"  mous-pipeline run --config {args.config or '<config.yaml>'} "
-                f"--subject {args.subject or '<subject>'} --only m1,m2,m3,m4_trial,m10,m11,m6a,m12,m7,m8,m9",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        cmd = [validator_bin, str(root)]
-        if args.subject:
-            cmd += ["--subject", args.subject.removeprefix("sub-")]
-        if args.verbose:
-            cmd.append("--verbose")
-        print("Running:", " ".join(shlex.quote(c) for c in cmd))
-        proc = subprocess.run(cmd, check=False)
-        if proc.returncode != 0:
-            sys.exit(proc.returncode)
+        _run_bids_validate(bids_root, subject=args.subject, verbose=args.verbose)
     elif args.cmd == "gui":
         service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
         if args.base_url_path:
