@@ -121,11 +121,6 @@ def run_subject(
         out_dir / f"sub-{subject}_dirs_rest.npy",
         out_dir / f"sub-{subject}_sliding_dci_zinnen.npy",
     ]
-    if not force and all(p.exists() for p in out_files):
-        result.metrics["cache_hit"] = True
-        result.outputs.extend(out_files)
-        return result
-
     t0 = perf_counter()
     backend = getattr(cfg.preprocess, "backend", "inhouse")
     task_raw = None
