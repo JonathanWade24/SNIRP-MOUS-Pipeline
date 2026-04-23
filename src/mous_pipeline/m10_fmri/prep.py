@@ -26,8 +26,10 @@ def _resolve_output_dir(path_value: str, bids_root: Path, project_root: Path | N
     # #region agent log
     try:
         import json as _json
+        _dbg = Path(__file__).resolve().parent.parent.parent.parent / ".cursor" / "debug-524377.log"
+        _dbg.parent.mkdir(parents=True, exist_ok=True)
         _log = {"sessionId": "524377", "hypothesisId": "A", "location": "prep.py:_resolve_output_dir", "message": "output dir resolution", "data": {"path_value": path_value, "bids_root": str(bids_root), "cwd": str(cwd), "project_root": str(project_root), "resolved": str(resolved), "has_space_in_resolved": " " in str(resolved)}, "timestamp": int(time.time() * 1000)}
-        open("/Users/jonathanwade/Downloads/MOUS/.cursor/debug-524377.log", "a").write(_json.dumps(_log) + "\n")
+        _dbg.open("a").write(_json.dumps(_log) + "\n")
     except Exception:
         pass
     # #endregion
@@ -177,8 +179,10 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     # #region agent log
     try:
         import time as _t, json as _json
+        _dbg = Path(__file__).resolve().parent.parent.parent.parent / ".cursor" / "debug-524377.log"
+        _dbg.parent.mkdir(parents=True, exist_ok=True)
         _log = {"sessionId": "524377", "hypothesisId": "B", "location": "prep.py:run_fmriprep", "message": "spaces check before fmriprep", "data": {"bids_root": str(bids_root), "out_dir": str(out_dir), "work_dir": str(work_dir), "bids_has_space": " " in str(bids_root), "out_has_space": " " in str(out_dir), "work_has_space": " " in str(work_dir)}, "timestamp": int(_t.time() * 1000)}
-        open("/Users/jonathanwade/Downloads/MOUS/.cursor/debug-524377.log", "a").write(_json.dumps(_log) + "\n")
+        _dbg.open("a").write(_json.dumps(_log) + "\n")
     except Exception:
         pass
     # #endregion

@@ -277,8 +277,10 @@ def _init_state() -> None:
     # #region agent log
     try:
         import time as _t, json as _json
+        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
+        _dbg.parent.mkdir(parents=True, exist_ok=True)
         _log = {"sessionId": "524377", "hypothesisId": "A_E", "location": "gui_streamlit.py:_init_state", "message": "GUI init CWD and env", "data": {"cwd": str(Path.cwd()), "config_path": st.session_state.get("config_path", ""), "gui_config_env": os.environ.get("MOUS_GUI_CONFIG", "")}, "timestamp": int(_t.time() * 1000)}
-        open("/Users/jonathanwade/Downloads/MOUS/.cursor/debug-524377.log", "a").write(_json.dumps(_log) + "\n")
+        _dbg.open("a").write(_json.dumps(_log) + "\n")
     except Exception:
         pass
     # #endregion
@@ -325,8 +327,10 @@ def _smart_defaults(cfg: PipelineConfig) -> list[str]:
     # #region agent log
     try:
         import time as _t, json as _json
+        _dbg = Path(__file__).resolve().parent.parent.parent / ".cursor" / "debug-524377.log"
+        _dbg.parent.mkdir(parents=True, exist_ok=True)
         _log = {"sessionId": "524377", "hypothesisId": "E", "location": "gui_streamlit.py:_smart_defaults", "message": "smart defaults computed", "data": {"fmri_enabled": fmri_enabled, "skip_fmriprep": getattr(fmri_cfg, "skip_fmriprep", None), "bold_path": getattr(fmri_cfg, "bold_path", ""), "fmriprep_output": getattr(fmri_cfg, "fmriprep_output", ""), "defaults": result}, "timestamp": int(_t.time() * 1000)}
-        open("/Users/jonathanwade/Downloads/MOUS/.cursor/debug-524377.log", "a").write(_json.dumps(_log) + "\n")
+        _dbg.open("a").write(_json.dumps(_log) + "\n")
     except Exception:
         pass
     # #endregion
