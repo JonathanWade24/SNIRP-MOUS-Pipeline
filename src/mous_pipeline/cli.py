@@ -239,10 +239,18 @@ def main() -> None:
         if not root.exists():
             print(f"BIDS root does not exist: {root}", file=sys.stderr)
             sys.exit(1)
-        if shutil.which("bids-validator") is None:
-            print("bids-validator is not on PATH. Install Node bids-validator first.", file=sys.stderr)
-            sys.exit(1)
-        cmd = ["bids-validator", str(root)]
+        validator_bin = shutil.which("bids-validator")
+        if validator_bin is None:
+            print(
+                "bids-validator CLI is not on PATH in this environment.\n"
+                "Detected Python bids_validator library packages are not sufficient for full-dataset CLI validation.\n"
+                "Fallback: run strict fMRIPrep validation via pipeline (keep fmri.skip_bids_validation=false):\n"
+                f"  mous-pipeline run --config {args.config or '<config.yaml>'} "
+                f"--subject {args.subject or '<subject>'} --only m1,m2,m3,m4_trial,m10,m11,m6a,m12,m7,m8,m9",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        cmd = [validator_bin, str(root)]
         if args.subject:
             cmd += ["--subject", args.subject.removeprefix("sub-")]
         if args.verbose:
