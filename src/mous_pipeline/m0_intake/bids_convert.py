@@ -141,7 +141,9 @@ def convert_subject_to_bids(subject: str, cfg) -> list[BIDSPath]:
             suffix="meg",
             extension=".ds",
         )
-        write_raw_bids(raw, bids_path=bids_path, overwrite=True, allow_preload=False, format="CTF", verbose=False)
+        # mne-bids >= current accepts meg format as "FIF"/"auto" only.
+        # Use auto-detection so CTF source data are handled correctly.
+        write_raw_bids(raw, bids_path=bids_path, overwrite=True, allow_preload=False, format="auto", verbose=False)
         channels_tsv = root / f"sub-{subj}" / "meg" / f"sub-{subj}_task-{task_name}_channels.tsv"
         _normalize_channels_tsv(channels_tsv)
         bids_paths.append(bids_path)
