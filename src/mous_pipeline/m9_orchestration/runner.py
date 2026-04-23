@@ -90,6 +90,12 @@ def _write_run_state(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
+def _append_live_log(path: Path, message: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(message.rstrip() + "\n")
+
+
 def run_subject(
     subject: str,
     cfg,
@@ -109,6 +115,7 @@ def run_subject(
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
     m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
     state_path = out_dir / f"sub-{subject}_run_state.json"
+    live_log_path = out_dir / f"sub-{subject}_run_live.log"
     stage_index = {s: i + 1 for i, s in enumerate(selected)}
     completed: list[str] = []
     state: dict[str, object] = {
@@ -127,6 +134,7 @@ def run_subject(
         "last_event": None,
     }
     _write_run_state(state_path, state)
+    _append_live_log(live_log_path, f"[run] subject={subject} status=running stages={','.join(selected)}")
 
     def _emit(event: str, stage: str) -> None:
         if progress_event_callback and _stage_selected(stage, only, skip):
@@ -137,11 +145,20 @@ def run_subject(
             state["current_stage"] = stage
             state["current_stage_started_at"] = time.time()
             state["stage_index"] = stage_index.get(stage, 0)
+            _append_live_log(
+                live_log_path,
+                f"[stage start] {stage} ({state['stage_index']}/{state['stage_total']})",
+            )
         elif event == "done":
             if stage not in completed:
                 completed.append(stage)
             state["stage_timings_s"] = dict(result.stage_timings_s)
             state["last_event"] = f"done:{stage}"
+            dur = float(result.stage_timings_s.get(stage, 0.0))
+            _append_live_log(
+                live_log_path,
+                f"[stage done ] {stage} duration_s={dur:.3f} completed={len(completed)}/{state['stage_total']}",
+            )
         else:
             state["last_event"] = f"{event}:{stage}"
         state["updated_at"] = time.time()
@@ -154,6 +171,7 @@ def run_subject(
         state["current_stage_started_at"] = None
         state["updated_at"] = time.time()
         _write_run_state(state_path, state)
+        _append_live_log(live_log_path, "[run] status=dry_run")
         return result
 
     events_path = _resolve_path(cfg, subject, "events_tsv", events_tsv(subject, cfg.data_root))
@@ -663,4 +681,5 @@ def run_subject(
     state["last_event"] = "done:all"
     state["updated_at"] = time.time()
     _write_run_state(state_path, state)
+    _append_live_log(live_log_path, "[run] status=done")
     return result
