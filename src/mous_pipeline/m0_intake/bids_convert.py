@@ -130,9 +130,10 @@ def convert_subject_to_bids(subject: str, cfg) -> list[BIDSPath]:
         ("rest", rest_ds(subj, cfg.data_root)),
     ]
     for task_name, ds_path in runs:
-        if not Path(ds_path).exists():
+        ds_path_obj = Path(ds_path)
+        if not ds_path_obj.exists():
             continue
-        raw = mne.io.read_raw_ctf(str(ds_path), preload=False, system_clock="truncate", verbose="ERROR")
+        raw = mne.io.read_raw_ctf(str(ds_path_obj), preload=False, system_clock="truncate", verbose="ERROR")
         bids_path = BIDSPath(
             root=root,
             subject=subj,
@@ -141,9 +142,11 @@ def convert_subject_to_bids(subject: str, cfg) -> list[BIDSPath]:
             suffix="meg",
             extension=".ds",
         )
-        # mne-bids >= current accepts meg format as "FIF"/"auto" only.
-        # Use auto-detection so CTF source data are handled correctly.
-        write_raw_bids(raw, bids_path=bids_path, overwrite=True, allow_preload=False, format="auto", verbose=False)
+        target_ds = root / f"sub-{subj}" / "meg" / f"sub-{subj}_task-{task_name}_meg.ds"
+        if target_ds.resolve() != ds_path_obj.resolve():
+            # mne-bids >= current accepts meg format as "FIF"/"auto" only.
+            # Use auto-detection so CTF source data are handled correctly.
+            write_raw_bids(raw, bids_path=bids_path, overwrite=True, allow_preload=False, format="auto", verbose=False)
         channels_tsv = root / f"sub-{subj}" / "meg" / f"sub-{subj}_task-{task_name}_channels.tsv"
         _normalize_channels_tsv(channels_tsv)
         bids_paths.append(bids_path)
