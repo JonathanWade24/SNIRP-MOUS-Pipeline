@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pandas as pd
 
 from .config import load_config
 from .m0_intake.cyberduck import build_duck_download_command, duck_available, execute_duck_command
+from .m0_intake.bids_convert import convert_subject_to_bids
 from .m0_intake.repocli_rdr import (
     build_repocli_get_command,
     execute_repocli_command,
@@ -77,6 +81,28 @@ def main() -> None:
         help="Derivatives root containing <subject>/m9_orchestration/*_run_manifest.json",
     )
     group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
+    bids_convert_parser = sub.add_parser("bids-convert", help="Add in-place BIDS metadata sidecars for a subject")
+    bids_convert_parser.add_argument("--config", required=True)
+    bids_convert_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
+    gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
+    gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
+    gui_parser.add_argument(
+        "--config",
+        default="configs/pilot_A2002.yaml",
+        help="Config path preloaded in GUI via MOUS_GUI_CONFIG env var",
+    )
+    gui_parser.add_argument(
+        "--base-url-path",
+        default="",
+        help="Optional Streamlit base URL path override. "
+        "Default is empty, which is correct for JupyterHub proxy rewrite setups.",
+    )
+    gui_parser.add_argument(
+        "--public-base-url",
+        default=None,
+        help="Optional public host URL (e.g. https://snirp24.neurodesk.org). "
+        "When omitted, the CLI auto-detects host from JupyterHub env vars.",
+    )
 
     args = parser.parse_args()
 
@@ -188,3 +214,64 @@ def main() -> None:
             trial_path = root / "group_trials.csv"
             group_trials.to_csv(trial_path, index=False)
             print(f"Wrote group trials: {trial_path}")
+    elif args.cmd == "bids-convert":
+        cfg = load_config(args.config)
+        bids_paths = convert_subject_to_bids(args.subject, cfg)
+        print(f"Created/updated BIDS metadata for {len(bids_paths)} recording(s):")
+        for bp in bids_paths:
+            print(f"- {bp}")
+    elif args.cmd == "gui":
+        service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+        if args.base_url_path:
+            base_url_path = args.base_url_path
+        else:
+            # Default behavior for Neurodesk/JupyterHub: proxy rewrites path,
+            # Streamlit serves at root (no baseUrlPath).
+            base_url_path = ""
+        cfg_path = str(Path(args.config).expanduser().resolve())
+        os.environ["MOUS_GUI_CONFIG"] = cfg_path
+        cmd = [
+            "streamlit",
+            "run",
+            "src/mous_pipeline/gui_streamlit.py",
+            "--server.headless",
+            "true",
+            "--server.port",
+            str(args.port),
+            "--browser.gatherUsageStats",
+            "false",
+        ]
+        if base_url_path:
+            cmd.extend(["--server.baseUrlPath", base_url_path])
+        print("Launching MOUS GUI...")
+        print(f"Config: {cfg_path}")
+        print(f"Port: {args.port}")
+        print(f"baseUrlPath: {base_url_path or '(empty)'}")
+        print("")
+        print("Open one of these URLs:")
+        proxy_path = f"{service_prefix.rstrip('/')}/proxy/{args.port}/"
+        print(f"- Relative proxy path: {proxy_path}")
+        full_urls: list[str] = []
+        if args.public_base_url:
+            full_urls.append(f"{args.public_base_url.rstrip('/')}{proxy_path}")
+        else:
+            host_candidates = [
+                os.environ.get("JUPYTERHUB_PUBLIC_URL"),
+                os.environ.get("JUPYTER_SERVER_URL"),
+                os.environ.get("JUPYTERHUB_HOST"),
+                os.environ.get("JUPYTERHUB_BASE_URL"),
+            ]
+            for host in host_candidates:
+                if not host:
+                    continue
+                parsed = urlsplit(host)
+                if parsed.scheme and parsed.netloc:
+                    full_urls.append(f"{parsed.scheme}://{parsed.netloc}{proxy_path}")
+                elif host.startswith("http://") or host.startswith("https://"):
+                    full_urls.append(f"{host.rstrip('/')}{proxy_path}")
+        for url in dict.fromkeys(full_urls):
+            print(f"- Full URL: {url}")
+        print("- If using local browser from same machine: http://localhost:8501")
+        print("")
+        print("Tip: stop old instances with `lsof -ti :8501 | xargs -r kill -9`.")
+        subprocess.run(cmd, check=False)

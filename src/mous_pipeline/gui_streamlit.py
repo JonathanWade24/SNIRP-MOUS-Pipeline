@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,30 +17,258 @@ from mous_pipeline.config import PipelineConfig, load_config
 from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
 from mous_pipeline.m9_orchestration.runner import run_subject
 
-STAGES = ["m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m10", "m11", "m12", "m7", "m8", "m9"]
+# ── Stage catalogue ──────────────────────────────────────────────────────────
+
+CORE_STAGES = ["m1", "m2", "m3", "m4", "m4_trial", "m6a", "m7", "m8", "m9"]
+OPTIONAL_STAGES = ["m5", "m6_extra", "m10", "m11", "m12"]
+STAGES = CORE_STAGES + OPTIONAL_STAGES
+
+STAGE_LABELS = {
+    "m1":       "m1 — Parse events",
+    "m2":       "m2 — Preprocess (notch / ICA / filter)",
+    "m3":       "m3 — Epoch",
+    "m4":       "m4 — Analytic signal + PSD",
+    "m4_trial": "m4_trial — Pre-stim beta / N400m / trial table",
+    "m5":       "m5 — Source reconstruction (needs FreeSurfer)",
+    "m6a":      "m6a — Phase-gradient waves + DCI",
+    "m6_extra": "m6_extra — CFC / FFT2D / rotational / flow-field detectors",
+    "m10":      "m10 — fMRI (fMRIPrep + trial-wise GLM + MTG)",
+    "m11":      "m11 — MEG-fMRI coupling regressions",
+    "m12":      "m12 — Two-dipole null / source-space DCI validation",
+    "m7":       "m7 — Permutation + circular stats",
+    "m8":       "m8 — HTML + Quarto reports",
+    "m9":       "m9 — Pilot gate (GO / MARGINAL / NO-GO)",
+}
+
 STAGE_DESCRIPTIONS = {
-    "m1": "Parse events TSV and validate trial structure.",
-    "m2": "Preprocess task/rest data: notch, resample, ICA, beta-band filter.",
-    "m3": "Epoch task data around event onsets.",
-    "m4": "Feature extraction (Hilbert analytic signal + PSD summaries).",
-    "m4_trial": "Trial-level MEG metrics (pre-stim beta, N400m, block-aware trial table).",
-    "m5": "Optional source-space analysis (requires source.subjects_dir + FreeSurfer data).",
-    "m6a": "Compute phase-gradient directions and directional consistency indices.",
-    "m6_extra": "Optional extra detectors (CFC, FFT2D, rotational, flow-field).",
-    "m10": "Optional fMRI stage (fMRIPrep orchestration + trialwise GLM + MTG extraction).",
-    "m11": "Optional MEG-fMRI coupling models on joined trial table.",
-    "m12": "Optional two-dipole null validation and source-vs-sensor wave comparison.",
-    "m7": "Run circular/permutation statistics for wave consistency and significance.",
-    "m8": "Generate the subject HTML report.",
-    "m9": "Evaluate pilot gate and derive GO/MARGINAL/NO-GO verdict.",
+    "m1":       "Parse events TSV and validate trial structure.",
+    "m2":       "Preprocess task/rest data: notch, resample, ICA, beta-band filter.",
+    "m3":       "Epoch task data around event onsets.",
+    "m4":       "Hilbert analytic signal + Welch PSD summaries.",
+    "m4_trial": "Trial-level MEG metrics: pre-stim beta, N400m amplitude, block-aware trial table for R.",
+    "m5":       "LCMV beamformer source reconstruction. Requires source.subjects_dir + FreeSurfer.",
+    "m6a":      "Planar phase-gradient wave directions and directional consistency index (DCI).",
+    "m6_extra": "Extra wave detectors: CFC (tensorpac), FFT2D, rotational, optical-flow.",
+    "m10":      "Run fMRIPrep container + nilearn trial-wise GLM + left-MTG beta extraction.",
+    "m11":      "Partial-Spearman + OLS coupling of MEG features against MTG BOLD betas.",
+    "m12":      "Two-dipole confound null: compares real DCI to simulated sensor-mixing baseline.",
+    "m7":       "Rayleigh + permutation significance for wave consistency across conditions.",
+    "m8":       "Embedded-figure HTML dashboard + aim-specific Quarto reports.",
+    "m9":       "Evaluate pilot gate criteria and return GO / MARGINAL / NO-GO verdict.",
+}
+
+STAGE_DEPENDENCIES = {
+    "m2": {"m1"},
+    "m3": {"m2"},
+    "m4": {"m3"},
+    "m4_trial": {"m3"},
+    "m5": {"m3"},
+    "m6a": {"m3"},
+    "m6_extra": {"m4"},
+    "m7": {"m6a"},
+    "m8": {"m7"},
+    "m9": {"m7"},
+    "m10": {"m4_trial"},
+    "m11": {"m10"},
+    "m12": {"m6a"},
+}
+
+STAGE_IO = {
+    "m1": {
+        "inputs": "events TSV file (`sub-*/meg/*_events.tsv`)",
+        "outputs": "trial table in-memory (`onset`, `sample`, `condition`, `block_id`, `pos_in_block`)",
+    },
+    "m2": {
+        "inputs": "task/rest CTF recordings + m1 trial table",
+        "outputs": "preprocessed raw task/rest in-memory (notch/resample/ICA/bandpass)",
+    },
+    "m3": {
+        "inputs": "preprocessed task raw + m1 trials",
+        "outputs": "task epochs object in-memory",
+    },
+    "m4": {
+        "inputs": "task epochs",
+        "outputs": "files in `m4_features/`: `*_analytic.npz`, `*_psd.npz`",
+    },
+    "m4_trial": {
+        "inputs": "task epochs + m1 block metadata",
+        "outputs": "trial-level metrics in-memory and `m4_features/*_prestim_beta.npz`, `*_n400m.npz`",
+    },
+    "m5": {
+        "inputs": "task epochs + source config (`source.subjects_dir`)",
+        "outputs": "source-space metrics in manifest (`source_dci_zinnen`, label counts)",
+    },
+    "m6a": {
+        "inputs": "task/rest epochs",
+        "outputs": "files in `m9_orchestration/`: `*_dirs_*.npy`, `*_sliding_dci_zinnen.npy`",
+    },
+    "m6_extra": {
+        "inputs": "m4 analytic features",
+        "outputs": "extra detector metrics in manifest",
+    },
+    "m7": {
+        "inputs": "m6a DCI/directions (+ trial table when available)",
+        "outputs": "stats metrics in manifest (`p_*`, pooled DCI, Aim1 block control p)",
+    },
+    "m10": {
+        "inputs": "fMRI config (`fmri.bold_path`, TR, atlas/ROI) + trial table",
+        "outputs": "joined MEG-fMRI trial table in-memory + m10 metrics",
+    },
+    "m11": {
+        "inputs": "m10 joined MEG-fMRI trials",
+        "outputs": "coupling metrics (`m11_coupling`) in manifest",
+    },
+    "m12": {
+        "inputs": "m6a DCI + `wave_validation` settings",
+        "outputs": "null-model metrics (`aim3_two_dipole_z`, `m12_null_summary`) in manifest",
+    },
+    "m8": {
+        "inputs": "m7 metrics + m6a arrays + optional joined trial table",
+        "outputs": "files in `m8_reports/`: subject HTML, exports (`*_trials.csv`, `*_metrics.json`, optional `*_trials_joined.csv`), optional Quarto html",
+    },
+    "m9": {
+        "inputs": "all computed metrics",
+        "outputs": "run manifest `m9_orchestration/sub-*_run_manifest.json` and final verdict",
+    },
+}
+
+MODULE_CATALOG = {
+    "m0": {
+        "purpose": "Intake/fetch subject data from RDR or other remotes.",
+        "inputs": "RDR collection path + subject IDs + repocli credentials.",
+        "outputs": "Local raw subject folders under data_root (`sub-*/`).",
+    },
+    "m1": {
+        "purpose": "Parse event files and assign condition/block structure.",
+        "inputs": "events TSV (`sub-*/meg/*_events.tsv`).",
+        "outputs": "Trial table in-memory (`onset`, `sample`, `condition`, `block_id`, `pos_in_block`).",
+    },
+    "m2": {
+        "purpose": "Preprocess MEG (notch/resample/ICA/beta filtering).",
+        "inputs": "Raw task/rest CTF recordings + m1 trial structure.",
+        "outputs": "Preprocessed task/rest raw objects in-memory.",
+    },
+    "m3": {
+        "purpose": "Epoch task/rest into analysis-ready segments.",
+        "inputs": "Preprocessed task/rest MEG + trial table.",
+        "outputs": "Task epochs and rest pseudo-epochs in-memory.",
+    },
+    "m4": {
+        "purpose": "Compute analytic signal and PSD features.",
+        "inputs": "Task epochs.",
+        "outputs": "`m4_features/*_analytic.npz`, `m4_features/*_psd.npz`.",
+    },
+    "m5": {
+        "purpose": "Source reconstruction + ROI extraction + source DCI.",
+        "inputs": "Epochs + source config + FreeSurfer subjects_dir.",
+        "outputs": "Source-related metrics in manifest (label counts, source DCI).",
+    },
+    "m6": {
+        "purpose": "Traveling-wave detection in sensor space.",
+        "inputs": "Epoch data (task/rest) and sensor geometry.",
+        "outputs": "Direction arrays and DCI arrays (`*_dirs_*.npy`, sliding DCI).",
+    },
+    "m7": {
+        "purpose": "Statistical testing for wave consistency and contrasts.",
+        "inputs": "Wave outputs + trial-level covariates (if present).",
+        "outputs": "Permutation, Rayleigh, and block-control p-values in manifest.",
+    },
+    "m8": {
+        "purpose": "Reporting/export for visualization and downstream analysis.",
+        "inputs": "Metrics + wave arrays + trial tables.",
+        "outputs": "HTML report, exports CSV/JSON, optional Quarto reports.",
+    },
+    "m9": {
+        "purpose": "Orchestrate full subject run + provenance + gate verdict.",
+        "inputs": "Selected stage outputs and config fingerprint.",
+        "outputs": "`m9_orchestration/sub-*_run_manifest.json` + GO/MARGINAL/NO-GO.",
+    },
+    "m10": {
+        "purpose": "fMRI preprocessing/GLM/ROI extraction.",
+        "inputs": "BOLD NIfTI + TR + atlas/ROI config.",
+        "outputs": "Trialwise MTG beta table (joined downstream with MEG trials).",
+    },
+    "m11": {
+        "purpose": "MEG-fMRI coupling models.",
+        "inputs": "Joined trial table (MEG features + MTG beta).",
+        "outputs": "Coupling statistics in manifest (`m11_coupling`).",
+    },
+    "m12": {
+        "purpose": "Wave-validation null model (two-dipole confound check).",
+        "inputs": "Real DCI + wave_validation config.",
+        "outputs": "Null comparison metrics (`aim3_two_dipole_z`, null summary).",
+    },
+    "bids_pipeline_backend": {
+        "purpose": "Optional backend for m2/m3/m5 using MNE-BIDS-Pipeline preprocessing/source steps.",
+        "inputs": "BIDS data + generated MNE-BIDS config + `preprocess.backend: mne_bids_pipeline`.",
+        "outputs": "Derivative epochs/source outputs under `preprocess.bids_pipeline_deriv_root` or default deriv path.",
+    },
 }
 
 
+def _validate_stage_selection(selected: list[str]) -> list[str]:
+    errors: list[str] = []
+    selected_set = set(selected)
+    for stage in selected:
+        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
+        if missing:
+            errors.append(f"{stage} requires {', '.join(missing)}")
+    return errors
+
+
+def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: PipelineConfig) -> list[str]:
+    sub = f"sub-{subject}"
+    base = cfg.derivatives_root / sub
+    outputs: list[str] = []
+    if "m4" in selected:
+        outputs.extend(
+            [
+                str(base / "m4_features" / f"{subject}_beta_analytic.npz"),
+                str(base / "m4_features" / f"{subject}_beta_psd.npz"),
+            ]
+        )
+    if "m4_trial" in selected:
+        outputs.extend(
+            [
+                str(base / "m4_features" / f"{subject}_prestim_beta.npz"),
+                str(base / "m4_features" / f"{subject}_n400m.npz"),
+            ]
+        )
+    if "m6a" in selected:
+        outputs.extend(
+            [
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_zinnen.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_woorden.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_rest.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_sliding_dci_zinnen.npy"),
+            ]
+        )
+    if "m8" in selected:
+        outputs.extend(
+            [
+                str(base / "m8_reports" / f"sub-{subject}_report.html"),
+                str(base / "m8_reports" / "exports" / f"{subject}_directions.csv"),
+                str(base / "m8_reports" / "exports" / f"{subject}_sliding_dci.csv"),
+                str(base / "m8_reports" / "exports" / f"{subject}_metrics.json"),
+                str(base / "m8_reports" / "exports" / f"{subject}_trials.csv"),
+            ]
+        )
+        if "m10" in selected or "m11" in selected:
+            outputs.append(str(base / "m8_reports" / "exports" / f"{subject}_trials_joined.csv"))
+    if "m9" in selected:
+        outputs.append(str(base / "m9_orchestration" / f"sub-{subject}_run_manifest.json"))
+    return outputs
+
+
+# ── Session helpers ──────────────────────────────────────────────────────────
+
 def _init_state() -> None:
-    st.session_state.setdefault("config_path", "configs/pilot_A2002.yaml")
+    st.session_state.setdefault("config_path", os.environ.get("MOUS_GUI_CONFIG", "configs/pilot_A2002.yaml"))
     st.session_state.setdefault("cfg", None)
     st.session_state.setdefault("cfg_loaded_path", None)
-    st.session_state.setdefault("last_run_summary", None)
+    st.session_state.setdefault("run_history", [])
+    st.session_state.setdefault("remote_subject_options", [])
+    st.session_state.setdefault("remote_subject_error", "")
 
 
 def _load_cfg(path_value: str) -> tuple[Path, PipelineConfig] | None:
@@ -62,96 +291,180 @@ def _active_cfg() -> tuple[Path, PipelineConfig] | None:
     return _load_cfg(st.session_state["config_path"])
 
 
+def _smart_defaults(cfg: PipelineConfig) -> list[str]:
+    """Return sensible default stage selection based on what is configured."""
+    defaults = list(CORE_STAGES)
+    if getattr(cfg, "wave_validation", None) and getattr(cfg.wave_validation, "enabled", False):
+        defaults.append("m12")
+    if getattr(cfg, "source", None) and getattr(cfg.source, "subjects_dir", ""):
+        defaults.append("m5")
+    fmri_cfg = getattr(cfg, "fmri", None)
+    if fmri_cfg and getattr(fmri_cfg, "bold_path", ""):
+        defaults += ["m10", "m11"]
+    return [s for s in STAGES if s in defaults]
+
+
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+
+def _sidebar() -> None:
+    with st.sidebar:
+        st.header("MOUS Pipeline")
+        cfg_bundle = _active_cfg()
+
+        if cfg_bundle:
+            _, cfg = cfg_bundle
+            data_ok = cfg.data_root.exists()
+            st.success("Config loaded")
+            st.markdown(f"**Config:** `{st.session_state['cfg_loaded_path'].name}`")
+            st.markdown(
+                f"**data\\_root:** {'✓' if data_ok else '⚠'} `{cfg.data_root}`",
+            )
+            st.markdown(f"**derivatives:** `{cfg.derivatives_root}`")
+            if cfg.subjects:
+                st.markdown(f"**subjects in config:** {', '.join(cfg.subjects)}")
+
+            wave_ok = getattr(cfg, "wave_validation", None) and getattr(cfg.wave_validation, "enabled", False)
+            fmri_ok = getattr(cfg, "fmri", None) and bool(getattr(cfg.fmri, "bold_path", ""))
+            src_ok = getattr(cfg, "source", None) and bool(getattr(cfg.source, "subjects_dir", ""))
+            st.markdown("**Optional stages ready:**")
+            st.markdown(f"- m12 wave validation: {'enabled' if wave_ok else 'disabled'}")
+            st.markdown(f"- m10/m11 fMRI: {'configured' if fmri_ok else 'not configured'}")
+            st.markdown(f"- m5 source: {'configured' if src_ok else 'not configured'}")
+        else:
+            st.warning("No config loaded")
+            st.markdown("Go to **Setup** tab to load a config.")
+
+        st.divider()
+        history = st.session_state.get("run_history", [])
+        if history:
+            st.markdown("**Recent runs:**")
+            for entry in reversed(history[-5:]):
+                color = "🟢" if entry["verdict"] == "GO" else ("🟡" if entry["verdict"] == "MARGINAL" else "🔴")
+                st.markdown(f"{color} `{entry['subject']}` — {entry['verdict']}")
+
+
+# ── Setup tab ────────────────────────────────────────────────────────────────
+
 def _setup_section() -> None:
-    st.subheader("Setup")
-    st.session_state["config_path"] = st.text_input("Config path", value=st.session_state["config_path"])
-    if st.button("Load config"):
-        _load_cfg(st.session_state["config_path"])
+    st.header("Setup")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        path_input = st.text_input(
+            "Config file path",
+            value=st.session_state["config_path"],
+            help="Relative to repo root, or absolute. Tilde (~) is supported.",
+        )
+        st.session_state["config_path"] = path_input
+    with col2:
+        st.write("")
+        st.write("")
+        load_clicked = st.button("Load config", use_container_width=True)
+
+    if load_clicked:
+        result = _load_cfg(path_input)
+        if result:
+            st.success(f"Loaded: {result[0]}")
 
     cfg_bundle = _active_cfg()
-    repocli_ok = shutil.which("repocli") is not None
-    st.markdown(f"**repocli:** {'on PATH' if repocli_ok else 'missing on PATH'}")
-    st.code(
-        "Step 2 (one-time): repocli config\n"
-        "  baseurl: https://webdav.data.ru.nl\n"
-        "  username/password: RDR Data Access Credentials"
-    )
     if cfg_bundle:
         _, cfg = cfg_bundle
-        st.markdown(f"**data_root:** `{cfg.data_root}`")
-        st.markdown(f"**rdr.collection_path:** `{cfg.rdr.collection_path or '(empty)'}`")
+        data_ok = cfg.data_root.exists()
+        if not data_ok:
+            st.warning(f"data_root does not exist yet: `{cfg.data_root}`  \nEnsure subjects are fetched or the path is correct in the YAML.")
+        else:
+            st.info(f"data_root exists: `{cfg.data_root}`")
 
+    st.divider()
+    st.subheader("One-time RDR credentials setup")
+    repocli_ok = shutil.which("repocli") is not None
+    mne_bids_pipeline_ok = shutil.which("mne_bids_pipeline") is not None
+    st.markdown(f"**repocli on PATH:** {'yes' if repocli_ok else 'no — run `setup.sh` first'}")
+    st.markdown(
+        f"**mne_bids_pipeline on PATH:** "
+        f"{'yes' if mne_bids_pipeline_ok else 'no — install with `pip install -e \".[bids]\"`'}"
+    )
+    with st.expander("repocli one-time setup commands"):
+        st.code(
+            "repocli config\n"
+            "  # baseurl: https://webdav.data.ru.nl\n"
+            "  # Enter your RDR Data Access Credentials when prompted",
+            language="bash",
+        )
+
+    st.divider()
+    st.subheader("Quick-start configs")
+    st.markdown(
+        "| Config | Purpose |\n"
+        "| --- | --- |\n"
+        "| `configs/pilot_A2002.yaml` | Single pilot subject |\n"
+        "| `configs/test_multi_A2003_A2006.yaml` | Multi-subject batch with wave validation |"
+    )
+
+
+# ── Fetch tab ────────────────────────────────────────────────────────────────
 
 def _fetch_section() -> None:
-    st.subheader("Fetch from RDR")
+    st.header("Fetch subjects from RDR")
     cfg_bundle = _active_cfg()
-    st.session_state.setdefault("remote_subject_options", [])
-    st.session_state.setdefault("remote_subject_error", "")
-
-    subject = st.text_input("Subject ID", value="A2002", key="fetch_subject")
-    st.caption("e.g. A2002 - a leading 'sub-' prefix is stripped automatically.")
     repocli_ok = shutil.which("repocli") is not None
+
     if not repocli_ok:
-        st.warning("repocli is not on PATH. Run setup.sh or fix PATH before fetching.")
-    if cfg_bundle:
-        _, cfg = cfg_bundle
-        col_left, col_right = st.columns([1, 1])
-        with col_left:
-            if st.button("Load subject list from RDR"):
-                st.session_state["remote_subject_options"] = []
-                st.session_state["remote_subject_error"] = ""
-                if not repocli_ok:
-                    st.session_state["remote_subject_error"] = "repocli is not on PATH."
-                elif not cfg.rdr.collection_path:
-                    st.session_state["remote_subject_error"] = "rdr.collection_path is empty in config."
+        st.error("repocli is not on PATH. Run `bash setup.sh` and re-open the GUI.")
+        return
+    if not cfg_bundle:
+        st.warning("Load a config first (Setup tab).")
+        return
+
+    _, cfg = cfg_bundle
+
+    col_l, col_r = st.columns([1, 1])
+    with col_l:
+        if st.button("Load subject list from RDR", use_container_width=True):
+            st.session_state["remote_subject_options"] = []
+            st.session_state["remote_subject_error"] = ""
+            if not cfg.rdr.collection_path:
+                st.session_state["remote_subject_error"] = "rdr.collection_path is empty in config."
+            else:
+                cmd = ["repocli", "ls", cfg.rdr.collection_path.strip().strip("/")]
+                proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                if proc.returncode != 0:
+                    err = proc.stderr.strip() or proc.stdout.strip() or "unknown repocli error"
+                    st.session_state["remote_subject_error"] = f"Failed to list subjects: {err}"
                 else:
-                    cmd = ["repocli", "ls", cfg.rdr.collection_path.strip().strip("/")]
-                    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                    if proc.returncode != 0:
-                        err = proc.stderr.strip() or proc.stdout.strip() or "unknown repocli error"
-                        st.session_state["remote_subject_error"] = f"Failed to list subjects: {err}"
-                    else:
-                        matches = sorted(set(re.findall(r"sub-[A-Za-z0-9_-]+", proc.stdout)))
-                        st.session_state["remote_subject_options"] = [m.removeprefix("sub-") for m in matches]
-        with col_right:
-            selected_from_list = st.multiselect(
-                "Available subjects",
-                st.session_state["remote_subject_options"],
-                default=[],
-                key="selected_remote_subjects",
-            )
+                    matches = sorted(set(re.findall(r"sub-[A-Za-z0-9_-]+", proc.stdout)))
+                    st.session_state["remote_subject_options"] = [m.removeprefix("sub-") for m in matches]
         if st.session_state["remote_subject_error"]:
             st.warning(st.session_state["remote_subject_error"])
-        if selected_from_list:
-            st.caption(f"Selected {len(selected_from_list)} subject(s) from RDR list.")
 
-    if st.button("Download subject"):
-        if not cfg_bundle:
-            st.error("Load a valid config first.")
-            return
-        if not repocli_ok:
-            st.error("repocli is not on PATH.")
-            return
-        _, cfg = cfg_bundle
+    with col_r:
+        selected_from_list = st.multiselect(
+            "Available subjects (from RDR list)",
+            st.session_state["remote_subject_options"],
+            default=[],
+            key="selected_remote_subjects",
+        )
+
+    st.divider()
+    manual = st.text_input("Or type subject ID manually", value="", placeholder="A2007")
+    st.caption("Leading `sub-` is stripped automatically.")
+
+    if st.button("Download selected", use_container_width=True, type="primary"):
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
-        selected_from_list = st.session_state.get("selected_remote_subjects", [])
-        requested_subjects: list[str]
-        if selected_from_list:
-            requested_subjects = [str(s).strip().removeprefix("sub-") for s in selected_from_list if str(s).strip()]
-        else:
-            normalized_subject = subject.strip().removeprefix("sub-")
-            requested_subjects = [normalized_subject] if normalized_subject else []
-        if not requested_subjects:
-            st.error("Provide a subject ID or load and select from the subject list.")
+        chosen = [s.strip().removeprefix("sub-") for s in selected_from_list if s.strip()]
+        if manual.strip():
+            chosen.append(manual.strip().removeprefix("sub-"))
+        if not chosen:
+            st.error("Select at least one subject from the list or type an ID.")
             return
 
         log_box = st.empty()
         logs: list[str] = []
-        with st.spinner("Downloading..."):
-            failures: list[str] = []
-            for subj in requested_subjects:
+        failures: list[str] = []
+        with st.spinner(f"Downloading {len(chosen)} subject(s)…"):
+            for subj in chosen:
                 cmd = build_repocli_get_command(
                     remote_path=remote_subject_path(cfg.rdr.collection_path, subj),
                     local_dir=cfg.data_root.resolve(),
@@ -163,166 +476,386 @@ def _fetch_section() -> None:
                 for line in proc.stdout:
                     logs.append(line)
                     log_box.code("".join(logs), language="bash")
-                code = proc.wait()
-                if code != 0:
+                if proc.wait() != 0:
                     failures.append(subj)
-                    logs.append(f"[error] sub-{subj} failed (exit {code})\n")
+                    logs.append(f"[error] sub-{subj} failed\n")
                 else:
-                    logs.append(f"[done] sub-{subj} downloaded\n")
+                    logs.append(f"[done] sub-{subj}\n")
                 log_box.code("".join(logs), language="bash")
         if failures:
-            st.error(f"Completed with failures for {len(failures)} subject(s): {', '.join(failures)}")
+            st.error(f"Failed for: {', '.join(failures)}")
         else:
-            st.success(f"Download complete for {len(requested_subjects)} subject(s).")
-        log_box.code("".join(logs), language="bash")
+            st.success(f"Downloaded {len(chosen)} subject(s).")
+
+
+# ── Run tab ──────────────────────────────────────────────────────────────────
+
+def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[str], force: bool) -> dict:
+    """Run a single subject and return a summary dict."""
+    progress = st.progress(0, text=f"Running sub-{subject}…")
+    log_box = st.empty()
+    logs: list[str] = [f"▶ sub-{subject}  stages: {', '.join(selected)}\n"]
+    completed: set[str] = set()
+
+    def callback(stage_name: str) -> None:
+        if stage_name not in completed:
+            completed.add(stage_name)
+            pct = int(len(completed) / max(len(selected), 1) * 100)
+            progress.progress(pct, text=f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)})")
+            logs.append(f"  ✓ {stage_name}\n")
+            log_box.code("".join(logs))
+
+    try:
+        result = run_subject(
+            subject, cfg,
+            skip=skip if skip else None,
+            force=force,
+            config_path=cfg_path,
+            progress_callback=callback,
+        )
+        logs.append(result.summary() + "\n")
+        progress.progress(100, text=f"sub-{subject} — done")
+        log_box.code("".join(logs))
+        return {
+            "subject": subject,
+            "verdict": result.metrics.get("pilot_verdict", "unknown"),
+            "n_trials": result.metrics.get("n_trials"),
+            "n_zinnen": result.metrics.get("n_zinnen"),
+            "n_woorden": result.metrics.get("n_woorden"),
+            "dci_zinnen": result.metrics.get("dci_zinnen"),
+            "dci_zinnen_pooled": result.metrics.get("dci_zinnen_pooled"),
+            "p_task_vs_rest": result.metrics.get("p_task_vs_rest"),
+            "p_rayleigh_zinnen": result.metrics.get("p_rayleigh_zinnen"),
+            "aim1_prestim_auc": result.metrics.get("aim1_prestim_auc"),
+            "aim1_n400m_t": result.metrics.get("aim1_n400m_zinnen_vs_woorden_t"),
+            "aim3_two_dipole_z": result.metrics.get("aim3_two_dipole_z"),
+            "ok": True,
+            "error": None,
+        }
+    except Exception as exc:
+        progress.empty()
+        logs.append(f"[ERROR] {exc}\n")
+        log_box.code("".join(logs))
+        return {"subject": subject, "verdict": "ERROR", "ok": False, "error": str(exc)}
 
 
 def _run_section() -> None:
-    st.subheader("Run pipeline")
+    st.header("Run pipeline")
     cfg_bundle = _active_cfg()
-    subject = st.text_input("Subject ID", value="A2002", key="run_subject")
-    st.caption("e.g. A2002 - a leading 'sub-' prefix is stripped automatically.")
-    force = st.checkbox("Force recompute", value=False)
-    selected = st.multiselect("Stages", STAGES, default=STAGES)
-    with st.expander("Stage reference"):
-        st.table([{"stage": s, "description": STAGE_DESCRIPTIONS[s]} for s in STAGES])
-    normalized_subject = subject.strip().removeprefix("sub-")
-    if not normalized_subject:
-        st.warning("Subject field is empty.")
-    if cfg_bundle:
-        _, cfg = cfg_bundle
-        if not cfg.data_root.exists():
-            st.warning(f"data_root does not exist yet: {cfg.data_root}")
-    if st.button("Run pipeline"):
-        if not cfg_bundle:
-            st.error("Load a valid config first.")
+    if not cfg_bundle:
+        st.warning("Load a config first (Setup tab).")
+        return
+    cfg_path, cfg = cfg_bundle
+
+    # ── Mode selector ────────────────────────────────────────────────────────
+    mode = st.radio("Mode", ["Single subject", "Batch (all config subjects)"], horizontal=True)
+
+    if mode == "Single subject":
+        subject_input = st.text_input("Subject ID", value="A2002", help="e.g. A2003 — leading sub- stripped automatically")
+        subjects_to_run = [subject_input.strip().removeprefix("sub-")]
+    else:
+        if not cfg.subjects:
+            st.warning("No subjects listed in config. Add a `subjects:` list to the YAML or use Single subject mode.")
             return
-        if not normalized_subject:
-            st.error("Subject ID is required.")
-            return
+        subjects_to_run = [s.strip().removeprefix("sub-") for s in cfg.subjects if s.strip()]
+        st.info(f"Will run: {', '.join(subjects_to_run)}")
+
+    st.divider()
+
+    # ── Stage selector ───────────────────────────────────────────────────────
+    st.subheader("Stage selection")
+    default_stages = _smart_defaults(cfg)
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.caption("**Core stages**")
+        core_sel = st.multiselect(
+            "Core", CORE_STAGES,
+            default=[s for s in default_stages if s in CORE_STAGES],
+            format_func=lambda s: STAGE_LABELS[s],
+            key="core_stage_sel",
+            label_visibility="collapsed",
+        )
+    with col_b:
+        st.caption("**Optional stages** (auto-selected based on config)")
+        opt_sel = st.multiselect(
+            "Optional", OPTIONAL_STAGES,
+            default=[s for s in default_stages if s in OPTIONAL_STAGES],
+            format_func=lambda s: STAGE_LABELS[s],
+            key="opt_stage_sel",
+            label_visibility="collapsed",
+        )
+    selected = core_sel + opt_sel
+
+    with st.expander("Stage descriptions"):
+        for s in selected:
+            st.markdown(f"**{STAGE_LABELS[s]}** — {STAGE_DESCRIPTIONS[s]}")
+            io = STAGE_IO.get(s)
+            if io:
+                st.markdown(f"- Inputs: {io['inputs']}")
+                st.markdown(f"- Outputs: {io['outputs']}")
+    with st.expander("Module dependency rules"):
+        rows = []
+        for s in STAGES:
+            deps = sorted(STAGE_DEPENDENCIES.get(s, set()))
+            rows.append(
+                {
+                    "module": s,
+                    "depends_on": ", ".join(deps) if deps else "none",
+                    "inputs": STAGE_IO.get(s, {}).get("inputs", ""),
+                    "outputs": STAGE_IO.get(s, {}).get("outputs", ""),
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    with st.expander("Full module catalog (m0-m12)"):
+        module_rows = []
+        for module_id in [* [f"m{i}" for i in range(0, 13)], "bids_pipeline_backend"]:
+            meta = MODULE_CATALOG.get(module_id, {"purpose": "", "inputs": "", "outputs": ""})
+            module_rows.append(
+                {
+                    "module": module_id,
+                    "purpose": meta["purpose"],
+                    "inputs": meta["inputs"],
+                    "outputs": meta["outputs"],
+                }
+            )
+        st.dataframe(module_rows, use_container_width=True, hide_index=True)
+
+    force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
+    st.divider()
+    st.subheader("Planned outputs for this run")
+    projected_rows: list[dict[str, str]] = []
+    for subj in subjects_to_run:
+        for out in _planned_outputs_for_subject(subj, selected, cfg):
+            projected_rows.append({"subject": f"sub-{subj}", "output_path": out})
+    if projected_rows:
+        st.caption(f"Potential artifacts for selected stages across {len(subjects_to_run)} subject(s).")
+        st.dataframe(projected_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No file artifacts are projected for current stage selection.")
+
+    st.divider()
+    if st.button("Run pipeline", type="primary", use_container_width=True):
         if not selected:
             st.error("Select at least one stage.")
             return
-        cfg_path, cfg = cfg_bundle
+        dependency_errors = _validate_stage_selection(selected)
+        if dependency_errors:
+            st.error("Invalid module selection. Add required dependencies first:")
+            for err in dependency_errors:
+                st.markdown(f"- {err}")
+            return
+        if not subjects_to_run or not subjects_to_run[0]:
+            st.error("Subject ID is required.")
+            return
+
         skip = set(STAGES) - set(selected)
-        progress = st.progress(0, text="Starting...")
-        status = st.empty()
-        log_box = st.empty()
-        logs: list[str] = [f"Running sub-{subject.strip()} with stages: {', '.join(selected)}\n"]
-        completed: set[str] = set()
+        history: list[dict] = st.session_state.get("run_history", [])
 
-        def callback(stage_name: str) -> None:
-            if stage_name in selected and stage_name not in completed:
-                completed.add(stage_name)
-                pct = int((len(completed) / len(selected)) * 100)
-                progress.progress(pct, text=f"Completed {len(completed)}/{len(selected)} stages")
-                logs.append(f"[stage complete] {stage_name}\n")
-                log_box.code("".join(logs))
+        for subj in subjects_to_run:
+            st.markdown(f"---\n#### sub-{subj}")
+            summary = _run_one(subj, cfg, cfg_path, skip, selected, force)
+            history.append(summary)
+            if summary["ok"]:
+                v = summary["verdict"]
+                fn = st.success if v == "GO" else (st.warning if v == "MARGINAL" else st.error)
+                fn(f"sub-{subj}: {v}")
+            else:
+                st.error(f"sub-{subj}: pipeline error — {summary['error']}")
 
-        try:
-            status.info("Pipeline running...")
-            result = run_subject(
-                normalized_subject,
-                cfg,
-                skip=skip if skip else None,
-                force=force,
-                config_path=cfg_path,
-                progress_callback=callback,
-            )
-            logs.append(result.summary() + "\n")
-            progress.progress(100, text="Done")
-            status.success("Pipeline completed.")
-            log_box.code("".join(logs))
-            st.session_state["last_run_summary"] = {
-                "subject": normalized_subject,
-                "verdict": result.metrics.get("pilot_verdict", "unknown"),
-                "n_trials": result.metrics.get("n_trials"),
-                "dci_zinnen": result.metrics.get("dci_zinnen"),
-                "p_task_vs_rest": result.metrics.get("p_task_vs_rest"),
-            }
-        except Exception as exc:
-            status.error(f"Pipeline failed: {exc}")
-            logs.append(str(exc) + "\n")
-            log_box.code("".join(logs))
+        st.session_state["run_history"] = history
 
-    summary = st.session_state.get("last_run_summary")
-    if isinstance(summary, dict):
-        st.markdown("### Last run summary")
-        st.write(
-            {
-                "subject": summary.get("subject"),
-                "pilot_verdict": summary.get("verdict"),
-                "n_trials": summary.get("n_trials"),
-                "dci_zinnen": summary.get("dci_zinnen"),
-                "p_task_vs_rest": summary.get("p_task_vs_rest"),
-            }
-        )
+        # ── Batch summary table ──────────────────────────────────────────────
+        if len(subjects_to_run) > 1:
+            st.divider()
+            st.subheader("Batch summary")
+            rows = []
+            for h in [e for e in history if e["subject"] in subjects_to_run]:
+                rows.append({
+                    "subject": h["subject"],
+                    "verdict": h.get("verdict"),
+                    "n_trials": h.get("n_trials"),
+                    "dci_zinnen": _fmt(h.get("dci_zinnen")),
+                    "p_task_vs_rest": _fmt(h.get("p_task_vs_rest")),
+                    "aim1_prestim_auc": _fmt(h.get("aim1_prestim_auc")),
+                    "aim3_two_dipole_z": _fmt(h.get("aim3_two_dipole_z")),
+                })
+            st.dataframe(rows, use_container_width=True)
 
+
+def _fmt(v: Any) -> str:
+    if v is None:
+        return "—"
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    return str(v)
+
+
+# ── Results tab ──────────────────────────────────────────────────────────────
 
 def _results_section() -> None:
-    st.subheader("Results")
+    st.header("Results")
     cfg_bundle = _active_cfg()
     if not cfg_bundle:
         st.info("Load a valid config first.")
         return
     _, cfg = cfg_bundle
+
     root = cfg.derivatives_root
-    subjects = sorted([p.name.replace("sub-", "", 1) for p in root.iterdir() if p.is_dir()]) if root.exists() else []
-    if not subjects:
+    if not root.exists():
+        st.info(f"No derivatives found yet at `{root}`.")
+        return
+
+    sub_dirs = sorted([p for p in root.iterdir() if p.is_dir() and p.name.startswith("sub-")])
+    if not sub_dirs:
         st.info("No processed subjects found.")
         return
-    default_subject = st.session_state.get("last_run_summary", {}).get("subject")
-    default_index = subjects.index(default_subject) if default_subject in subjects else 0
-    subject = st.selectbox("Subject", subjects, index=default_index)
-    manifest_path = root / subject / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
+
+    subjects = [p.name for p in sub_dirs]  # keep full "sub-XXXX" name
+    last = st.session_state.get("run_history")
+    last_subject = f"sub-{last[-1]['subject']}" if last else None
+    default_index = subjects.index(last_subject) if last_subject in subjects else 0
+
+    sub_dir_name = st.selectbox("Subject", subjects, index=default_index)
+    sub_dir = root / sub_dir_name
+    subject_id = sub_dir_name.removeprefix("sub-")
+
+    manifest_path = sub_dir / "m9_orchestration" / f"{sub_dir_name}_run_manifest.json"
     if not manifest_path.exists():
-        st.warning(f"Manifest not found: {manifest_path}")
+        st.warning(f"Manifest not found: `{manifest_path}`")
         return
 
     manifest: dict[str, Any] = json.loads(manifest_path.read_text())
     metrics = manifest.get("metrics", {})
+
+    # ── Verdict banner ───────────────────────────────────────────────────────
     verdict = metrics.get("pilot_verdict", "unknown")
-    if verdict == "GO":
-        st.success(f"Pilot verdict: {verdict}")
-    elif verdict == "MARGINAL":
-        st.warning(f"Pilot verdict: {verdict}")
-    else:
-        st.error(f"Pilot verdict: {verdict}")
+    (st.success if verdict == "GO" else st.warning if verdict == "MARGINAL" else st.error)(
+        f"Pilot verdict: **{verdict}**"
+    )
 
-    key_metrics = [
-        "n_trials",
-        "n_zinnen",
-        "n_woorden",
-        "n_rest",
-        "dci_zinnen",
-        "dci_woorden",
-        "dci_rest",
-        "p_task_vs_rest",
-        "p_rayleigh_zinnen",
-    ]
-    rows = [{"metric": key, "value": metrics.get(key)} for key in key_metrics]
-    st.table(rows)
+    # ── Metrics columns ──────────────────────────────────────────────────────
+    st.subheader("Key metrics")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Trials", metrics.get("n_trials", "—"))
+        st.metric("ZINNEN", metrics.get("n_zinnen", "—"))
+        st.metric("WOORDEN", metrics.get("n_woorden", "—"))
+    with c2:
+        st.metric("DCI ZINNEN", _fmt(metrics.get("dci_zinnen_pooled") or metrics.get("dci_zinnen")))
+        st.metric("DCI WOORDEN", _fmt(metrics.get("dci_woorden_pooled") or metrics.get("dci_woorden")))
+        st.metric("p task vs rest", _fmt(metrics.get("p_task_vs_rest")))
+    with c3:
+        st.metric("Rayleigh p (ZINNEN)", _fmt(metrics.get("p_rayleigh_zinnen")))
+        st.metric("Aim1 prestim AUC", _fmt(metrics.get("aim1_prestim_auc")))
+        st.metric("Aim3 two-dipole z", _fmt(metrics.get("aim3_two_dipole_z")))
 
-    timings = manifest.get("params", {}).get("stage_timings_s", {})
+    # ── Stage timings chart ──────────────────────────────────────────────────
+    timings = manifest.get("params", {}).get("stage_timings_s") or metrics.get("stage_timings_s", {})
     if timings:
+        st.subheader("Stage timings")
         names = list(timings.keys())
         vals = [float(timings[k]) for k in names]
-        fig, ax = plt.subplots(figsize=(8, 3))
-        ax.bar(names, vals)
-        ax.set_ylabel("seconds")
-        ax.set_title(f"sub-{subject} stage timings")
+        fig, ax = plt.subplots(figsize=(9, 3))
+        ax.barh(names, vals)
+        ax.set_xlabel("seconds")
+        ax.set_title(f"{sub_dir_name} stage timings")
+        plt.tight_layout()
         st.pyplot(fig)
+        plt.close(fig)
 
-    report_path = root / subject / "m8_reports" / f"{subject}_report.html"
-    st.markdown(f"**HTML report:** `{report_path}`")
+    # ── Output links ────────────────────────────────────────────────────────
+    st.subheader("Output files")
+    report_html = sub_dir / "m8_reports" / f"{sub_dir_name}_report.html"
+    trials_csv = sub_dir / "m8_reports" / "exports" / f"{subject_id}_trials.csv"
+    metrics_json = sub_dir / "m8_reports" / "exports" / f"{subject_id}_metrics.json"
 
+    for label, path in [
+        ("HTML report", report_html),
+        ("trials.csv", trials_csv),
+        ("metrics.json", metrics_json),
+    ]:
+        exists = path.exists()
+        st.markdown(f"{'✓' if exists else '·'} **{label}:** `{path}`")
+
+    # ── Full metrics expander ────────────────────────────────────────────────
+    with st.expander("All metrics"):
+        st.json(metrics)
+
+
+def _files_section() -> None:
+    st.header("File browser")
+    cfg_bundle = _active_cfg()
+    if not cfg_bundle:
+        st.info("Load a config first.")
+        return
+    _, cfg = cfg_bundle
+
+    roots = {
+        "Data root": cfg.data_root,
+        "Derivatives root": cfg.derivatives_root,
+        "Repository root": Path.cwd(),
+    }
+    root_name = st.selectbox("Root", list(roots.keys()))
+    root = roots[root_name]
+    if not root.exists():
+        st.warning(f"Selected root does not exist: `{root}`")
+        return
+
+    rel = st.text_input(
+        "Path inside root",
+        value=".",
+        help="Use relative paths like `sub-A2003/meg` or `sub-A2003/m9_orchestration`.",
+    ).strip()
+    target = (root / rel).resolve() if rel != "." else root.resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError:
+        st.error("Path must stay within selected root.")
+        return
+    if not target.exists():
+        st.warning(f"Path does not exist: `{target}`")
+        return
+
+    st.markdown(f"**Current path:** `{target}`")
+    if target.is_dir():
+        entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        rows = []
+        for e in entries:
+            rows.append(
+                {
+                    "type": "dir" if e.is_dir() else "file",
+                    "name": e.name,
+                    "size_bytes": (e.stat().st_size if e.is_file() else ""),
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("File preview")
+        suffix = target.suffix.lower()
+        try:
+            if suffix in {".json"}:
+                st.json(json.loads(target.read_text()))
+            elif suffix in {".csv", ".tsv"}:
+                import pandas as pd
+
+                sep = "\t" if suffix == ".tsv" else ","
+                st.dataframe(pd.read_csv(target, sep=sep).head(200), use_container_width=True)
+            elif suffix in {".txt", ".log", ".md", ".yaml", ".yml", ".py"}:
+                st.code(target.read_text()[:15000])
+            else:
+                st.info("Preview not available for this file type.")
+        except Exception as exc:
+            st.error(f"Failed to preview file: {exc}")
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
-    st.set_page_config(page_title="MOUS GUI", layout="wide")
-    st.title("MOUS pipeline GUI (Streamlit)")
+    st.set_page_config(page_title="MOUS Pipeline", layout="wide")
     _init_state()
+    _sidebar()
 
-    setup_tab, fetch_tab, run_tab, results_tab = st.tabs(["Setup", "Fetch", "Run", "Results"])
+    setup_tab, fetch_tab, run_tab, results_tab, files_tab = st.tabs(["Setup", "Fetch", "Run", "Results", "Files"])
     with setup_tab:
         _setup_section()
     with fetch_tab:
@@ -331,6 +864,8 @@ def main() -> None:
         _run_section()
     with results_tab:
         _results_section()
+    with files_tab:
+        _files_section()
 
 
 if __name__ == "__main__":

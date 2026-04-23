@@ -12,6 +12,7 @@ import yaml
 @dataclass
 class PreprocessConfig:
     backend: str = "inhouse"
+    bids_pipeline_deriv_root: str = ""
     notch_freqs: list[float] = field(default_factory=lambda: [50.0, 100.0, 150.0])
     resample_hz: float = 300.0
     ica_n_components: int = 40
@@ -154,8 +155,8 @@ def load_config(path: str | Path) -> PipelineConfig:
     )
 
     return PipelineConfig(
-        data_root=Path(raw.get("data_root", ".")),
-        derivatives_root=Path(raw.get("derivatives_root", "derivatives/mous_pipeline")),
+        data_root=Path(raw.get("data_root", ".")).expanduser(),
+        derivatives_root=Path(raw.get("derivatives_root", "derivatives/mous_pipeline")).expanduser(),
         subjects=raw.get("subjects", []),
         paths=raw.get("paths", {}),
         rdr=rdr,

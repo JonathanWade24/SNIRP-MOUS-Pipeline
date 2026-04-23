@@ -33,8 +33,18 @@ def lme_block_control(df: pd.DataFrame, formula: str) -> tuple[float | None, pd.
 
     Returns (p_value, tidy_table).
     """
-    model = smf.mixedlm(formula=formula, data=df, groups=df["block_id"])
-    fit = model.fit(reml=False, method="lbfgs", maxiter=200, disp=False)
+    fit = None
+    try:
+        model = smf.mixedlm(formula=formula, data=df, groups=df["block_id"])
+        fit = model.fit(reml=False, method="lbfgs", maxiter=200, disp=False)
+    except Exception as exc:
+        # MixedLM can fail with singular random-effect covariance on some subjects.
+        # Fall back to OLS so the pipeline can continue and still estimate
+        # the fixed effect for pos_in_block when identifiable.
+        if "singular matrix" not in str(exc).lower():
+            raise
+        fit = smf.ols(formula=formula, data=df).fit()
+
     pval = fit.pvalues.get("pos_in_block")
     tidy = pd.DataFrame(
         {

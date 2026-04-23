@@ -6,7 +6,8 @@ subjects: []
 rdr:
   collection_path: "dccn/DSC_3011020.09_236_v1"
 preprocess:
-  backend: "inhouse"
+  backend: "inhouse"  # or "mne_bids_pipeline"
+  bids_pipeline_deriv_root: ""
   notch_freqs: [50, 100, 150]
   resample_hz: 300.0
   ica_n_components: 40
