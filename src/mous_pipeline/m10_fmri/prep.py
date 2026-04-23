@@ -120,6 +120,18 @@ def _fmriprep_cmd(subject: str, bids_root: Path, out_dir: Path, work_dir: Path, 
     return ["fmriprep"] + fmriprep_args
 
 
+def _assert_no_spaces(path: Path, label: str) -> None:
+    """Raise early if *path* contains spaces — FSL/ANTs cannot handle them."""
+    if " " in str(path):
+        raise ValueError(
+            f"fMRIPrep cannot run because {label} contains a space:\n"
+            f"  {path}\n"
+            "Create a symlink without spaces and point data_root at it, e.g.:\n"
+            "  ln -s '/home/jovyan/MOUS/Pipeline WIP/mous_data' /home/jovyan/mous_data\n"
+            "Then set  data_root: '~/mous_data'  in your config."
+        )
+
+
 def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     """Run fMRIPrep for a subject, with Neurodesk module and container support.
 
@@ -142,6 +154,10 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     work_dir = _safe_work_dir(cfg, subject, bids_root, out_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    _assert_no_spaces(bids_root, "bids_root (data_root)")
+    _assert_no_spaces(out_dir, "fmri.fmriprep_output")
+    _assert_no_spaces(work_dir, "fmriprep work_dir")
 
     neurodesk_module = str(getattr(cfg.fmri, "neurodesk_module", "")).strip()
     fs_license = str(getattr(cfg.fmri, "fs_license_file", "")).strip()
