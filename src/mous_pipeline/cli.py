@@ -51,24 +51,29 @@ _stage_start_times: dict[str, float] = {}
 
 
 def _make_cli_progress_callback(selected_stages: list[str]):
-    stage_to_idx = {stage: idx + 1 for idx, stage in enumerate(selected_stages)}
     total = len(selected_stages)
     _t0 = time.time()
+    _exec_index_by_stage: dict[str, int] = {}
+    _next_exec_index = 0
 
     def _cb(event: str, stage: str) -> None:
-        idx = stage_to_idx.get(stage)
-        if idx is None:
-            return
+        nonlocal _next_exec_index
         label = _STAGE_LABELS.get(stage, stage)
         elapsed = time.time() - _t0
         elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60):02d}s" if elapsed >= 60 else f"{elapsed:.1f}s"
         if event == "start":
+            _next_exec_index += 1
+            _exec_index_by_stage[stage] = _next_exec_index
+            idx = _next_exec_index
             _stage_start_times[stage] = time.time()
             print(
                 f"\r  ┌ [{idx:02d}/{total:02d}] {label} …",
                 file=sys.stderr, flush=True,
             )
         else:
+            idx = _exec_index_by_stage.get(stage)
+            if idx is None:
+                return
             stage_dur = time.time() - _stage_start_times.pop(stage, time.time())
             dur_str = f"{int(stage_dur // 60)}m {int(stage_dur % 60):02d}s" if stage_dur >= 60 else f"{stage_dur:.1f}s"
             pct = int(idx / total * 100)

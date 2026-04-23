@@ -90,9 +90,10 @@ def _write_run_state(path: Path, payload: dict) -> None:
     tmp.replace(path)
 
 
-def _append_live_log(path: Path, message: str) -> None:
+def _append_live_log(path: Path, message: str, *, reset_file: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
+    mode = "w" if reset_file else "a"
+    with path.open(mode) as f:
         f.write(message.rstrip() + "\n")
 
 
@@ -116,7 +117,6 @@ def run_subject(
     m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
     state_path = out_dir / f"sub-{subject}_run_state.json"
     live_log_path = out_dir / f"sub-{subject}_run_live.log"
-    stage_index = {s: i + 1 for i, s in enumerate(selected)}
     completed: list[str] = []
     state: dict[str, object] = {
         "subject": subject,
@@ -134,7 +134,11 @@ def run_subject(
         "last_event": None,
     }
     _write_run_state(state_path, state)
-    _append_live_log(live_log_path, f"[run] subject={subject} status=running stages={','.join(selected)}")
+    _append_live_log(
+        live_log_path,
+        f"[run] subject={subject} status=running stages={','.join(selected)}",
+        reset_file=True,
+    )
 
     def _emit(event: str, stage: str) -> None:
         if progress_event_callback and _stage_selected(stage, only, skip):
@@ -144,7 +148,8 @@ def run_subject(
         if event == "start":
             state["current_stage"] = stage
             state["current_stage_started_at"] = time.time()
-            state["stage_index"] = stage_index.get(stage, 0)
+            # Execution order can differ from STAGE_ORDER (e.g. m7 before m10); index by run position.
+            state["stage_index"] = len(completed) + 1
             _append_live_log(
                 live_log_path,
                 f"[stage start] {stage} ({state['stage_index']}/{state['stage_total']})",
