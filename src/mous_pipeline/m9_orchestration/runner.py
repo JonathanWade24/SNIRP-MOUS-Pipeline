@@ -115,54 +115,104 @@ def run_subject(
     trial_meta = make_events_metadata(trials)
 
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
-    out_files = [
-        out_dir / f"sub-{subject}_dirs_zinnen.npy",
-        out_dir / f"sub-{subject}_dirs_woorden.npy",
-        out_dir / f"sub-{subject}_dirs_rest.npy",
-        out_dir / f"sub-{subject}_sliding_dci_zinnen.npy",
-    ]
+    m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
+
+    # ── Per-stage output file paths ───────────────────────────────────────────
+    _m4_analytic  = m4_out_dir / f"{subject}_beta_analytic.npz"
+    _m4_psd       = m4_out_dir / f"{subject}_beta_psd.npz"
+    _m4t_prestim  = m4_out_dir / f"{subject}_prestim_beta.npz"
+    _m4t_n400m    = m4_out_dir / f"{subject}_n400m.npz"
+    _m6a_paths: dict[str, Path] = {
+        "dirs_z":    out_dir / f"sub-{subject}_dirs_zinnen.npy",
+        "dirs_w":    out_dir / f"sub-{subject}_dirs_woorden.npy",
+        "dirs_r":    out_dir / f"sub-{subject}_dirs_rest.npy",
+        "sliding_z": out_dir / f"sub-{subject}_sliding_dci_zinnen.npy",
+        "dci_z":     out_dir / f"sub-{subject}_dci_zinnen.npy",
+        "dci_w":     out_dir / f"sub-{subject}_dci_woorden.npy",
+        "dci_r":     out_dir / f"sub-{subject}_dci_rest.npy",
+        "sliding_t": out_dir / f"sub-{subject}_sliding_t.npy",
+    }
+    out_files = list(_m6a_paths.values())
+
+    # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
+    _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
+    _m4trial_hit = not force and _m4t_prestim.exists() and _m4t_n400m.exists()
+    _m6a_hit     = not force and all(p.exists() for p in _m6a_paths.values())
+
+    # m2/m3 (epochs) are only needed when at least one epoch-dependent stage
+    # requires fresh computation.  m12 always needs epochs for simulation.
+    _needs_epochs = any([
+        _stage_selected("m4",       only, skip) and not _m4_hit,
+        _stage_selected("m4_trial", only, skip) and not _m4trial_hit,
+        _stage_selected("m6a",      only, skip) and not _m6a_hit,
+        _stage_selected("m5",       only, skip),
+        _stage_selected("m6_extra", only, skip),
+        _stage_selected("m12",      only, skip),
+    ])
+
+    # ── m2: preprocess ────────────────────────────────────────────────────────
     t0 = perf_counter()
     backend = getattr(cfg.preprocess, "backend", "inhouse")
+    epochs = None
+    epochs_rest = None
     task_raw = None
     ica = None
-    if backend == "mne_bids_pipeline":
-        from ..m2_preprocess.bids_pipeline_backend import run_preprocessing
+    if _needs_epochs:
+        if backend == "mne_bids_pipeline":
+            from ..m2_preprocess.bids_pipeline_backend import run_preprocessing
 
-        epochs, epochs_rest = run_preprocessing(subject, cfg)
+            epochs, epochs_rest = run_preprocessing(subject, cfg)
+        else:
+            task_raw = mne.io.read_raw_ctf(str(task_path), preload=True, system_clock="truncate", verbose="WARNING")
+            task_raw.apply_gradient_compensation(3)
+            task_raw = apply_notch_and_resample(task_raw, cfg)
+            task_raw, ica = fit_and_apply(task_raw, cfg)
+            task_raw = apply_band(task_raw, 13, 30)
     else:
-        task_raw = mne.io.read_raw_ctf(str(task_path), preload=True, system_clock="truncate", verbose="WARNING")
-        task_raw.apply_gradient_compensation(3)
-        task_raw = apply_notch_and_resample(task_raw, cfg)
-        task_raw, ica = fit_and_apply(task_raw, cfg)
-        task_raw = apply_band(task_raw, 13, 30)
+        result.metrics["m2_cache_skip"] = True
     result.stage_timings_s["m2"] = perf_counter() - t0
     if progress_callback and _stage_selected("m2", only, skip):
         progress_callback("m2")
 
+    # ── m3: epoch ─────────────────────────────────────────────────────────────
     t0 = perf_counter()
-    if backend != "mne_bids_pipeline":
+    if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
         epochs = make_epochs(task_raw, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
     if progress_callback and _stage_selected("m3", only, skip):
         progress_callback("m3")
 
+    # ── m4: analytic signal + PSD ─────────────────────────────────────────────
     analytic_features = None
     trial_df = trial_meta.copy()
     if _stage_selected("m4", only, skip):
         t0 = perf_counter()
-        analytic_features = analytic_signal(epochs, subject, cfg, "beta")
-        psd(epochs, subject, cfg, "beta", 13.0, 30.0)
+        if _m4_hit:
+            result.metrics["m4_cache_hit"] = True
+            if _stage_selected("m6_extra", only, skip):
+                analytic_features = dict(np.load(_m4_analytic))
+        else:
+            assert epochs is not None
+            analytic_features = analytic_signal(epochs, subject, cfg, "beta")
+            psd(epochs, subject, cfg, "beta", 13.0, 30.0)
         result.stage_timings_s["m4"] = perf_counter() - t0
         if progress_callback:
             progress_callback("m4")
     else:
         result.skipped_stages.append("m4")
 
+    # ── m4_trial: pre-stim beta / N400m ───────────────────────────────────────
     if _stage_selected("m4_trial", only, skip):
         t0 = perf_counter()
-        prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta)
-        n400m = n400m_amplitude(epochs, subject, cfg, trial_meta)
+        if _m4trial_hit:
+            result.metrics["m4_trial_cache_hit"] = True
+            prestim_beta = np.load(_m4t_prestim)["prestim_beta"]
+            n400m        = np.load(_m4t_n400m)["n400m"]
+        else:
+            assert epochs is not None
+            prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta)
+            n400m        = n400m_amplitude(epochs, subject, cfg, trial_meta)
         y = (trial_meta["condition"] == "ZINNEN").to_numpy(dtype=int)
         result.metrics["aim1_prestim_auc"] = logreg_condition_from_prestim(prestim_beta, y)
         result.metrics["aim1_n400m_zinnen_vs_woorden_t"] = n400m_condition_t(
@@ -177,7 +227,8 @@ def run_subject(
     else:
         result.skipped_stages.append("m4_trial")
 
-    if backend != "mne_bids_pipeline":
+    # ── rest data (only needed when m6a requires fresh computation) ───────────
+    if not _m6a_hit and backend != "mne_bids_pipeline":
         rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
         rest_raw.apply_gradient_compensation(3)
         rest_raw = apply_notch_and_resample(rest_raw, cfg)
@@ -186,29 +237,47 @@ def run_subject(
         rest_raw = apply_band(rest_raw, 13, 30)
         epoch_len = cfg.epoching.tmax - cfg.epoching.tmin
         epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
-    result.metrics["n_rest"] = len(epochs_rest)
 
+    # ── m6a: phase-gradient waves + DCI ───────────────────────────────────────
     t0 = perf_counter()
-    sensor_xy, meg_picks = get_sensor_positions(epochs.info)
-    dirs_z, dci_z = epochs_to_directions(epochs["ZINNEN"], sensor_xy, meg_picks)
-    dirs_w, dci_w = epochs_to_directions(epochs["WOORDEN"], sensor_xy, meg_picks)
-    dirs_r, dci_r = epochs_to_directions(epochs_rest, sensor_xy, meg_picks)
-    sliding_t, sliding_z = sliding_dci(
-        epochs["ZINNEN"].get_data(picks=meg_picks),
-        sensor_xy,
-        epochs["ZINNEN"].times,
-        win=30,
-        step=5,
-    )
+    sensor_xy = None
+    meg_picks: list[int] = []
+    if _stage_selected("m6a", only, skip) and _m6a_hit:
+        result.metrics["m6a_cache_hit"] = True
+        dirs_z    = np.load(_m6a_paths["dirs_z"])
+        dirs_w    = np.load(_m6a_paths["dirs_w"])
+        dirs_r    = np.load(_m6a_paths["dirs_r"])
+        sliding_z = np.load(_m6a_paths["sliding_z"])
+        dci_z     = np.load(_m6a_paths["dci_z"])
+        dci_w     = np.load(_m6a_paths["dci_w"])
+        dci_r     = np.load(_m6a_paths["dci_r"])
+        sliding_t = np.load(_m6a_paths["sliding_t"])
+        # sensor_xy/meg_picks needed only for m12 which also requires epochs
+        if _stage_selected("m12", only, skip) and epochs is not None:
+            sensor_xy, meg_picks = get_sensor_positions(epochs.info)
+    else:
+        assert epochs is not None and epochs_rest is not None
+        sensor_xy, meg_picks = get_sensor_positions(epochs.info)
+        dirs_z, dci_z = epochs_to_directions(epochs["ZINNEN"], sensor_xy, meg_picks)
+        dirs_w, dci_w = epochs_to_directions(epochs["WOORDEN"], sensor_xy, meg_picks)
+        dirs_r, dci_r = epochs_to_directions(epochs_rest, sensor_xy, meg_picks)
+        sliding_t, sliding_z = sliding_dci(
+            epochs["ZINNEN"].get_data(picks=meg_picks),
+            sensor_xy,
+            epochs["ZINNEN"].times,
+            win=30,
+            step=5,
+        )
     result.stage_timings_s["m6a"] = perf_counter() - t0
     if progress_callback and _stage_selected("m6a", only, skip):
         progress_callback("m6a")
     result.metrics["dci_zinnen"] = float(np.mean(dci_z))
     result.metrics["dci_woorden"] = float(np.mean(dci_w))
     result.metrics["dci_rest"] = float(np.mean(dci_r))
+    result.metrics["n_rest"] = len(dci_r)
     if not trial_df.empty:
-        n_z = len(epochs["ZINNEN"])
-        n_w = len(epochs["WOORDEN"])
+        n_z = len(dci_z)
+        n_w = len(dci_w)
         trial_df.loc[trial_df["condition"] == "ZINNEN", "dci_trial"] = dci_z[:n_z]
         trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
 
@@ -245,6 +314,13 @@ def run_subject(
                     source_dirs, source_dci = epochs_to_directions(epochs["ZINNEN"], src_xy, data_override=stc_data)
                     result.metrics["source_dci_zinnen"] = float(np.mean(source_dci))
                     result.metrics["source_directions_count"] = int(len(source_dirs))
+                    m5_out = stage_output_dir(cfg, subject, "m5_source")
+                    np.save(m5_out / f"sub-{subject}_source_dirs.npy", source_dirs)
+                    np.save(m5_out / f"sub-{subject}_source_dci.npy", source_dci)
+                    result.outputs += [
+                        m5_out / f"sub-{subject}_source_dirs.npy",
+                        m5_out / f"sub-{subject}_source_dci.npy",
+                    ]
                 except Exception as exc:
                     result.metrics["m5_error"] = str(exc)
                 result.stage_timings_s["m5"] = perf_counter() - t0
@@ -343,6 +419,10 @@ def run_subject(
                     )
                     joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
                     result.metrics["m10_n_trials_joined"] = int(len(joined_df))
+                    m10_out = stage_output_dir(cfg, subject, "m10_fmri")
+                    joined_csv = m10_out / f"{subject}_trials_joined.csv"
+                    joined_df.to_csv(joined_csv, index=False)
+                    result.outputs.append(joined_csv)
             else:
                 result.metrics["m10_skipped_reason"] = "fmri configuration missing"
         except Exception as exc:
@@ -384,6 +464,9 @@ def run_subject(
                 null_summary = confound_null_dci(dci_z, null_dci)
                 result.metrics["aim3_two_dipole_z"] = null_summary["z"]
                 result.metrics["m12_null_summary"] = null_summary
+                m12_out = stage_output_dir(cfg, subject, "m12_wave_validation")
+                np.save(m12_out / f"sub-{subject}_null_dci.npy", null_dci)
+                result.outputs.append(m12_out / f"sub-{subject}_null_dci.npy")
             else:
                 result.metrics["m12_skipped_reason"] = "wave_validation.enabled is false"
         except Exception as exc:
@@ -394,10 +477,15 @@ def run_subject(
     else:
         result.skipped_stages.append("m12")
 
-    np.save(out_dir / f"sub-{subject}_dirs_zinnen.npy", dirs_z)
-    np.save(out_dir / f"sub-{subject}_dirs_woorden.npy", dirs_w)
-    np.save(out_dir / f"sub-{subject}_dirs_rest.npy", dirs_r)
-    np.save(out_dir / f"sub-{subject}_sliding_dci_zinnen.npy", sliding_z)
+    if not _m6a_hit:
+        np.save(_m6a_paths["dirs_z"],    dirs_z)
+        np.save(_m6a_paths["dirs_w"],    dirs_w)
+        np.save(_m6a_paths["dirs_r"],    dirs_r)
+        np.save(_m6a_paths["sliding_z"], sliding_z)
+        np.save(_m6a_paths["dci_z"],     dci_z)
+        np.save(_m6a_paths["dci_w"],     dci_w)
+        np.save(_m6a_paths["dci_r"],     dci_r)
+        np.save(_m6a_paths["sliding_t"], sliding_t)
     result.outputs.extend(out_files)
 
     if _stage_selected("m8", only, skip):

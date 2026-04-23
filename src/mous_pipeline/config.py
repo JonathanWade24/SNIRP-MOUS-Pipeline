@@ -70,6 +70,8 @@ class FmriConfig:
     fmriprep_container: str = ""
     fmriprep_output: str = ""
     skip_fmriprep: bool = True
+    neurodesk_module: str = "fmriprep"
+    fs_license_file: str = ""
 
 
 @dataclass
@@ -145,6 +147,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         fmriprep_container=str(fmri_raw.get("fmriprep_container", "")),
         fmriprep_output=str(fmri_raw.get("fmriprep_output", "")),
         skip_fmriprep=bool(fmri_raw.get("skip_fmriprep", True)),
+        neurodesk_module=str(fmri_raw.get("neurodesk_module", "fmriprep")),
+        fs_license_file=str(fmri_raw.get("fs_license_file", "")),
     )
     wv_raw = raw.get("wave_validation", {})
     wave_validation = WaveValidationConfig(
