@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -77,11 +78,46 @@ def _setup_section() -> None:
 def _fetch_section() -> None:
     st.subheader("Fetch from RDR")
     cfg_bundle = _active_cfg()
+    st.session_state.setdefault("remote_subject_options", [])
+    st.session_state.setdefault("remote_subject_error", "")
+
     subject = st.text_input("Subject ID", value="A2002", key="fetch_subject")
     st.caption("e.g. A2002 - a leading 'sub-' prefix is stripped automatically.")
     repocli_ok = shutil.which("repocli") is not None
     if not repocli_ok:
         st.warning("repocli is not on PATH. Run setup.sh or fix PATH before fetching.")
+    if cfg_bundle:
+        _, cfg = cfg_bundle
+        col_left, col_right = st.columns([1, 1])
+        with col_left:
+            if st.button("Load subject list from RDR"):
+                st.session_state["remote_subject_options"] = []
+                st.session_state["remote_subject_error"] = ""
+                if not repocli_ok:
+                    st.session_state["remote_subject_error"] = "repocli is not on PATH."
+                elif not cfg.rdr.collection_path:
+                    st.session_state["remote_subject_error"] = "rdr.collection_path is empty in config."
+                else:
+                    cmd = ["repocli", "ls", cfg.rdr.collection_path.strip().strip("/")]
+                    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                    if proc.returncode != 0:
+                        err = proc.stderr.strip() or proc.stdout.strip() or "unknown repocli error"
+                        st.session_state["remote_subject_error"] = f"Failed to list subjects: {err}"
+                    else:
+                        matches = sorted(set(re.findall(r"sub-[A-Za-z0-9_-]+", proc.stdout)))
+                        st.session_state["remote_subject_options"] = [m.removeprefix("sub-") for m in matches]
+        with col_right:
+            selected_from_list = st.multiselect(
+                "Available subjects",
+                st.session_state["remote_subject_options"],
+                default=[],
+                key="selected_remote_subjects",
+            )
+        if st.session_state["remote_subject_error"]:
+            st.warning(st.session_state["remote_subject_error"])
+        if selected_from_list:
+            st.caption(f"Selected {len(selected_from_list)} subject(s) from RDR list.")
+
     if st.button("Download subject"):
         if not cfg_bundle:
             st.error("Load a valid config first.")
@@ -93,27 +129,44 @@ def _fetch_section() -> None:
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
-        normalized_subject = subject.strip().removeprefix("sub-")
-        if not normalized_subject:
-            st.error("Subject ID is required.")
-            return
-        cmd = build_repocli_get_command(
-            remote_path=remote_subject_path(cfg.rdr.collection_path, normalized_subject),
-            local_dir=cfg.data_root.resolve(),
-        )
-        log_box = st.empty()
-        logs: list[str] = [f"$ {' '.join(cmd)}\n"]
-        with st.spinner("Downloading..."):
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                logs.append(line)
-                log_box.code("".join(logs), language="bash")
-            code = proc.wait()
-        if code == 0:
-            st.success("Download complete.")
+        selected_from_list = st.session_state.get("selected_remote_subjects", [])
+        requested_subjects: list[str]
+        if selected_from_list:
+            requested_subjects = [str(s).strip().removeprefix("sub-") for s in selected_from_list if str(s).strip()]
         else:
-            st.error(f"Download failed (exit {code}).")
+            normalized_subject = subject.strip().removeprefix("sub-")
+            requested_subjects = [normalized_subject] if normalized_subject else []
+        if not requested_subjects:
+            st.error("Provide a subject ID or load and select from the subject list.")
+            return
+
+        log_box = st.empty()
+        logs: list[str] = []
+        with st.spinner("Downloading..."):
+            failures: list[str] = []
+            for subj in requested_subjects:
+                cmd = build_repocli_get_command(
+                    remote_path=remote_subject_path(cfg.rdr.collection_path, subj),
+                    local_dir=cfg.data_root.resolve(),
+                )
+                logs.append(f"$ {' '.join(cmd)}\n")
+                log_box.code("".join(logs), language="bash")
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    logs.append(line)
+                    log_box.code("".join(logs), language="bash")
+                code = proc.wait()
+                if code != 0:
+                    failures.append(subj)
+                    logs.append(f"[error] sub-{subj} failed (exit {code})\n")
+                else:
+                    logs.append(f"[done] sub-{subj} downloaded\n")
+                log_box.code("".join(logs), language="bash")
+        if failures:
+            st.error(f"Completed with failures for {len(failures)} subject(s): {', '.join(failures)}")
+        else:
+            st.success(f"Download complete for {len(requested_subjects)} subject(s).")
         log_box.code("".join(logs), language="bash")
 
 
