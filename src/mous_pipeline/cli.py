@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pandas as pd
 
@@ -90,6 +91,12 @@ def main() -> None:
         "--base-url-path",
         default=None,
         help="Override Streamlit base URL path. Default auto-detects from JupyterHub service prefix.",
+    )
+    gui_parser.add_argument(
+        "--public-base-url",
+        default=None,
+        help="Optional public host URL (e.g. https://snirp24.neurodesk.org). "
+        "When omitted, the CLI auto-detects host from JupyterHub env vars.",
     )
 
     args = parser.parse_args()
@@ -230,9 +237,26 @@ def main() -> None:
         print("")
         print("Open one of these URLs:")
         print(f"- Relative proxy path: {base_url_path}/")
-        hub_host = os.environ.get("JUPYTERHUB_HOST")
-        if hub_host:
-            print(f"- Full URL: {hub_host.rstrip('/')}{base_url_path}/")
+        full_urls: list[str] = []
+        if args.public_base_url:
+            full_urls.append(f"{args.public_base_url.rstrip('/')}{base_url_path}/")
+        else:
+            host_candidates = [
+                os.environ.get("JUPYTERHUB_PUBLIC_URL"),
+                os.environ.get("JUPYTER_SERVER_URL"),
+                os.environ.get("JUPYTERHUB_HOST"),
+                os.environ.get("JUPYTERHUB_BASE_URL"),
+            ]
+            for host in host_candidates:
+                if not host:
+                    continue
+                parsed = urlsplit(host)
+                if parsed.scheme and parsed.netloc:
+                    full_urls.append(f"{parsed.scheme}://{parsed.netloc}{base_url_path}/")
+                elif host.startswith("http://") or host.startswith("https://"):
+                    full_urls.append(f"{host.rstrip('/')}{base_url_path}/")
+        for url in dict.fromkeys(full_urls):
+            print(f"- Full URL: {url}")
         print("- If using local browser from same machine: http://localhost:8501")
         print("")
         print("Tip: stop old instances with `lsof -ti :8501 | xargs -r kill -9`.")
