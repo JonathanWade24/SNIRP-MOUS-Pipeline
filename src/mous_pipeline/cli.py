@@ -26,8 +26,13 @@ from .m0_intake.repocli_rdr import (
     repocli_available,
 )
 from .m7_stats.group import run_group_model
+from .m9_orchestration.parallelization_plan import (
+    dag_parallelism_report,
+    intra_subject_pilot_protocol,
+    recommend_subject_parallelism,
+)
 from .m9_orchestration.runner import run_subject
-from .stage_dependencies import STAGE_ORDER
+from .stage_dependencies import STAGE_ORDER, parallel_execution_fronts
 
 
 _STAGE_LABELS: dict[str, str] = {
@@ -263,6 +268,41 @@ def main() -> None:
     run_parser.add_argument("--dry-run", action="store_true", help="Print resolved run plan without processing data")
     run_parser.add_argument("--include-fmri", action="store_true", help="Include m10/m11 stages")
     run_parser.add_argument("--include-waves-validation", action="store_true", help="Include m12 stage")
+    run_parser.add_argument(
+        "--memory-profile",
+        action="store_true",
+        help="Log RSS at stage boundaries and poll for peak RSS (Linux: /proc/self/status; see memory_rss_summary in manifest)",
+    )
+    run_parser.add_argument(
+        "--memory-profile-interval",
+        type=float,
+        default=0.5,
+        help="Seconds between background RSS samples when --memory-profile is set",
+    )
+
+    plan_parser = sub.add_parser(
+        "parallelization-plan",
+        help="Print DAG parallel fronts, subject-parallel cap from peak RSS, and intra-subject pilot protocol",
+    )
+    plan_parser.add_argument(
+        "--only",
+        default="",
+        help="Comma-separated stages (subset of pipeline); default is full STAGE_ORDER",
+    )
+    plan_parser.add_argument("--total-ram-gb", type=float, default=32.0, help="Machine RAM budget (default 32)")
+    plan_parser.add_argument(
+        "--os-reserve-gb",
+        type=float,
+        default=6.0,
+        help="RAM to reserve for OS / buffers (default 6)",
+    )
+    plan_parser.add_argument(
+        "--peak-rss-gb",
+        type=float,
+        default=None,
+        help="Peak RSS for one full subject run (from memory_rss_summary); if omitted, only DAG + pilot text are printed",
+    )
+    plan_parser.add_argument("--n-cpus", type=int, default=6, help="CPU count for OMP hint (default 6)")
     watch_parser = sub.add_parser("watch", help="Watch live run state from run_state.json")
     watch_parser.add_argument("--config", required=True)
     watch_parser.add_argument("--subject", required=True)
@@ -371,6 +411,8 @@ def main() -> None:
                 dry_run=args.dry_run,
                 config_path=Path(args.config),
                 progress_event_callback=_make_cli_progress_callback(selected),
+                memory_profile=args.memory_profile,
+                memory_profile_interval_s=args.memory_profile_interval,
             )
         except Exception as exc:
             state_path = next((p for p in state_candidates if p.exists()), state_candidates[0])
@@ -393,6 +435,33 @@ def main() -> None:
             state_path.write_text(json.dumps(failed_payload, indent=2))
             raise
         print(result.summary())
+    elif args.cmd == "parallelization-plan":
+        only_set = {s.strip() for s in args.only.split(",") if s.strip()} or None
+        selected = [s for s in STAGE_ORDER if not only_set or s in only_set]
+        try:
+            fronts = parallel_execution_fronts(selected)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(2)
+        print("Parallel execution fronts (DAG layers; same layer may overlap in time if rescheduled):\n")
+        for i, front in enumerate(fronts, start=1):
+            print(f"  Front {i}: {', '.join(front)}")
+        print("\n" + json.dumps(dag_parallelism_report(selected), indent=2))
+        if args.peak_rss_gb is not None:
+            rec = recommend_subject_parallelism(
+                total_ram_gb=args.total_ram_gb,
+                os_reserve_gb=args.os_reserve_gb,
+                peak_rss_gb=args.peak_rss_gb,
+                n_cpus=args.n_cpus,
+            )
+            print("\nSubject-parallel recommendation:\n" + json.dumps(rec, indent=2))
+        else:
+            print(
+                "\n(Re-run with --peak-rss-gb <value> after a subject run with --memory-profile "
+                "to print N_subjects_max_conservative and OMP hint.)",
+                file=sys.stderr,
+            )
+        print("\nIntra-subject two-worker pilot protocol:\n" + json.dumps(intra_subject_pilot_protocol(), indent=2))
     elif args.cmd == "watch":
         cfg = load_config(args.config)
         candidates = _run_state_candidates(cfg.derivatives_root, args.subject)
@@ -609,3 +678,7 @@ def main() -> None:
         print("")
         print(f"Tip: stop old instances with `lsof -ti :{args.port} | xargs -r kill -9`.")
         subprocess.run(cmd, check=False)
+
+
+if __name__ == "__main__":
+    main()

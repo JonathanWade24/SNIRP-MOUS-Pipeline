@@ -49,6 +49,7 @@ from ..m12_wave_validation.simulate import simulate_two_dipoles
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
 from ..stage_dependencies import STAGE_ORDER, list_missing_stage_dependencies
 from .gating import PilotGate
+from .memory_probe import StageRSSProbe
 
 @dataclass
 class RunResult:
@@ -108,6 +109,8 @@ def run_subject(
     config_path: Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
     progress_event_callback: Callable[[str, str], None] | None = None,
+    memory_profile: bool = False,
+    memory_profile_interval_s: float = 0.5,
 ) -> RunResult:
     result = RunResult(subject=subject)
     selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
@@ -140,11 +143,15 @@ def run_subject(
         reset_file=True,
     )
 
+    memory_probe: StageRSSProbe | None = None
+
     def _emit(event: str, stage: str) -> None:
         if progress_event_callback and _stage_selected(stage, only, skip):
             progress_event_callback(event, stage)
         if not _stage_selected(stage, only, skip):
             return
+        if memory_probe is not None:
+            memory_probe.record(event, stage)
         if event == "start":
             state["current_stage"] = stage
             state["current_stage_started_at"] = time.time()
@@ -179,6 +186,72 @@ def run_subject(
         _append_live_log(live_log_path, "[run] status=dry_run")
         return result
 
+    if memory_profile:
+        memory_probe = StageRSSProbe(
+            live_log_path=live_log_path,
+            sample_interval_s=memory_profile_interval_s,
+        )
+        memory_probe.start_background_sampler()
+        _append_live_log(
+            live_log_path,
+            f"[rss] memory_profile enabled interval_s={memory_profile_interval_s}",
+        )
+
+    try:
+        return _run_subject_body(
+            subject,
+            cfg,
+            only,
+            skip,
+            force,
+            config_path,
+            progress_callback,
+            result,
+            state,
+            state_path,
+            live_log_path,
+            stage_index,
+            completed,
+            _emit,
+            memory_probe,
+        )
+    finally:
+        if memory_probe is not None:
+            memory_probe.stop_background_sampler()
+            result.metrics["memory_rss_summary"] = memory_probe.summary()
+            summ = result.metrics["memory_rss_summary"]
+            peak = summ.get("peak_rss_mb")
+            _append_live_log(live_log_path, f"[rss] run_end peak_rss_mb={peak}")
+            manifest_path = out_dir / f"sub-{subject}_run_manifest.json"
+            if manifest_path.is_file():
+                try:
+                    prev = json.loads(manifest_path.read_text())
+                    prev["metrics"] = result.metrics
+                    write_manifest(manifest_path, prev)
+                except (OSError, json.JSONDecodeError, TypeError):
+                    pass
+
+
+def _run_subject_body(
+    subject: str,
+    cfg,
+    only: set[str] | None,
+    skip: set[str] | None,
+    force: bool,
+    config_path: Path | None,
+    progress_callback: Callable[[str], None] | None,
+    result: RunResult,
+    state: dict[str, object],
+    state_path: Path,
+    live_log_path: Path,
+    stage_index: dict[str, int],
+    completed: list[str],
+    _emit: Callable[[str, str], None],
+    memory_probe: StageRSSProbe | None,
+) -> RunResult:
+    _ = memory_probe  # reserved for future intra-body hooks
+    out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
+    m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
     events_path = _resolve_path(cfg, subject, "events_tsv", events_tsv(subject, cfg.data_root))
     task_path = _resolve_path(cfg, subject, "task_ds", task_ds(subject, cfg.data_root))
     rest_path = _resolve_path(cfg, subject, "rest_ds", rest_ds(subject, cfg.data_root))
