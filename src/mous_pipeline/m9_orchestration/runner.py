@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+import time
 from typing import Callable
 
 import mne
@@ -115,11 +116,15 @@ def run_subject(
         "status": "running",
         "selected_stages": selected,
         "current_stage": None,
+        "current_stage_started_at": None,
         "stage_index": 0,
         "stage_total": len(selected),
         "completed_stages": completed,
         "stage_timings_s": {},
         "error": None,
+        "started_at": time.time(),
+        "updated_at": time.time(),
+        "last_event": None,
     }
     _write_run_state(state_path, state)
 
@@ -130,17 +135,24 @@ def run_subject(
             return
         if event == "start":
             state["current_stage"] = stage
+            state["current_stage_started_at"] = time.time()
             state["stage_index"] = stage_index.get(stage, 0)
         elif event == "done":
             if stage not in completed:
                 completed.append(stage)
             state["stage_timings_s"] = dict(result.stage_timings_s)
+            state["last_event"] = f"done:{stage}"
+        else:
+            state["last_event"] = f"{event}:{stage}"
+        state["updated_at"] = time.time()
         _write_run_state(state_path, state)
 
     if dry_run:
         result.metrics["dry_run"] = True
         state["status"] = "dry_run"
         state["current_stage"] = None
+        state["current_stage_started_at"] = None
+        state["updated_at"] = time.time()
         _write_run_state(state_path, state)
         return result
 
@@ -646,6 +658,9 @@ def run_subject(
     result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
     state["status"] = "done"
     state["current_stage"] = None
+    state["current_stage_started_at"] = None
     state["stage_timings_s"] = dict(result.stage_timings_s)
+    state["last_event"] = "done:all"
+    state["updated_at"] = time.time()
     _write_run_state(state_path, state)
     return result
