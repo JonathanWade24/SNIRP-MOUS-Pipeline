@@ -23,10 +23,6 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 
-[project.urls]
-Repository = "https://github.com/JonathanWade24/MOUS"
-Issues = "https://github.com/JonathanWade24/MOUS/issues"
-
 dependencies = [
   "mne",
   "mne-bids",
@@ -43,6 +39,10 @@ dependencies = [
   "nibabel",
   "statsmodels",
 ]
+
+[project.urls]
+Repository = "https://github.com/JonathanWade24/MOUS"
+Issues = "https://github.com/JonathanWade24/MOUS/issues"
 
 [project.scripts]
 mous-pipeline = "mous_pipeline.cli:main"

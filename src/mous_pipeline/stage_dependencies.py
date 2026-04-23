@@ -30,3 +30,40 @@ def list_missing_stage_dependencies(selected: list[str]) -> list[str]:
         if missing:
             errors.append(f"{stage} requires {', '.join(missing)}")
     return errors
+
+
+def parallel_execution_fronts(selected: list[str] | None = None) -> list[list[str]]:
+    """Greedy topological layers: stages in the same inner list may run concurrently (DAG only).
+
+    Order within a front follows ``STAGE_ORDER``. The runner today executes
+    ``STAGE_ORDER`` serially and shares in-memory MNE objects, so overlapping
+    stages in one process still requires a refactor or multi-process design.
+    """
+    order = selected if selected is not None else list(STAGE_ORDER)
+    selected_set = set(order)
+    if not order:
+        return []
+    errs = list_missing_stage_dependencies(order)
+    if errs:
+        raise ValueError("Invalid stage selection: " + "; ".join(errs))
+    index = {s: i for i, s in enumerate(STAGE_ORDER)}
+    completed: set[str] = set()
+    fronts: list[list[str]] = []
+    while len(completed) < len(selected_set):
+        ready: list[str] = []
+        for s in order:
+            if s not in selected_set or s in completed:
+                continue
+            deps = STAGE_DEPENDENCIES.get(s, set())
+            if not deps.issubset(completed):
+                continue
+            ready.append(s)
+        if not ready:
+            raise RuntimeError(
+                "parallel_execution_fronts: cannot advance (cycle or missing deps); "
+                f"remaining={sorted(selected_set - completed)}"
+            )
+        ready.sort(key=lambda x: index.get(x, 999))
+        fronts.append(ready)
+        completed.update(ready)
+    return fronts
