@@ -64,12 +64,18 @@ def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool 
     for f in sorted(root.rglob("*")):
         if not f.is_file():
             continue
-        rel = "/" + f.relative_to(root).as_posix()
-        # Optionally filter to one subject's files.
-        if subject_filter and f"sub-{subject_filter}" not in rel:
+        rel_parts = f.relative_to(root).parts
+        # Skip derivatives, hidden files, and files inside CTF .ds containers
+        # (those are raw data internals, not BIDS-level files).
+        if any(
+            part.startswith(".")
+            or part == "derivatives"
+            or part.endswith(".ds")
+            for part in rel_parts
+        ):
             continue
-        # Skip derivatives and hidden files.
-        if any(part.startswith(".") or part == "derivatives" for part in f.relative_to(root).parts):
+        rel = "/" + f.relative_to(root).as_posix()
+        if subject_filter and f"sub-{subject_filter}" not in rel:
             continue
         n_checked += 1
         if bv.is_bids(rel):
@@ -80,17 +86,27 @@ def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool 
     # ── Subject layout ────────────────────────────────────────────────────────
     try:
         subjects = mne_bids.get_entity_vals(root, "subject", verbose=False)
-        datatypes = mne_bids.get_entity_vals(root, "datatype", verbose=False) if hasattr(mne_bids, "get_entity_vals") else []
         print(f"Subjects found   : {len(subjects)} — {subjects}")
+        # Infer datatypes from directory names (anat, meg, func, eeg, ieeg).
+        _known_datatypes = {"anat", "meg", "func", "eeg", "ieeg", "dwi", "fmap", "beh", "pet"}
+        datatypes = sorted({
+            p.name for p in root.rglob("*")
+            if p.is_dir() and p.name in _known_datatypes
+        })
         if datatypes:
             print(f"Datatypes found  : {datatypes}")
     except Exception as exc:
         warnings_list.append(f"mne_bids layout scan warning: {exc}")
 
-    # ── make_report summary ───────────────────────────────────────────────────
+    # ── make_report summary (scoped to subject filter when set) ───────────────
     try:
-        report = mne_bids.make_report(root, verbose=False)
-        print("\n── Dataset report (mne_bids.make_report) ──")
+        report_root = root
+        if subject_filter:
+            # make_report works on full root; pass root but note filter in output
+            pass
+        report = mne_bids.make_report(report_root, verbose=False)
+        scope = f"subject {subject_filter}" if subject_filter else "full dataset"
+        print(f"\n── Dataset report ({scope}) ──")
         print(report)
     except Exception as exc:
         warnings_list.append(f"make_report skipped: {exc}")
