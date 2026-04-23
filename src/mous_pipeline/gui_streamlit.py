@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -196,8 +197,7 @@ def _validate_stage_selection(selected: list[str]) -> list[str]:
 
 
 def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: PipelineConfig) -> list[str]:
-    sub = f"sub-{subject}"
-    base = cfg.derivatives_root / sub
+    base = cfg.derivatives_root / subject
     outputs: list[str] = []
     if "m4" in selected:
         outputs.extend(
@@ -237,6 +237,29 @@ def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: Pipelin
     if "m9" in selected:
         outputs.append(str(base / "m9_orchestration" / f"sub-{subject}_run_manifest.json"))
     return outputs
+
+
+def _fmt_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _load_stage_estimates(cfg: PipelineConfig, subject: str, selected: list[str]) -> dict[str, float]:
+    """Estimate stage durations from last subject manifest; fallback to defaults."""
+    defaults = {stage: 8.0 for stage in selected}
+    manifest = cfg.derivatives_root / f"sub-{subject}" / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
+    if not manifest.exists():
+        return defaults
+    try:
+        payload = json.loads(manifest.read_text())
+        timings = payload.get("params", {}).get("stage_timings_s", {})
+        for stage in selected:
+            if stage in timings:
+                defaults[stage] = max(1.0, float(timings[stage]))
+    except Exception:
+        return defaults
+    return defaults
 
 
 # ── Session helpers ──────────────────────────────────────────────────────────
@@ -367,7 +390,7 @@ def _setup_section() -> None:
     with col2:
         st.write("")
         st.write("")
-        load_clicked = st.button("Load config", use_container_width=True)
+        load_clicked = st.button("Load config", width="stretch")
 
     if load_clicked:
         result = _load_cfg(path_input)
@@ -428,7 +451,7 @@ def _fetch_section() -> None:
 
     col_l, col_r = st.columns([1, 1])
     with col_l:
-        if st.button("Load subject list from RDR", use_container_width=True):
+        if st.button("Load subject list from RDR", width="stretch"):
             st.session_state["remote_subject_options"] = []
             st.session_state["remote_subject_error"] = ""
             if not cfg.rdr.collection_path:
@@ -457,7 +480,7 @@ def _fetch_section() -> None:
     manual = st.text_input("Or type subject ID manually", value="", placeholder="A2007")
     st.caption("Leading `sub-` is stripped automatically.")
 
-    if st.button("Download selected", use_container_width=True, type="primary"):
+    if st.button("Download selected", width="stretch", type="primary"):
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
@@ -502,15 +525,39 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
     """Run a single subject and return a summary dict."""
     progress = st.progress(0, text=f"Running sub-{subject}…")
     log_box = st.empty()
-    logs: list[str] = [f"▶ sub-{subject}  stages: {', '.join(selected)}\n"]
+    est = _load_stage_estimates(cfg, subject, selected)
+    est_total = sum(est.get(s, 8.0) for s in selected)
+    logs: list[str] = [
+        f"▶ sub-{subject}  stages: {', '.join(selected)}\n",
+        f"  ~ Estimated total: {_fmt_duration(est_total)} (from prior run timings)\n",
+    ]
     completed: set[str] = set()
+    run_t0 = perf_counter()
+    last_callback_t = run_t0
 
     def callback(stage_name: str) -> None:
+        nonlocal last_callback_t
         if stage_name not in completed:
             completed.add(stage_name)
+            now = perf_counter()
+            elapsed = now - run_t0
+            stage_elapsed = now - last_callback_t
+            last_callback_t = now
+            remaining = [s for s in selected if s not in completed]
+            eta_s = sum(est.get(s, 8.0) for s in remaining)
             pct = int(len(completed) / max(len(selected), 1) * 100)
-            progress.progress(pct, text=f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)})")
-            logs.append(f"  ✓ {stage_name}\n")
+            progress.progress(
+                pct,
+                text=(
+                    f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)}) "
+                    f"• stage {_fmt_duration(stage_elapsed)} • elapsed {_fmt_duration(elapsed)} "
+                    f"• ETA {_fmt_duration(eta_s)}"
+                ),
+            )
+            logs.append(
+                f"  ✓ {stage_name}  stage={_fmt_duration(stage_elapsed)}  "
+                f"elapsed={_fmt_duration(elapsed)}  eta={_fmt_duration(eta_s)}\n"
+            )
             log_box.code("".join(logs))
 
     try:
@@ -522,6 +569,7 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             progress_callback=callback,
         )
         logs.append(result.summary() + "\n")
+        logs.append(f"  Total elapsed: {_fmt_duration(perf_counter() - run_t0)}\n")
         progress.progress(100, text=f"sub-{subject} — done")
         log_box.code("".join(logs))
         return {
@@ -537,6 +585,7 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             "aim1_prestim_auc": result.metrics.get("aim1_prestim_auc"),
             "aim1_n400m_t": result.metrics.get("aim1_n400m_zinnen_vs_woorden_t"),
             "aim3_two_dipole_z": result.metrics.get("aim3_two_dipole_z"),
+            "stage_timings_s": result.stage_timings_s,
             "ok": True,
             "error": None,
         }
@@ -642,7 +691,7 @@ def _run_section() -> None:
         st.info("No file artifacts are projected for current stage selection.")
 
     st.divider()
-    if st.button("Run pipeline", type="primary", use_container_width=True):
+    if st.button("Run pipeline", type="primary", width="stretch"):
         if not selected:
             st.error("Select at least one stage.")
             return
@@ -715,21 +764,31 @@ def _results_section() -> None:
         st.info(f"No derivatives found yet at `{root}`.")
         return
 
-    sub_dirs = sorted([p for p in root.iterdir() if p.is_dir() and p.name.startswith("sub-")])
+    sub_dirs = sorted(
+        [
+            p
+            for p in root.iterdir()
+            if p.is_dir() and (p.name.startswith("sub-") or re.match(r"^[A-Za-z]\d+", p.name))
+        ]
+    )
     if not sub_dirs:
         st.info("No processed subjects found.")
         return
 
-    subjects = [p.name for p in sub_dirs]  # keep full "sub-XXXX" name
+    # Display as sub-XXXX while supporting both folder layouts:
+    # - derivatives/.../A2003/...
+    # - derivatives/.../sub-A2003/...
+    subjects = [f"sub-{p.name.removeprefix('sub-')}" for p in sub_dirs]
+    subject_dir_map = {f"sub-{p.name.removeprefix('sub-')}": p for p in sub_dirs}
     last = st.session_state.get("run_history")
     last_subject = f"sub-{last[-1]['subject']}" if last else None
     default_index = subjects.index(last_subject) if last_subject in subjects else 0
 
     sub_dir_name = st.selectbox("Subject", subjects, index=default_index)
-    sub_dir = root / sub_dir_name
+    sub_dir = subject_dir_map[sub_dir_name]
     subject_id = sub_dir_name.removeprefix("sub-")
 
-    manifest_path = sub_dir / "m9_orchestration" / f"{sub_dir_name}_run_manifest.json"
+    manifest_path = sub_dir / "m9_orchestration" / f"sub-{subject_id}_run_manifest.json"
     if not manifest_path.exists():
         st.warning(f"Manifest not found: `{manifest_path}`")
         return
