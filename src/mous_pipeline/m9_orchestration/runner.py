@@ -416,7 +416,11 @@ def run_subject(
                         f"Created expected directory: {expected_func_dir}"
                     )
                 else:
-                    sidecar = Path(str(bold_path).replace(".nii.gz", ".json"))
+                    sidecar = (
+                        bold_path.with_suffix("").with_suffix(".json")
+                        if str(bold_path).endswith(".nii.gz")
+                        else bold_path.with_suffix(".json")
+                    )
                     if sidecar.exists():
                         validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
                     beta_tbl = trialwise_betas(

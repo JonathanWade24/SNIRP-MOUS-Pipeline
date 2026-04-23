@@ -248,8 +248,12 @@ def _fmt_duration(seconds: float) -> str:
 def _load_stage_estimates(cfg: PipelineConfig, subject: str, selected: list[str]) -> dict[str, float]:
     """Estimate stage durations from last subject manifest; fallback to defaults."""
     defaults = {stage: 8.0 for stage in selected}
-    manifest = cfg.derivatives_root / f"sub-{subject}" / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
-    if not manifest.exists():
+    candidates = [
+        cfg.derivatives_root / subject / "m9_orchestration" / f"sub-{subject}_run_manifest.json",
+        cfg.derivatives_root / f"sub-{subject}" / "m9_orchestration" / f"sub-{subject}_run_manifest.json",
+    ]
+    manifest = next((p for p in candidates if p.exists()), None)
+    if manifest is None:
         return defaults
     try:
         payload = json.loads(manifest.read_text())
@@ -840,7 +844,7 @@ def _results_section() -> None:
 
     # ── Output links ────────────────────────────────────────────────────────
     st.subheader("Output files")
-    report_html = sub_dir / "m8_reports" / f"{sub_dir_name}_report.html"
+    report_html = sub_dir / "m8_reports" / f"{subject_id}_report.html"
     trials_csv = sub_dir / "m8_reports" / "exports" / f"{subject_id}_trials.csv"
     metrics_json = sub_dir / "m8_reports" / "exports" / f"{subject_id}_metrics.json"
 

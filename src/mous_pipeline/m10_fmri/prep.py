@@ -17,6 +17,19 @@ def _resolve_output_dir(path_value: str, bids_root: Path) -> Path:
     return out_dir
 
 
+def _ensure_bids_dataset_description(bids_root: Path) -> None:
+    """Create a minimal BIDS dataset_description.json when missing."""
+    desc = bids_root / "dataset_description.json"
+    if desc.exists():
+        return
+    payload = {
+        "Name": "MOUS dataset",
+        "BIDSVersion": "1.8.0",
+        "DatasetType": "raw",
+    }
+    desc.write_text(json.dumps(payload, indent=2))
+
+
 def resolve_subject_bold_path(subject: str, cfg, *, bids_root: Path, fmriprep_out_dir: Path | None = None) -> Path | None:
     """Resolve subject BOLD path from config or nearby standard locations."""
     configured = str(getattr(cfg.fmri, "bold_path", "")).strip()
@@ -102,10 +115,11 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     If fmri.neurodesk_module is set, ``ml <module>`` is sourced before running so the
     binary becomes available within the same shell environment.
     """
+    if not str(cfg.fmri.fmriprep_output).strip():
+        raise ValueError("fmri.fmriprep_output is required.")
     out_dir = _resolve_output_dir(cfg.fmri.fmriprep_output, bids_root)
+    _ensure_bids_dataset_description(bids_root)
     if cfg.fmri.skip_fmriprep:
-        if not str(cfg.fmri.fmriprep_output).strip():
-            raise ValueError("fmri.fmriprep_output is required when skip_fmriprep=true.")
         out_dir.mkdir(parents=True, exist_ok=True)
         return out_dir
 
