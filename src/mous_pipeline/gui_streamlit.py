@@ -359,7 +359,7 @@ def _setup_section() -> None:
     with col2:
         st.write("")
         st.write("")
-        load_clicked = st.button("Load config", use_container_width=True)
+        load_clicked = st.button("Load config", width="stretch")
 
     if load_clicked:
         result = _load_cfg(path_input)
@@ -420,7 +420,7 @@ def _fetch_section() -> None:
 
     col_l, col_r = st.columns([1, 1])
     with col_l:
-        if st.button("Load subject list from RDR", use_container_width=True):
+        if st.button("Load subject list from RDR", width="stretch"):
             st.session_state["remote_subject_options"] = []
             st.session_state["remote_subject_error"] = ""
             if not cfg.rdr.collection_path:
@@ -449,7 +449,7 @@ def _fetch_section() -> None:
     manual = st.text_input("Or type subject ID manually", value="", placeholder="A2007")
     st.caption("Leading `sub-` is stripped automatically.")
 
-    if st.button("Download selected", use_container_width=True, type="primary"):
+    if st.button("Download selected", width="stretch", type="primary"):
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
@@ -605,7 +605,7 @@ def _run_section() -> None:
                     "outputs": STAGE_IO.get(s, {}).get("outputs", ""),
                 }
             )
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     with st.expander("Full module catalog (m0-m12)"):
         module_rows = []
         for module_id in [* [f"m{i}" for i in range(0, 13)], "bids_pipeline_backend"]:
@@ -618,7 +618,7 @@ def _run_section() -> None:
                     "outputs": meta["outputs"],
                 }
             )
-        st.dataframe(module_rows, use_container_width=True, hide_index=True)
+        st.dataframe(module_rows, width="stretch", hide_index=True)
 
     force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
     st.divider()
@@ -629,12 +629,12 @@ def _run_section() -> None:
             projected_rows.append({"subject": f"sub-{subj}", "output_path": out})
     if projected_rows:
         st.caption(f"Potential artifacts for selected stages across {len(subjects_to_run)} subject(s).")
-        st.dataframe(projected_rows, use_container_width=True, hide_index=True)
+        st.dataframe(projected_rows, width="stretch", hide_index=True)
     else:
         st.info("No file artifacts are projected for current stage selection.")
 
     st.divider()
-    if st.button("Run pipeline", type="primary", use_container_width=True):
+    if st.button("Run pipeline", type="primary", width="stretch"):
         if not selected:
             st.error("Select at least one stage.")
             return
@@ -679,7 +679,7 @@ def _run_section() -> None:
                     "aim1_prestim_auc": _fmt(h.get("aim1_prestim_auc")),
                     "aim3_two_dipole_z": _fmt(h.get("aim3_two_dipole_z")),
                 })
-            st.dataframe(rows, use_container_width=True)
+            st.dataframe(rows, width="stretch")
 
 
 def _fmt(v: Any) -> str:
@@ -828,7 +828,7 @@ def _files_section() -> None:
                     "size_bytes": (e.stat().st_size if e.is_file() else ""),
                 }
             )
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     else:
         st.caption("File preview")
         suffix = target.suffix.lower()
@@ -839,7 +839,7 @@ def _files_section() -> None:
                 import pandas as pd
 
                 sep = "\t" if suffix == ".tsv" else ","
-                st.dataframe(pd.read_csv(target, sep=sep).head(200), use_container_width=True)
+                st.dataframe(pd.read_csv(target, sep=sep).head(200), width="stretch")
             elif suffix in {".txt", ".log", ".md", ".yaml", ".yml", ".py"}:
                 st.code(target.read_text()[:15000])
             else:
