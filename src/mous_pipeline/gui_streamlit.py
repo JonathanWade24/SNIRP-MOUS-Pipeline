@@ -132,6 +132,74 @@ STAGE_IO = {
     },
 }
 
+MODULE_CATALOG = {
+    "m0": {
+        "purpose": "Intake/fetch subject data from RDR or other remotes.",
+        "inputs": "RDR collection path + subject IDs + repocli credentials.",
+        "outputs": "Local raw subject folders under data_root (`sub-*/`).",
+    },
+    "m1": {
+        "purpose": "Parse event files and assign condition/block structure.",
+        "inputs": "events TSV (`sub-*/meg/*_events.tsv`).",
+        "outputs": "Trial table in-memory (`onset`, `sample`, `condition`, `block_id`, `pos_in_block`).",
+    },
+    "m2": {
+        "purpose": "Preprocess MEG (notch/resample/ICA/beta filtering).",
+        "inputs": "Raw task/rest CTF recordings + m1 trial structure.",
+        "outputs": "Preprocessed task/rest raw objects in-memory.",
+    },
+    "m3": {
+        "purpose": "Epoch task/rest into analysis-ready segments.",
+        "inputs": "Preprocessed task/rest MEG + trial table.",
+        "outputs": "Task epochs and rest pseudo-epochs in-memory.",
+    },
+    "m4": {
+        "purpose": "Compute analytic signal and PSD features.",
+        "inputs": "Task epochs.",
+        "outputs": "`m4_features/*_analytic.npz`, `m4_features/*_psd.npz`.",
+    },
+    "m5": {
+        "purpose": "Source reconstruction + ROI extraction + source DCI.",
+        "inputs": "Epochs + source config + FreeSurfer subjects_dir.",
+        "outputs": "Source-related metrics in manifest (label counts, source DCI).",
+    },
+    "m6": {
+        "purpose": "Traveling-wave detection in sensor space.",
+        "inputs": "Epoch data (task/rest) and sensor geometry.",
+        "outputs": "Direction arrays and DCI arrays (`*_dirs_*.npy`, sliding DCI).",
+    },
+    "m7": {
+        "purpose": "Statistical testing for wave consistency and contrasts.",
+        "inputs": "Wave outputs + trial-level covariates (if present).",
+        "outputs": "Permutation, Rayleigh, and block-control p-values in manifest.",
+    },
+    "m8": {
+        "purpose": "Reporting/export for visualization and downstream analysis.",
+        "inputs": "Metrics + wave arrays + trial tables.",
+        "outputs": "HTML report, exports CSV/JSON, optional Quarto reports.",
+    },
+    "m9": {
+        "purpose": "Orchestrate full subject run + provenance + gate verdict.",
+        "inputs": "Selected stage outputs and config fingerprint.",
+        "outputs": "`m9_orchestration/sub-*_run_manifest.json` + GO/MARGINAL/NO-GO.",
+    },
+    "m10": {
+        "purpose": "fMRI preprocessing/GLM/ROI extraction.",
+        "inputs": "BOLD NIfTI + TR + atlas/ROI config.",
+        "outputs": "Trialwise MTG beta table (joined downstream with MEG trials).",
+    },
+    "m11": {
+        "purpose": "MEG-fMRI coupling models.",
+        "inputs": "Joined trial table (MEG features + MTG beta).",
+        "outputs": "Coupling statistics in manifest (`m11_coupling`).",
+    },
+    "m12": {
+        "purpose": "Wave-validation null model (two-dipole confound check).",
+        "inputs": "Real DCI + wave_validation config.",
+        "outputs": "Null comparison metrics (`aim3_two_dipole_z`, null summary).",
+    },
+}
+
 
 def _validate_stage_selection(selected: list[str]) -> list[str]:
     errors: list[str] = []
@@ -141,6 +209,50 @@ def _validate_stage_selection(selected: list[str]) -> list[str]:
         if missing:
             errors.append(f"{stage} requires {', '.join(missing)}")
     return errors
+
+
+def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: PipelineConfig) -> list[str]:
+    sub = f"sub-{subject}"
+    base = cfg.derivatives_root / sub
+    outputs: list[str] = []
+    if "m4" in selected:
+        outputs.extend(
+            [
+                str(base / "m4_features" / f"{subject}_beta_analytic.npz"),
+                str(base / "m4_features" / f"{subject}_beta_psd.npz"),
+            ]
+        )
+    if "m4_trial" in selected:
+        outputs.extend(
+            [
+                str(base / "m4_features" / f"{subject}_prestim_beta.npz"),
+                str(base / "m4_features" / f"{subject}_n400m.npz"),
+            ]
+        )
+    if "m6a" in selected:
+        outputs.extend(
+            [
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_zinnen.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_woorden.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_dirs_rest.npy"),
+                str(base / "m9_orchestration" / f"sub-{subject}_sliding_dci_zinnen.npy"),
+            ]
+        )
+    if "m8" in selected:
+        outputs.extend(
+            [
+                str(base / "m8_reports" / f"sub-{subject}_report.html"),
+                str(base / "m8_reports" / "exports" / f"{subject}_directions.csv"),
+                str(base / "m8_reports" / "exports" / f"{subject}_sliding_dci.csv"),
+                str(base / "m8_reports" / "exports" / f"{subject}_metrics.json"),
+                str(base / "m8_reports" / "exports" / f"{subject}_trials.csv"),
+            ]
+        )
+        if "m10" in selected or "m11" in selected:
+            outputs.append(str(base / "m8_reports" / "exports" / f"{subject}_trials_joined.csv"))
+    if "m9" in selected:
+        outputs.append(str(base / "m9_orchestration" / f"sub-{subject}_run_manifest.json"))
+    return outputs
 
 
 # ── Session helpers ──────────────────────────────────────────────────────────
@@ -484,8 +596,32 @@ def _run_section() -> None:
                 }
             )
         st.dataframe(rows, use_container_width=True, hide_index=True)
+    with st.expander("Full module catalog (m0-m12)"):
+        module_rows = []
+        for module_id in [f"m{i}" for i in range(0, 13)]:
+            meta = MODULE_CATALOG.get(module_id, {"purpose": "", "inputs": "", "outputs": ""})
+            module_rows.append(
+                {
+                    "module": module_id,
+                    "purpose": meta["purpose"],
+                    "inputs": meta["inputs"],
+                    "outputs": meta["outputs"],
+                }
+            )
+        st.dataframe(module_rows, use_container_width=True, hide_index=True)
 
     force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
+    st.divider()
+    st.subheader("Planned outputs for this run")
+    projected_rows: list[dict[str, str]] = []
+    for subj in subjects_to_run:
+        for out in _planned_outputs_for_subject(subj, selected, cfg):
+            projected_rows.append({"subject": f"sub-{subj}", "output_path": out})
+    if projected_rows:
+        st.caption(f"Potential artifacts for selected stages across {len(subjects_to_run)} subject(s).")
+        st.dataframe(projected_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No file artifacts are projected for current stage selection.")
 
     st.divider()
     if st.button("Run pipeline", type="primary", use_container_width=True):
