@@ -28,14 +28,16 @@ Then launch the GUI:
 
 ```bash
 source .venv/bin/activate
-jupyter lab notebooks/mous_gui.ipynb
+streamlit run src/mous_pipeline/gui_streamlit.py
 ```
 
-The notebook launches a tabbed GUI for:
+The Streamlit app launches a tabbed GUI for:
 - Setup: validate config and repocli availability
 - Fetch: download `sub-*` folders from RDR via repocli
 - Run: execute pipeline stages with live stage progress
 - Results: inspect manifest metrics, verdict, timings, and HTML report link
+
+`notebooks/mous_gui.ipynb` is kept as a pointer and no longer hosts the interactive GUI.
 
 ## Runner options
 

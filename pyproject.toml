@@ -28,8 +28,7 @@ mous-pipeline = "mous_pipeline.cli:main"
 
 [project.optional-dependencies]
 gui = [
-  "ipywidgets>=8",
-  "ipykernel",
+  "streamlit>=1.35",
 ]
 
 [tool.setuptools]
