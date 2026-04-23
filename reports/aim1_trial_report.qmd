@@ -1,0 +1,30 @@
+---
+format: html
+params:
+  subject: "A2002"
+  export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
+---
+
+## Aim 1 Trial-Level Readiness
+
+```{python}
+import pandas as pd
+from pathlib import Path
+subject = params["subject"]
+export_dir = Path(params["export_dir"])
+trials = pd.read_csv(export_dir / f"{subject}_trials.csv")
+trials.head()
+```
+
+```{r}
+library(ggplot2)
+library(lmerTest)
+library(readr)
+subject <- params$subject
+export_dir <- params$export_dir
+trials <- read_csv(file.path(export_dir, paste0(subject, "_trials.csv")), show_col_types = FALSE)
+trials$condition <- factor(trials$condition)
+fit <- lmer(prestim_beta ~ condition + pos_in_block + (1|block_id), data = trials)
+print(summary(fit))
+ggplot(trials, aes(x=condition, y=prestim_beta, fill=condition)) + geom_violin(trim=FALSE, alpha=.4) + geom_boxplot(width=.15, outlier.shape = NA)
+```

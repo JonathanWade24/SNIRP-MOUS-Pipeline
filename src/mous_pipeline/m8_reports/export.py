@@ -21,6 +21,8 @@ def export_subject_payload(
     sliding_t: np.ndarray,
     sliding_dci_z: np.ndarray,
     metrics: dict,
+    trials_df: pd.DataFrame | None = None,
+    joined_df: pd.DataFrame | None = None,
 ) -> Path:
     out_dir = stage_output_dir(cfg, subject, "m8_reports") / "exports"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -44,4 +46,8 @@ def export_subject_payload(
     sliding_df.to_csv(out_dir / f"{subject}_sliding_dci.csv", index=False)
 
     (out_dir / f"{subject}_metrics.json").write_text(json.dumps(metrics, indent=2))
+    if trials_df is not None and not trials_df.empty:
+        trials_df.to_csv(out_dir / f"{subject}_trials.csv", index=False)
+    if joined_df is not None and not joined_df.empty:
+        joined_df.to_csv(out_dir / f"{subject}_trials_joined.csv", index=False)
     return out_dir

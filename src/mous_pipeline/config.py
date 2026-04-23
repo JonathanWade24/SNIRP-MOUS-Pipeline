@@ -61,6 +61,25 @@ class SourceConfig:
 
 
 @dataclass
+class FmriConfig:
+    bold_path: str = ""
+    tr: float = 2.0
+    atlas: str = "glasser"
+    roi: str = "L_TE1a"
+    fmriprep_container: str = ""
+    fmriprep_output: str = ""
+    skip_fmriprep: bool = True
+
+
+@dataclass
+class WaveValidationConfig:
+    enabled: bool = False
+    n_trials: int = 60
+    snr: float = 1.0
+    random_state: int = 42
+
+
+@dataclass
 class PipelineConfig:
     data_root: Path = Path(".")
     derivatives_root: Path = Path("derivatives/mous_pipeline")
@@ -68,6 +87,8 @@ class PipelineConfig:
     paths: dict[str, str] = field(default_factory=dict)
     rdr: RdrConfig = field(default_factory=RdrConfig)
     source: SourceConfig = field(default_factory=SourceConfig)
+    fmri: FmriConfig = field(default_factory=FmriConfig)
+    wave_validation: WaveValidationConfig = field(default_factory=WaveValidationConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     epoching: EpochingConfig = field(default_factory=EpochingConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -114,6 +135,23 @@ def load_config(path: str | Path) -> PipelineConfig:
         pick_ori=str(source_raw.get("pick_ori", "max-power")),
         weight_norm=str(source_raw.get("weight_norm", "unit-noise-gain")),
     )
+    fmri_raw = raw.get("fmri", {})
+    fmri = FmriConfig(
+        bold_path=str(fmri_raw.get("bold_path", "")),
+        tr=float(fmri_raw.get("tr", 2.0)),
+        atlas=str(fmri_raw.get("atlas", "glasser")),
+        roi=str(fmri_raw.get("roi", "L_TE1a")),
+        fmriprep_container=str(fmri_raw.get("fmriprep_container", "")),
+        fmriprep_output=str(fmri_raw.get("fmriprep_output", "")),
+        skip_fmriprep=bool(fmri_raw.get("skip_fmriprep", True)),
+    )
+    wv_raw = raw.get("wave_validation", {})
+    wave_validation = WaveValidationConfig(
+        enabled=bool(wv_raw.get("enabled", False)),
+        n_trials=int(wv_raw.get("n_trials", 60)),
+        snr=float(wv_raw.get("snr", 1.0)),
+        random_state=int(wv_raw.get("random_state", 42)),
+    )
 
     return PipelineConfig(
         data_root=Path(raw.get("data_root", ".")),
@@ -122,6 +160,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         paths=raw.get("paths", {}),
         rdr=rdr,
         source=source,
+        fmri=fmri,
+        wave_validation=wave_validation,
         preprocess=preprocess,
         epoching=epoching,
         features=features,

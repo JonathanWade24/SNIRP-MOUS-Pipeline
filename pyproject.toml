@@ -21,6 +21,7 @@ dependencies = [
   "pydantic",
   "pytest",
   "nibabel",
+  "statsmodels",
 ]
 
 [project.scripts]
@@ -29,6 +30,11 @@ mous-pipeline = "mous_pipeline.cli:main"
 [project.optional-dependencies]
 gui = [
   "streamlit>=1.35",
+]
+fmri = [
+  "nilearn>=0.10",
+  "nibabel>=5",
+  "templateflow>=24",
 ]
 
 [tool.setuptools]

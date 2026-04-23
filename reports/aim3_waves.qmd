@@ -1,0 +1,26 @@
+---
+format: html
+params:
+  subject: "A2002"
+  export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
+---
+
+## Aim 3 Traveling-Wave Validation
+
+```{python}
+import json
+from pathlib import Path
+subject = params["subject"]
+export_dir = Path(params["export_dir"])
+metrics = json.loads((export_dir / f"{subject}_metrics.json").read_text())
+metrics
+```
+
+```{r}
+library(ggplot2)
+library(readr)
+subject <- params$subject
+export_dir <- params$export_dir
+dirs <- read_csv(file.path(export_dir, paste0(subject, "_directions.csv")), show_col_types = FALSE)
+ggplot(dirs, aes(x=direction_rad, fill=condition)) + geom_histogram(bins=36, alpha=.5, position="identity")
+```
