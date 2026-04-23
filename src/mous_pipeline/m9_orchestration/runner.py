@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+from typing import Callable
 
 import mne
 import numpy as np
@@ -60,6 +61,7 @@ def run_subject(
     force: bool = False,
     dry_run: bool = False,
     config_path: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> RunResult:
     result = RunResult(subject=subject)
     selected = [s for s in ["m1", "m2", "m3", "m6a", "m7", "m8", "m9"] if _stage_selected(s, only, skip)]
@@ -75,6 +77,8 @@ def run_subject(
     t0 = perf_counter()
     trials = parse_events(str(events_path), strict=True)
     result.stage_timings_s["m1"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m1", only, skip):
+        progress_callback("m1")
     result.metrics["n_trials"] = len(trials)
     result.metrics["n_zinnen"] = int((trials["condition"] == "ZINNEN").sum())
     result.metrics["n_woorden"] = int((trials["condition"] == "WOORDEN").sum())
@@ -97,10 +101,14 @@ def run_subject(
     task_raw, ica = fit_and_apply(task_raw, cfg)
     task_raw = apply_band(task_raw, 13, 30)
     result.stage_timings_s["m2"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m2", only, skip):
+        progress_callback("m2")
 
     t0 = perf_counter()
     epochs = make_epochs(task_raw, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m3", only, skip):
+        progress_callback("m3")
 
     rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
     rest_raw.apply_gradient_compensation(3)
@@ -117,6 +125,8 @@ def run_subject(
     dirs_w, dci_w = epochs_to_directions(epochs["WOORDEN"], sensor_xy, meg_picks)
     dirs_r, dci_r = epochs_to_directions(epochs_rest, sensor_xy, meg_picks)
     result.stage_timings_s["m6a"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m6a", only, skip):
+        progress_callback("m6a")
     result.metrics["dci_zinnen"] = float(np.mean(dci_z))
     result.metrics["dci_woorden"] = float(np.mean(dci_w))
     result.metrics["dci_rest"] = float(np.mean(dci_r))
@@ -129,12 +139,16 @@ def run_subject(
     result.metrics["dci_woorden_pooled"] = directional_consistency_index(dirs_w)
     result.metrics["dci_rest_pooled"] = directional_consistency_index(dirs_r)
     result.stage_timings_s["m7"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m7", only, skip):
+        progress_callback("m7")
 
     t0 = perf_counter()
     gate = PilotGate().evaluate(result.metrics)
     result.metrics["pilot_verdict"] = gate["verdict"]
     result.metrics["pilot_gate"] = gate
     result.stage_timings_s["m9"] = perf_counter() - t0
+    if progress_callback and _stage_selected("m9", only, skip):
+        progress_callback("m9")
 
     np.save(out_dir / f"sub-{subject}_dirs_zinnen.npy", dirs_z)
     np.save(out_dir / f"sub-{subject}_dirs_woorden.npy", dirs_w)
@@ -154,6 +168,8 @@ def run_subject(
         )
         result.stage_timings_s["m8"] = perf_counter() - t0
         result.outputs.append(report_path)
+        if progress_callback:
+            progress_callback("m8")
     else:
         result.skipped_stages.append("m8")
 

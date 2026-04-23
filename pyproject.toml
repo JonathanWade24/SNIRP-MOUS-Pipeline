@@ -26,6 +26,12 @@ dependencies = [
 [project.scripts]
 mous-pipeline = "mous_pipeline.cli:main"
 
+[project.optional-dependencies]
+gui = [
+  "ipywidgets>=8",
+  "ipykernel",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

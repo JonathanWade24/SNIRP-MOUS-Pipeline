@@ -9,6 +9,34 @@ pip install -e .
 mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002
 ```
 
+## Neurodesk plug-and-play GUI setup
+
+After clone, only two manual steps are required:
+
+```bash
+git clone https://github.com/JonathanWade24/MOUS.git
+cd MOUS
+bash setup.sh
+repocli config
+```
+
+At `repocli config`, use:
+- `baseurl`: `https://webdav.data.ru.nl`
+- username/password: your RDR Data Access Credentials
+
+Then launch the GUI:
+
+```bash
+source .venv/bin/activate
+jupyter lab notebooks/mous_gui.ipynb
+```
+
+The notebook launches a tabbed GUI for:
+- Setup: validate config and repocli availability
+- Fetch: download `sub-*` folders from RDR via repocli
+- Run: execute pipeline stages with live stage progress
+- Results: inspect manifest metrics, verdict, timings, and HTML report link
+
 ## Runner options
 
 ```bash
@@ -64,3 +92,11 @@ mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_23
 ```
 
 Then run the pipeline as usual (`mous-pipeline run ...`).
+
+## GUI dependencies
+
+GUI extras are provided through optional dependencies:
+
+```bash
+pip install -e ".[gui]"
+```
