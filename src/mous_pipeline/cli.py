@@ -58,7 +58,19 @@ def _print_watch_line(payload: dict) -> None:
     status = str(payload.get("status") or "unknown")
     current = payload.get("current_stage") or "—"
     done = len(payload.get("completed_stages") or [])
-    print(f"[watch {idx:02d}/{total:02d}] status={status} current={current} done={done}")
+    started_at = float(payload.get("started_at") or time.time())
+    stage_started_at = payload.get("current_stage_started_at")
+    elapsed = max(0.0, time.time() - started_at)
+    stage_elapsed = max(0.0, time.time() - float(stage_started_at)) if stage_started_at else 0.0
+    pct = int((done / max(total, 1)) * 100)
+    bar_w = 20
+    filled = int((done / max(total, 1)) * bar_w)
+    bar = "#" * filled + "-" * (bar_w - filled)
+    print(
+        f"[watch {idx:02d}/{total:02d}] [{bar}] {pct:3d}% "
+        f"status={status:<7} stage={current:<10} done={done:<2} "
+        f"elapsed={elapsed:6.1f}s stage_elapsed={stage_elapsed:6.1f}s"
+    )
 
 
 def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool = False) -> None:
@@ -280,11 +292,15 @@ def main() -> None:
                 "status": "failed",
                 "selected_stages": selected,
                 "current_stage": None,
+                "current_stage_started_at": None,
                 "stage_index": 0,
                 "stage_total": len(selected),
                 "completed_stages": [],
                 "stage_timings_s": {},
                 "error": str(exc),
+                "started_at": time.time(),
+                "updated_at": time.time(),
+                "last_event": "failed",
             }
             state_path.write_text(json.dumps(failed_payload, indent=2))
             raise

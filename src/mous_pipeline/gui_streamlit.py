@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time as wall_time
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -623,11 +623,15 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
                     "status": "failed",
                     "selected_stages": selected,
                     "current_stage": None,
+                    "current_stage_started_at": None,
                     "stage_index": 0,
                     "stage_total": len(selected),
                     "completed_stages": list(completed),
                     "stage_timings_s": {},
                     "error": str(exc),
+                    "started_at": wall_time(),
+                    "updated_at": wall_time(),
+                    "last_event": "failed",
                 },
                 indent=2,
             )
@@ -674,9 +678,21 @@ def _run_section() -> None:
             status = str(live.get("status") or "unknown")
             current = live.get("current_stage") or "—"
             done = len(live.get("completed_stages") or [])
+            started_at = float(live.get("started_at") or 0.0)
+            stage_started_at = live.get("current_stage_started_at")
+            elapsed_s = max(0.0, wall_time() - started_at) if started_at else 0.0
+            # Keep stage elapsed robust when current stage is missing.
+            stage_elapsed_s = (
+                max(0.0, wall_time() - float(stage_started_at))
+                if stage_started_at is not None
+                else 0.0
+            )
+            progress_pct = int((done / max(total, 1)) * 100)
+            st.progress(progress_pct, text=f"sub-{monitor_subject}: {progress_pct}% ({done}/{total})")
             st.markdown(
-                f"**sub-{monitor_subject}:** `{status}` • stage `{current}` "
-                f"({idx}/{total}) • completed `{done}`"
+                f"**Status:** `{status}`  •  **Current stage:** `{current}`  •  "
+                f"**Index:** `{idx}/{total}`  •  **Elapsed:** `{_fmt_duration(elapsed_s)}`  •  "
+                f"**Stage elapsed:** `{_fmt_duration(stage_elapsed_s)}`"
             )
             if live.get("error"):
                 st.error(str(live.get("error")))
@@ -969,7 +985,8 @@ def _files_section() -> None:
                 {
                     "type": "dir" if e.is_dir() else "file",
                     "name": e.name,
-                    "size_bytes": (e.stat().st_size if e.is_file() else ""),
+                    # Keep a consistent nullable numeric type for Arrow serialization.
+                    "size_bytes": (int(e.stat().st_size) if e.is_file() else None),
                 }
             )
         st.dataframe(rows, width="stretch", hide_index=True)
