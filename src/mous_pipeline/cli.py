@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -77,6 +79,18 @@ def main() -> None:
         help="Derivatives root containing <subject>/m9_orchestration/*_run_manifest.json",
     )
     group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
+    gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
+    gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
+    gui_parser.add_argument(
+        "--config",
+        default="configs/pilot_A2002.yaml",
+        help="Config path preloaded in GUI via MOUS_GUI_CONFIG env var",
+    )
+    gui_parser.add_argument(
+        "--base-url-path",
+        default=None,
+        help="Override Streamlit base URL path. Default auto-detects from JupyterHub service prefix.",
+    )
 
     args = parser.parse_args()
 
@@ -188,3 +202,38 @@ def main() -> None:
             trial_path = root / "group_trials.csv"
             group_trials.to_csv(trial_path, index=False)
             print(f"Wrote group trials: {trial_path}")
+    elif args.cmd == "gui":
+        service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
+        if args.base_url_path:
+            base_url_path = args.base_url_path
+        else:
+            base_url_path = f"{service_prefix.rstrip('/')}/proxy/{args.port}"
+        cfg_path = str(Path(args.config).expanduser().resolve())
+        os.environ["MOUS_GUI_CONFIG"] = cfg_path
+        cmd = [
+            "streamlit",
+            "run",
+            "src/mous_pipeline/gui_streamlit.py",
+            "--server.headless",
+            "true",
+            "--server.port",
+            str(args.port),
+            "--server.baseUrlPath",
+            base_url_path,
+            "--browser.gatherUsageStats",
+            "false",
+        ]
+        print("Launching MOUS GUI...")
+        print(f"Config: {cfg_path}")
+        print(f"Port: {args.port}")
+        print(f"baseUrlPath: {base_url_path}")
+        print("")
+        print("Open one of these URLs:")
+        print(f"- Relative proxy path: {base_url_path}/")
+        hub_host = os.environ.get("JUPYTERHUB_HOST")
+        if hub_host:
+            print(f"- Full URL: {hub_host.rstrip('/')}{base_url_path}/")
+        print("- If using local browser from same machine: http://localhost:8501")
+        print("")
+        print("Tip: stop old instances with `lsof -ti :8501 | xargs -r kill -9`.")
+        subprocess.run(cmd, check=False)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -56,11 +57,96 @@ STAGE_DESCRIPTIONS = {
     "m9":       "Evaluate pilot gate criteria and return GO / MARGINAL / NO-GO verdict.",
 }
 
+STAGE_DEPENDENCIES = {
+    "m2": {"m1"},
+    "m3": {"m2"},
+    "m4": {"m3"},
+    "m4_trial": {"m3"},
+    "m5": {"m3"},
+    "m6a": {"m3"},
+    "m6_extra": {"m4"},
+    "m7": {"m6a"},
+    "m8": {"m7"},
+    "m9": {"m7"},
+    "m10": {"m4_trial"},
+    "m11": {"m10"},
+    "m12": {"m6a"},
+}
+
+STAGE_IO = {
+    "m1": {
+        "inputs": "events TSV file (`sub-*/meg/*_events.tsv`)",
+        "outputs": "trial table in-memory (`onset`, `sample`, `condition`, `block_id`, `pos_in_block`)",
+    },
+    "m2": {
+        "inputs": "task/rest CTF recordings + m1 trial table",
+        "outputs": "preprocessed raw task/rest in-memory (notch/resample/ICA/bandpass)",
+    },
+    "m3": {
+        "inputs": "preprocessed task raw + m1 trials",
+        "outputs": "task epochs object in-memory",
+    },
+    "m4": {
+        "inputs": "task epochs",
+        "outputs": "files in `m4_features/`: `*_analytic.npz`, `*_psd.npz`",
+    },
+    "m4_trial": {
+        "inputs": "task epochs + m1 block metadata",
+        "outputs": "trial-level metrics in-memory and `m4_features/*_prestim_beta.npz`, `*_n400m.npz`",
+    },
+    "m5": {
+        "inputs": "task epochs + source config (`source.subjects_dir`)",
+        "outputs": "source-space metrics in manifest (`source_dci_zinnen`, label counts)",
+    },
+    "m6a": {
+        "inputs": "task/rest epochs",
+        "outputs": "files in `m9_orchestration/`: `*_dirs_*.npy`, `*_sliding_dci_zinnen.npy`",
+    },
+    "m6_extra": {
+        "inputs": "m4 analytic features",
+        "outputs": "extra detector metrics in manifest",
+    },
+    "m7": {
+        "inputs": "m6a DCI/directions (+ trial table when available)",
+        "outputs": "stats metrics in manifest (`p_*`, pooled DCI, Aim1 block control p)",
+    },
+    "m10": {
+        "inputs": "fMRI config (`fmri.bold_path`, TR, atlas/ROI) + trial table",
+        "outputs": "joined MEG-fMRI trial table in-memory + m10 metrics",
+    },
+    "m11": {
+        "inputs": "m10 joined MEG-fMRI trials",
+        "outputs": "coupling metrics (`m11_coupling`) in manifest",
+    },
+    "m12": {
+        "inputs": "m6a DCI + `wave_validation` settings",
+        "outputs": "null-model metrics (`aim3_two_dipole_z`, `m12_null_summary`) in manifest",
+    },
+    "m8": {
+        "inputs": "m7 metrics + m6a arrays + optional joined trial table",
+        "outputs": "files in `m8_reports/`: subject HTML, exports (`*_trials.csv`, `*_metrics.json`, optional `*_trials_joined.csv`), optional Quarto html",
+    },
+    "m9": {
+        "inputs": "all computed metrics",
+        "outputs": "run manifest `m9_orchestration/sub-*_run_manifest.json` and final verdict",
+    },
+}
+
+
+def _validate_stage_selection(selected: list[str]) -> list[str]:
+    errors: list[str] = []
+    selected_set = set(selected)
+    for stage in selected:
+        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
+        if missing:
+            errors.append(f"{stage} requires {', '.join(missing)}")
+    return errors
+
 
 # ── Session helpers ──────────────────────────────────────────────────────────
 
 def _init_state() -> None:
-    st.session_state.setdefault("config_path", "configs/pilot_A2002.yaml")
+    st.session_state.setdefault("config_path", os.environ.get("MOUS_GUI_CONFIG", "configs/pilot_A2002.yaml"))
     st.session_state.setdefault("cfg", None)
     st.session_state.setdefault("cfg_loaded_path", None)
     st.session_state.setdefault("run_history", [])
@@ -381,6 +467,23 @@ def _run_section() -> None:
     with st.expander("Stage descriptions"):
         for s in selected:
             st.markdown(f"**{STAGE_LABELS[s]}** — {STAGE_DESCRIPTIONS[s]}")
+            io = STAGE_IO.get(s)
+            if io:
+                st.markdown(f"- Inputs: {io['inputs']}")
+                st.markdown(f"- Outputs: {io['outputs']}")
+    with st.expander("Module dependency rules"):
+        rows = []
+        for s in STAGES:
+            deps = sorted(STAGE_DEPENDENCIES.get(s, set()))
+            rows.append(
+                {
+                    "module": s,
+                    "depends_on": ", ".join(deps) if deps else "none",
+                    "inputs": STAGE_IO.get(s, {}).get("inputs", ""),
+                    "outputs": STAGE_IO.get(s, {}).get("outputs", ""),
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
 
     force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
 
@@ -388,6 +491,12 @@ def _run_section() -> None:
     if st.button("Run pipeline", type="primary", use_container_width=True):
         if not selected:
             st.error("Select at least one stage.")
+            return
+        dependency_errors = _validate_stage_selection(selected)
+        if dependency_errors:
+            st.error("Invalid module selection. Add required dependencies first:")
+            for err in dependency_errors:
+                st.markdown(f"- {err}")
             return
         if not subjects_to_run or not subjects_to_run[0]:
             st.error("Subject ID is required.")
@@ -527,6 +636,72 @@ def _results_section() -> None:
         st.json(metrics)
 
 
+def _files_section() -> None:
+    st.header("File browser")
+    cfg_bundle = _active_cfg()
+    if not cfg_bundle:
+        st.info("Load a config first.")
+        return
+    _, cfg = cfg_bundle
+
+    roots = {
+        "Data root": cfg.data_root,
+        "Derivatives root": cfg.derivatives_root,
+        "Repository root": Path.cwd(),
+    }
+    root_name = st.selectbox("Root", list(roots.keys()))
+    root = roots[root_name]
+    if not root.exists():
+        st.warning(f"Selected root does not exist: `{root}`")
+        return
+
+    rel = st.text_input(
+        "Path inside root",
+        value=".",
+        help="Use relative paths like `sub-A2003/meg` or `sub-A2003/m9_orchestration`.",
+    ).strip()
+    target = (root / rel).resolve() if rel != "." else root.resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError:
+        st.error("Path must stay within selected root.")
+        return
+    if not target.exists():
+        st.warning(f"Path does not exist: `{target}`")
+        return
+
+    st.markdown(f"**Current path:** `{target}`")
+    if target.is_dir():
+        entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        rows = []
+        for e in entries:
+            rows.append(
+                {
+                    "type": "dir" if e.is_dir() else "file",
+                    "name": e.name,
+                    "size_bytes": (e.stat().st_size if e.is_file() else ""),
+                }
+            )
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("File preview")
+        suffix = target.suffix.lower()
+        try:
+            if suffix in {".json"}:
+                st.json(json.loads(target.read_text()))
+            elif suffix in {".csv", ".tsv"}:
+                import pandas as pd
+
+                sep = "\t" if suffix == ".tsv" else ","
+                st.dataframe(pd.read_csv(target, sep=sep).head(200), use_container_width=True)
+            elif suffix in {".txt", ".log", ".md", ".yaml", ".yml", ".py"}:
+                st.code(target.read_text()[:15000])
+            else:
+                st.info("Preview not available for this file type.")
+        except Exception as exc:
+            st.error(f"Failed to preview file: {exc}")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -534,7 +709,7 @@ def main() -> None:
     _init_state()
     _sidebar()
 
-    setup_tab, fetch_tab, run_tab, results_tab = st.tabs(["Setup", "Fetch", "Run", "Results"])
+    setup_tab, fetch_tab, run_tab, results_tab, files_tab = st.tabs(["Setup", "Fetch", "Run", "Results", "Files"])
     with setup_tab:
         _setup_section()
     with fetch_tab:
@@ -543,6 +718,8 @@ def main() -> None:
         _run_section()
     with results_tab:
         _results_section()
+    with files_tab:
+        _files_section()
 
 
 if __name__ == "__main__":

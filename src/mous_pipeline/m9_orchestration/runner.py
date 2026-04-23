@@ -48,6 +48,21 @@ from ..provenance import build_run_manifest, config_fingerprint, write_manifest
 from .gating import PilotGate
 
 STAGE_ORDER = ["m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m10", "m11", "m12", "m7", "m8", "m9"]
+STAGE_DEPENDENCIES: dict[str, set[str]] = {
+    "m2": {"m1"},
+    "m3": {"m2"},
+    "m4": {"m3"},
+    "m4_trial": {"m3"},
+    "m5": {"m3"},
+    "m6a": {"m3"},
+    "m6_extra": {"m4"},
+    "m7": {"m6a"},
+    "m8": {"m7"},
+    "m9": {"m7"},
+    "m10": {"m4_trial"},
+    "m11": {"m10"},
+    "m12": {"m6a"},
+}
 
 
 @dataclass
@@ -77,6 +92,17 @@ def _resolve_path(cfg, subject: str, key: str, fallback: Path) -> Path:
     return cfg.data_root / custom if custom else fallback
 
 
+def _validate_stage_dependencies(selected: list[str]) -> None:
+    selected_set = set(selected)
+    errs = []
+    for stage in selected:
+        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
+        if missing:
+            errs.append(f"{stage} requires {', '.join(missing)}")
+    if errs:
+        raise ValueError("Invalid stage selection: " + "; ".join(errs))
+
+
 def run_subject(
     subject: str,
     cfg,
@@ -90,6 +116,7 @@ def run_subject(
 ) -> RunResult:
     result = RunResult(subject=subject)
     selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
+    _validate_stage_dependencies(selected)
     result.metrics["selected_stages"] = selected
     if dry_run:
         result.metrics["dry_run"] = True
