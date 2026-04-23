@@ -14,13 +14,16 @@ def prestim_beta_power(
     cfg,
     trial_meta,
     *,
-    picks: str = "meg",
-    tmin: float = -0.5,
+    sensor_prefixes: tuple[str, ...] = ("MLF", "MLP", "MLT"),
+    tmin: float = -0.8,
     tmax: float = 0.0,
     fmin: float = 13.0,
     fmax: float = 30.0,
 ) -> np.ndarray:
     """Compute trial-wise beta power over a pre-stimulus window."""
+    picks = [idx for idx, name in enumerate(epochs.ch_names) if any(name.startswith(prefix) for prefix in sensor_prefixes)]
+    if not picks:
+        picks = "meg"
     crop = epochs.copy().crop(tmin=tmin, tmax=tmax)
     data = crop.get_data(picks=picks)  # (n_trials, n_channels, n_times)
     sfreq = float(crop.info["sfreq"])
