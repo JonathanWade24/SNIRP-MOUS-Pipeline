@@ -464,13 +464,7 @@ def _setup_section() -> None:
         )
 
     st.divider()
-    st.subheader("Quick-start configs")
-    st.markdown(
-        "| Config | Purpose |\n"
-        "| --- | --- |\n"
-        "| `configs/pilot_A2002.yaml` | Single pilot subject |\n"
-        "| `configs/test_multi_A2003_A2006.yaml` | Multi-subject batch with wave validation |"
-    )
+    st.caption("Example YAML files live under `configs/` (see `configs/README.md`).")
 
 
 # ── Fetch tab ────────────────────────────────────────────────────────────────
