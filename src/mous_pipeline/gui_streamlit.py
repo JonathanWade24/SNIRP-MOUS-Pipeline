@@ -16,12 +16,22 @@ from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remot
 from mous_pipeline.m9_orchestration.runner import run_subject
 
 STAGES = ["m1", "m2", "m3", "m6a", "m7", "m8", "m9"]
+STAGE_DESCRIPTIONS = {
+    "m1": "Parse events TSV and validate trial structure.",
+    "m2": "Preprocess task/rest data: notch, resample, ICA, beta-band filter.",
+    "m3": "Epoch task data around event onsets.",
+    "m6a": "Compute phase-gradient directions and directional consistency indices.",
+    "m7": "Run circular/permutation statistics for wave consistency and significance.",
+    "m8": "Generate the subject HTML report.",
+    "m9": "Evaluate pilot gate and derive GO/MARGINAL/NO-GO verdict.",
+}
 
 
 def _init_state() -> None:
     st.session_state.setdefault("config_path", "configs/pilot_A2002.yaml")
     st.session_state.setdefault("cfg", None)
     st.session_state.setdefault("cfg_loaded_path", None)
+    st.session_state.setdefault("last_run_summary", None)
 
 
 def _load_cfg(path_value: str) -> tuple[Path, PipelineConfig] | None:
@@ -68,16 +78,27 @@ def _fetch_section() -> None:
     st.subheader("Fetch from RDR")
     cfg_bundle = _active_cfg()
     subject = st.text_input("Subject ID", value="A2002", key="fetch_subject")
+    st.caption("e.g. A2002 - a leading 'sub-' prefix is stripped automatically.")
+    repocli_ok = shutil.which("repocli") is not None
+    if not repocli_ok:
+        st.warning("repocli is not on PATH. Run setup.sh or fix PATH before fetching.")
     if st.button("Download subject"):
         if not cfg_bundle:
             st.error("Load a valid config first.")
+            return
+        if not repocli_ok:
+            st.error("repocli is not on PATH.")
             return
         _, cfg = cfg_bundle
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
+        normalized_subject = subject.strip().removeprefix("sub-")
+        if not normalized_subject:
+            st.error("Subject ID is required.")
+            return
         cmd = build_repocli_get_command(
-            remote_path=remote_subject_path(cfg.rdr.collection_path, subject.strip()),
+            remote_path=remote_subject_path(cfg.rdr.collection_path, normalized_subject),
             local_dir=cfg.data_root.resolve(),
         )
         log_box = st.empty()
@@ -100,11 +121,24 @@ def _run_section() -> None:
     st.subheader("Run pipeline")
     cfg_bundle = _active_cfg()
     subject = st.text_input("Subject ID", value="A2002", key="run_subject")
+    st.caption("e.g. A2002 - a leading 'sub-' prefix is stripped automatically.")
     force = st.checkbox("Force recompute", value=False)
     selected = st.multiselect("Stages", STAGES, default=STAGES)
+    with st.expander("Stage reference"):
+        st.table([{"stage": s, "description": STAGE_DESCRIPTIONS[s]} for s in STAGES])
+    normalized_subject = subject.strip().removeprefix("sub-")
+    if not normalized_subject:
+        st.warning("Subject field is empty.")
+    if cfg_bundle:
+        _, cfg = cfg_bundle
+        if not cfg.data_root.exists():
+            st.warning(f"data_root does not exist yet: {cfg.data_root}")
     if st.button("Run pipeline"):
         if not cfg_bundle:
             st.error("Load a valid config first.")
+            return
+        if not normalized_subject:
+            st.error("Subject ID is required.")
             return
         if not selected:
             st.error("Select at least one stage.")
@@ -128,7 +162,7 @@ def _run_section() -> None:
         try:
             status.info("Pipeline running...")
             result = run_subject(
-                subject.strip(),
+                normalized_subject,
                 cfg,
                 skip=skip if skip else None,
                 force=force,
@@ -139,10 +173,30 @@ def _run_section() -> None:
             progress.progress(100, text="Done")
             status.success("Pipeline completed.")
             log_box.code("".join(logs))
+            st.session_state["last_run_summary"] = {
+                "subject": normalized_subject,
+                "verdict": result.metrics.get("pilot_verdict", "unknown"),
+                "n_trials": result.metrics.get("n_trials"),
+                "dci_zinnen": result.metrics.get("dci_zinnen"),
+                "p_task_vs_rest": result.metrics.get("p_task_vs_rest"),
+            }
         except Exception as exc:
             status.error(f"Pipeline failed: {exc}")
             logs.append(str(exc) + "\n")
             log_box.code("".join(logs))
+
+    summary = st.session_state.get("last_run_summary")
+    if isinstance(summary, dict):
+        st.markdown("### Last run summary")
+        st.write(
+            {
+                "subject": summary.get("subject"),
+                "pilot_verdict": summary.get("verdict"),
+                "n_trials": summary.get("n_trials"),
+                "dci_zinnen": summary.get("dci_zinnen"),
+                "p_task_vs_rest": summary.get("p_task_vs_rest"),
+            }
+        )
 
 
 def _results_section() -> None:
@@ -157,7 +211,9 @@ def _results_section() -> None:
     if not subjects:
         st.info("No processed subjects found.")
         return
-    subject = st.selectbox("Subject", subjects)
+    default_subject = st.session_state.get("last_run_summary", {}).get("subject")
+    default_index = subjects.index(default_subject) if default_subject in subjects else 0
+    subject = st.selectbox("Subject", subjects, index=default_index)
     manifest_path = root / f"sub-{subject}" / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
     if not manifest_path.exists():
         st.warning(f"Manifest not found: {manifest_path}")
