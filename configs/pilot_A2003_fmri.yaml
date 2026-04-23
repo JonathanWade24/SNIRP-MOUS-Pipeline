@@ -56,7 +56,7 @@ fmri:
   skip_fmriprep: false       # set to true once fMRIPrep has already been run successfully
   skip_bids_validation: false # strict mode: keep false once bids-convert + bids-validate pass
   neurodesk_module: "fmriprep"  # loaded via `ml fmriprep` before calling fmriprep binary
-  fs_license_file: "~/MOUS/Pipeline WIP/mous_data/freesurfer/license.txt"
+  fs_license_file: "/data/freesurfer/license.txt"
 
 # Aim 3 null-wave validation (m12).
 wave_validation:
