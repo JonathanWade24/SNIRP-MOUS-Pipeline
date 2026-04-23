@@ -11,9 +11,9 @@ from typing import Any
 import matplotlib.pyplot as plt
 import streamlit as st
 
-from .config import PipelineConfig, load_config
-from .m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
-from .m9_orchestration.runner import run_subject
+from mous_pipeline.config import PipelineConfig, load_config
+from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
+from mous_pipeline.m9_orchestration.runner import run_subject
 
 STAGES = ["m1", "m2", "m3", "m6a", "m7", "m8", "m9"]
 
