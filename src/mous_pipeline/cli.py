@@ -89,8 +89,9 @@ def main() -> None:
     )
     gui_parser.add_argument(
         "--base-url-path",
-        default=None,
-        help="Override Streamlit base URL path. Default auto-detects from JupyterHub service prefix.",
+        default="",
+        help="Optional Streamlit base URL path override. "
+        "Default is empty, which is correct for JupyterHub proxy rewrite setups.",
     )
     gui_parser.add_argument(
         "--public-base-url",
@@ -214,7 +215,9 @@ def main() -> None:
         if args.base_url_path:
             base_url_path = args.base_url_path
         else:
-            base_url_path = f"{service_prefix.rstrip('/')}/proxy/{args.port}"
+            # Default behavior for Neurodesk/JupyterHub: proxy rewrites path,
+            # Streamlit serves at root (no baseUrlPath).
+            base_url_path = ""
         cfg_path = str(Path(args.config).expanduser().resolve())
         os.environ["MOUS_GUI_CONFIG"] = cfg_path
         cmd = [
@@ -225,21 +228,22 @@ def main() -> None:
             "true",
             "--server.port",
             str(args.port),
-            "--server.baseUrlPath",
-            base_url_path,
             "--browser.gatherUsageStats",
             "false",
         ]
+        if base_url_path:
+            cmd.extend(["--server.baseUrlPath", base_url_path])
         print("Launching MOUS GUI...")
         print(f"Config: {cfg_path}")
         print(f"Port: {args.port}")
-        print(f"baseUrlPath: {base_url_path}")
+        print(f"baseUrlPath: {base_url_path or '(empty)'}")
         print("")
         print("Open one of these URLs:")
-        print(f"- Relative proxy path: {base_url_path}/")
+        proxy_path = f"{service_prefix.rstrip('/')}/proxy/{args.port}/"
+        print(f"- Relative proxy path: {proxy_path}")
         full_urls: list[str] = []
         if args.public_base_url:
-            full_urls.append(f"{args.public_base_url.rstrip('/')}{base_url_path}/")
+            full_urls.append(f"{args.public_base_url.rstrip('/')}{proxy_path}")
         else:
             host_candidates = [
                 os.environ.get("JUPYTERHUB_PUBLIC_URL"),
@@ -252,9 +256,9 @@ def main() -> None:
                     continue
                 parsed = urlsplit(host)
                 if parsed.scheme and parsed.netloc:
-                    full_urls.append(f"{parsed.scheme}://{parsed.netloc}{base_url_path}/")
+                    full_urls.append(f"{parsed.scheme}://{parsed.netloc}{proxy_path}")
                 elif host.startswith("http://") or host.startswith("https://"):
-                    full_urls.append(f"{host.rstrip('/')}{base_url_path}/")
+                    full_urls.append(f"{host.rstrip('/')}{proxy_path}")
         for url in dict.fromkeys(full_urls):
             print(f"- Full URL: {url}")
         print("- If using local browser from same machine: http://localhost:8501")
