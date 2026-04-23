@@ -45,25 +45,8 @@ from ..m11_coupling.regress import run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
 from ..m12_wave_validation.simulate import simulate_two_dipoles
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
+from ..stage_dependencies import STAGE_ORDER, list_missing_stage_dependencies
 from .gating import PilotGate
-
-STAGE_ORDER = ["m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m10", "m11", "m12", "m7", "m8", "m9"]
-STAGE_DEPENDENCIES: dict[str, set[str]] = {
-    "m2": {"m1"},
-    "m3": {"m2"},
-    "m4": {"m3"},
-    "m4_trial": {"m3"},
-    "m5": {"m3"},
-    "m6a": {"m3"},
-    "m6_extra": {"m4"},
-    "m7": {"m6a"},
-    "m8": {"m7"},
-    "m9": {"m7"},
-    "m10": {"m4_trial"},
-    "m11": {"m10"},
-    "m12": {"m6a"},
-}
-
 
 @dataclass
 class RunResult:
@@ -93,12 +76,7 @@ def _resolve_path(cfg, subject: str, key: str, fallback: Path) -> Path:
 
 
 def _validate_stage_dependencies(selected: list[str]) -> None:
-    selected_set = set(selected)
-    errs = []
-    for stage in selected:
-        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
-        if missing:
-            errs.append(f"{stage} requires {', '.join(missing)}")
+    errs = list_missing_stage_dependencies(selected)
     if errs:
         raise ValueError("Invalid stage selection: " + "; ".join(errs))
 
@@ -338,26 +316,40 @@ def run_subject(
         t0 = perf_counter()
         try:
             fmri_cfg = getattr(cfg, "fmri", None)
-            if fmri_cfg and fmri_cfg.bold_path:
+            if fmri_cfg:
                 from ..m10_fmri.glm import trialwise_betas
-                from ..m10_fmri.prep import run_fmriprep, validate_tr_from_sidecar
-                from ..m10_fmri.roi import extract_mtg_beta
+                from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
 
-                sidecar = Path(str(fmri_cfg.bold_path).replace(".nii.gz", ".json"))
-                if sidecar.exists():
-                    validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
-                run_fmriprep(subject, cfg, bids_root=cfg.data_root)
-                beta_tbl = trialwise_betas(str(fmri_cfg.bold_path), trial_df, fmri_cfg.tr)
-                mtg_beta = np.linspace(0.0, 1.0, len(beta_tbl))
-                try:
-                    mtg_beta = extract_mtg_beta([str(fmri_cfg.bold_path)] * len(beta_tbl), fmri_cfg.atlas, fmri_cfg.roi)
-                except Exception:
-                    pass
-                beta_tbl["mtg_beta"] = mtg_beta
-                joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
-                result.metrics["m10_n_trials_joined"] = int(len(joined_df))
+                fmriprep_out = run_fmriprep(subject, cfg, bids_root=cfg.data_root)
+                bold_path = resolve_subject_bold_path(
+                    subject,
+                    cfg,
+                    bids_root=cfg.data_root,
+                    fmriprep_out_dir=fmriprep_out,
+                )
+                if bold_path is None:
+                    expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
+                    expected_func_dir.mkdir(parents=True, exist_ok=True)
+                    result.metrics["m10_skipped_reason"] = (
+                        "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
+                        f"{fmriprep_out}/sub-{subject.removeprefix('sub-')}/func. "
+                        f"Created expected directory: {expected_func_dir}"
+                    )
+                else:
+                    sidecar = Path(str(bold_path).replace(".nii.gz", ".json"))
+                    if sidecar.exists():
+                        validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
+                    beta_tbl = trialwise_betas(
+                        str(bold_path),
+                        trial_df,
+                        fmri_cfg.tr,
+                        atlas=fmri_cfg.atlas,
+                        roi=fmri_cfg.roi,
+                    )
+                    joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
+                    result.metrics["m10_n_trials_joined"] = int(len(joined_df))
             else:
-                result.metrics["m10_skipped_reason"] = "fmri.bold_path not configured"
+                result.metrics["m10_skipped_reason"] = "fmri configuration missing"
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
         result.stage_timings_s["m10"] = perf_counter() - t0

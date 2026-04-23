@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 from nilearn.glm.first_level import FirstLevelModel
+from nilearn.maskers import NiftiLabelsMasker
+
+from .roi import _atlas_and_label
 
 
 def _lss_design(events_df: pd.DataFrame) -> pd.DataFrame:
@@ -24,16 +28,30 @@ def trialwise_betas(
     bold_nii: str,
     events_df: pd.DataFrame,
     tr: float,
+    *,
+    atlas: str = "glasser",
+    roi: str = "L_TE1a",
     confounds: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Fit LSS GLM and return one left-out beta map label per trial."""
+    """Fit LSS GLM and return trial-wise MTG beta values."""
     model = FirstLevelModel(t_r=tr, hrf_model="spm", noise_model="ar1", standardize=False)
     design = _lss_design(events_df)
     model.fit(bold_nii, events=design, confounds=confounds)
-    # lightweight serializable references; ROI module resolves maps.
-    return pd.DataFrame(
-        {
-            "trial_id": range(len(events_df)),
-            "contrast_name": [f"trial_{i}" for i in range(len(events_df))],
-        }
+    atlas_maps, labels, roi_name = _atlas_and_label(atlas, roi)
+    if roi_name not in labels:
+        roi_name = labels[0]
+    roi_idx = labels.index(roi_name)
+    masker = NiftiLabelsMasker(labels_img=atlas_maps, standardize=False)
+
+    mtg_beta: list[float] = []
+    for idx in range(len(events_df)):
+        contrast_img = model.compute_contrast(f"trial_{idx}", output_type="effect_size")
+        signal = masker.fit_transform(contrast_img)
+        mtg_beta.append(float(signal[:, roi_idx].mean()))
+
+    trial_ids = (
+        events_df["trial_id"].to_numpy(dtype=int)
+        if "trial_id" in events_df.columns
+        else np.arange(len(events_df), dtype=int)
     )
+    return pd.DataFrame({"trial_id": trial_ids, "mtg_beta": np.asarray(mtg_beta, dtype=float)})

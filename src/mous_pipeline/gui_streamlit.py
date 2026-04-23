@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from time import perf_counter
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -17,6 +16,7 @@ import streamlit as st
 from mous_pipeline.config import PipelineConfig, load_config
 from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
 from mous_pipeline.m9_orchestration.runner import run_subject
+from mous_pipeline.stage_dependencies import STAGE_DEPENDENCIES, list_missing_stage_dependencies
 
 # ── Stage catalogue ──────────────────────────────────────────────────────────
 
@@ -56,22 +56,6 @@ STAGE_DESCRIPTIONS = {
     "m7":       "Rayleigh + permutation significance for wave consistency across conditions.",
     "m8":       "Embedded-figure HTML dashboard + aim-specific Quarto reports.",
     "m9":       "Evaluate pilot gate criteria and return GO / MARGINAL / NO-GO verdict.",
-}
-
-STAGE_DEPENDENCIES = {
-    "m2": {"m1"},
-    "m3": {"m2"},
-    "m4": {"m3"},
-    "m4_trial": {"m3"},
-    "m5": {"m3"},
-    "m6a": {"m3"},
-    "m6_extra": {"m4"},
-    "m7": {"m6a"},
-    "m8": {"m7"},
-    "m9": {"m7"},
-    "m10": {"m4_trial"},
-    "m11": {"m10"},
-    "m12": {"m6a"},
 }
 
 STAGE_IO = {
@@ -208,13 +192,7 @@ MODULE_CATALOG = {
 
 
 def _validate_stage_selection(selected: list[str]) -> list[str]:
-    errors: list[str] = []
-    selected_set = set(selected)
-    for stage in selected:
-        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
-        if missing:
-            errors.append(f"{stage} requires {', '.join(missing)}")
-    return errors
+    return list_missing_stage_dependencies(selected)
 
 
 def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: PipelineConfig) -> list[str]:
@@ -360,7 +338,7 @@ def _setup_section() -> None:
     with col2:
         st.write("")
         st.write("")
-        load_clicked = st.button("Load config", width="stretch")
+        load_clicked = st.button("Load config", use_container_width=True)
 
     if load_clicked:
         result = _load_cfg(path_input)
@@ -421,7 +399,7 @@ def _fetch_section() -> None:
 
     col_l, col_r = st.columns([1, 1])
     with col_l:
-        if st.button("Load subject list from RDR", width="stretch"):
+        if st.button("Load subject list from RDR", use_container_width=True):
             st.session_state["remote_subject_options"] = []
             st.session_state["remote_subject_error"] = ""
             if not cfg.rdr.collection_path:
@@ -450,7 +428,7 @@ def _fetch_section() -> None:
     manual = st.text_input("Or type subject ID manually", value="", placeholder="A2007")
     st.caption("Leading `sub-` is stripped automatically.")
 
-    if st.button("Download selected", width="stretch", type="primary"):
+    if st.button("Download selected", use_container_width=True, type="primary"):
         if not cfg.rdr.collection_path:
             st.error("rdr.collection_path is empty in config.")
             return
@@ -491,44 +469,20 @@ def _fetch_section() -> None:
 
 # ── Run tab ──────────────────────────────────────────────────────────────────
 
-def _run_one(
-    subject: str,
-    cfg,
-    cfg_path: Path,
-    skip: set[str],
-    selected: list[str],
-    force: bool,
-    stage_event_cb=None,
-) -> dict:
+def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[str], force: bool) -> dict:
     """Run a single subject and return a summary dict."""
     progress = st.progress(0, text=f"Running sub-{subject}…")
     log_box = st.empty()
-    t_start = perf_counter()
-    logs: list[str] = [
-        f"▶ [{subject}] starting run\n",
-        f"  selected stages ({len(selected)}): {', '.join(selected)}\n",
-    ]
+    logs: list[str] = [f"▶ sub-{subject}  stages: {', '.join(selected)}\n"]
     completed: set[str] = set()
 
     def callback(stage_name: str) -> None:
         if stage_name not in completed:
             completed.add(stage_name)
             pct = int(len(completed) / max(len(selected), 1) * 100)
-            elapsed = perf_counter() - t_start
-            progress.progress(
-                pct,
-                text=(
-                    f"sub-{subject}: {stage_name} done "
-                    f"({len(completed)}/{len(selected)}) • {elapsed:.1f}s elapsed"
-                ),
-            )
-            logs.append(
-                f"  ✓ [{elapsed:7.1f}s] {stage_name} — "
-                f"{STAGE_DESCRIPTIONS.get(stage_name, 'stage complete')}\n"
-            )
+            progress.progress(pct, text=f"sub-{subject}: {stage_name} done ({len(completed)}/{len(selected)})")
+            logs.append(f"  ✓ {stage_name}\n")
             log_box.code("".join(logs))
-            if stage_event_cb:
-                stage_event_cb(subject, stage_name, len(completed), len(selected), elapsed)
 
     try:
         result = run_subject(
@@ -538,10 +492,8 @@ def _run_one(
             config_path=cfg_path,
             progress_callback=callback,
         )
-        elapsed = perf_counter() - t_start
-        logs.append(f"  • summary: {result.summary()}\n")
-        logs.append(f"  • wall time: {elapsed:.1f}s\n")
-        progress.progress(100, text=f"sub-{subject} — done • {elapsed:.1f}s total")
+        logs.append(result.summary() + "\n")
+        progress.progress(100, text=f"sub-{subject} — done")
         log_box.code("".join(logs))
         return {
             "subject": subject,
@@ -560,9 +512,8 @@ def _run_one(
             "error": None,
         }
     except Exception as exc:
-        elapsed = perf_counter() - t_start
         progress.empty()
-        logs.append(f"  ✗ [{elapsed:7.1f}s] ERROR: {exc}\n")
+        logs.append(f"[ERROR] {exc}\n")
         log_box.code("".join(logs))
         return {"subject": subject, "verdict": "ERROR", "ok": False, "error": str(exc)}
 
@@ -633,7 +584,7 @@ def _run_section() -> None:
                     "outputs": STAGE_IO.get(s, {}).get("outputs", ""),
                 }
             )
-        st.dataframe(rows, width="stretch", hide_index=True)
+        st.dataframe(rows, use_container_width=True, hide_index=True)
     with st.expander("Full module catalog (m0-m12)"):
         module_rows = []
         for module_id in [* [f"m{i}" for i in range(0, 13)], "bids_pipeline_backend"]:
@@ -646,7 +597,7 @@ def _run_section() -> None:
                     "outputs": meta["outputs"],
                 }
             )
-        st.dataframe(module_rows, width="stretch", hide_index=True)
+        st.dataframe(module_rows, use_container_width=True, hide_index=True)
 
     force = st.checkbox("Force recompute (ignore cached outputs)", value=False)
     st.divider()
@@ -657,12 +608,12 @@ def _run_section() -> None:
             projected_rows.append({"subject": f"sub-{subj}", "output_path": out})
     if projected_rows:
         st.caption(f"Potential artifacts for selected stages across {len(subjects_to_run)} subject(s).")
-        st.dataframe(projected_rows, width="stretch", hide_index=True)
+        st.dataframe(projected_rows, use_container_width=True, hide_index=True)
     else:
         st.info("No file artifacts are projected for current stage selection.")
 
     st.divider()
-    if st.button("Run pipeline", type="primary", width="stretch"):
+    if st.button("Run pipeline", type="primary", use_container_width=True):
         if not selected:
             st.error("Select at least one stage.")
             return
@@ -678,55 +629,20 @@ def _run_section() -> None:
 
         skip = set(STAGES) - set(selected)
         history: list[dict] = st.session_state.get("run_history", [])
-        total_stage_steps = max(len(subjects_to_run) * len(selected), 1)
-        batch_completed_steps = 0
-        batch_progress = st.progress(
-            0,
-            text=(
-                f"Batch progress: 0/{total_stage_steps} stage steps "
-                f"across {len(subjects_to_run)} subject(s)"
-            ),
-        )
-        batch_log_box = st.empty()
-        batch_logs: list[str] = [
-            f"▶ Batch run start: {len(subjects_to_run)} subject(s), {len(selected)} stage(s) selected each\n"
-        ]
-
-        def on_stage_event(subj: str, stage_name: str, done: int, total: int, elapsed_s: float) -> None:
-            nonlocal batch_completed_steps
-            batch_completed_steps += 1
-            pct = int(batch_completed_steps / total_stage_steps * 100)
-            batch_progress.progress(
-                pct,
-                text=(
-                    f"Batch progress: {batch_completed_steps}/{total_stage_steps} stage steps • "
-                    f"current sub-{subj} ({done}/{total}) • {stage_name}"
-                ),
-            )
-            batch_logs.append(
-                f"  ✓ sub-{subj} :: {stage_name} "
-                f"({done}/{total} for subject, {elapsed_s:.1f}s elapsed)\n"
-            )
-            # Keep UI responsive and readable; avoid unbounded growth
-            batch_log_box.code("".join(batch_logs[-400:]))
+        current_run_summaries: list[dict] = []
 
         for subj in subjects_to_run:
             st.markdown(f"---\n#### sub-{subj}")
-            batch_logs.append(f"→ starting sub-{subj}\n")
-            batch_log_box.code("".join(batch_logs[-400:]))
-            summary = _run_one(subj, cfg, cfg_path, skip, selected, force, stage_event_cb=on_stage_event)
+            summary = _run_one(subj, cfg, cfg_path, skip, selected, force)
             history.append(summary)
+            current_run_summaries.append(summary)
             if summary["ok"]:
                 v = summary["verdict"]
                 fn = st.success if v == "GO" else (st.warning if v == "MARGINAL" else st.error)
                 fn(f"sub-{subj}: {v}")
-                batch_logs.append(f"  • sub-{subj} complete: {v}\n")
             else:
                 st.error(f"sub-{subj}: pipeline error — {summary['error']}")
-                batch_logs.append(f"  ✗ sub-{subj} failed: {summary['error']}\n")
-            batch_log_box.code("".join(batch_logs[-400:]))
 
-        batch_progress.progress(100, text=f"Batch complete: {len(subjects_to_run)} subject(s) finished")
         st.session_state["run_history"] = history
 
         # ── Batch summary table ──────────────────────────────────────────────
@@ -734,7 +650,7 @@ def _run_section() -> None:
             st.divider()
             st.subheader("Batch summary")
             rows = []
-            for h in [e for e in history if e["subject"] in subjects_to_run]:
+            for h in current_run_summaries:
                 rows.append({
                     "subject": h["subject"],
                     "verdict": h.get("verdict"),
@@ -744,7 +660,7 @@ def _run_section() -> None:
                     "aim1_prestim_auc": _fmt(h.get("aim1_prestim_auc")),
                     "aim3_two_dipole_z": _fmt(h.get("aim3_two_dipole_z")),
                 })
-            st.dataframe(rows, width="stretch")
+            st.dataframe(rows, use_container_width=True)
 
 
 def _fmt(v: Any) -> str:
@@ -806,8 +722,14 @@ def _results_section() -> None:
         st.metric("ZINNEN", metrics.get("n_zinnen", "—"))
         st.metric("WOORDEN", metrics.get("n_woorden", "—"))
     with c2:
-        st.metric("DCI ZINNEN", _fmt(metrics.get("dci_zinnen_pooled") or metrics.get("dci_zinnen")))
-        st.metric("DCI WOORDEN", _fmt(metrics.get("dci_woorden_pooled") or metrics.get("dci_woorden")))
+        dci_zinnen = metrics.get("dci_zinnen_pooled")
+        if dci_zinnen is None:
+            dci_zinnen = metrics.get("dci_zinnen")
+        dci_woorden = metrics.get("dci_woorden_pooled")
+        if dci_woorden is None:
+            dci_woorden = metrics.get("dci_woorden")
+        st.metric("DCI ZINNEN", _fmt(dci_zinnen))
+        st.metric("DCI WOORDEN", _fmt(dci_woorden))
         st.metric("p task vs rest", _fmt(metrics.get("p_task_vs_rest")))
     with c3:
         st.metric("Rayleigh p (ZINNEN)", _fmt(metrics.get("p_rayleigh_zinnen")))
@@ -893,7 +815,7 @@ def _files_section() -> None:
                     "size_bytes": (e.stat().st_size if e.is_file() else ""),
                 }
             )
-        st.dataframe(rows, width="stretch", hide_index=True)
+        st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
         st.caption("File preview")
         suffix = target.suffix.lower()
@@ -904,7 +826,7 @@ def _files_section() -> None:
                 import pandas as pd
 
                 sep = "\t" if suffix == ".tsv" else ","
-                st.dataframe(pd.read_csv(target, sep=sep).head(200), width="stretch")
+                st.dataframe(pd.read_csv(target, sep=sep).head(200), use_container_width=True)
             elif suffix in {".txt", ".log", ".md", ".yaml", ".yml", ".py"}:
                 st.code(target.read_text()[:15000])
             else:
