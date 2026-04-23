@@ -98,13 +98,12 @@ def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool 
     except Exception as exc:
         warnings_list.append(f"mne_bids layout scan warning: {exc}")
 
-    # ── make_report summary (scoped to subject filter when set) ───────────────
+    # ── make_report summary ───────────────────────────────────────────────────
+    import warnings as _warnings
     try:
-        report_root = root
-        if subject_filter:
-            # make_report works on full root; pass root but note filter in output
-            pass
-        report = mne_bids.make_report(report_root, verbose=False)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            report = mne_bids.make_report(root, verbose=False)
         scope = f"subject {subject_filter}" if subject_filter else "full dataset"
         print(f"\n── Dataset report ({scope}) ──")
         print(report)
