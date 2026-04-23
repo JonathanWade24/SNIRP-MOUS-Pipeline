@@ -6,7 +6,27 @@ build-backend = "setuptools.build_meta"
 name = "mous-pipeline"
 version = "0.1.0"
 description = "Modular MOUS analysis pipeline for oscillatory and wave dynamics"
+readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "MOUS Pipeline Contributors"}
+]
+keywords = ["neuroscience", "MEG", "oscillations", "traveling-waves", "MOUS"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Repository = "https://github.com/JonathanWade24/MOUS"
+Issues = "https://github.com/JonathanWade24/MOUS/issues"
+
 dependencies = [
   "mne",
   "mne-bids",

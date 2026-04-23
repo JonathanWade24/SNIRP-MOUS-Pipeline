@@ -30,16 +30,54 @@ from .m9_orchestration.runner import run_subject
 from .stage_dependencies import STAGE_ORDER
 
 
+_STAGE_LABELS: dict[str, str] = {
+    "m1":       "Parse events",
+    "m2":       "Preprocess  (notch · ICA · filter)",
+    "m3":       "Epoch",
+    "m4":       "Analytic signal + PSD",
+    "m4_trial": "Trial features (pre-stim β, N400m)",
+    "m5":       "Source reconstruction",
+    "m6a":      "Phase-gradient waves + DCI",
+    "m6_extra": "CFC / FFT2D / rotational detectors",
+    "m10":      "fMRI prep + trial-wise GLM",
+    "m11":      "MEG–fMRI coupling",
+    "m12":      "Wave-validation null model",
+    "m7":       "Statistics (Rayleigh · permutation)",
+    "m8":       "Reports + exports",
+    "m9":       "Pilot gate (GO / MARGINAL / NO-GO)",
+}
+
+_stage_start_times: dict[str, float] = {}
+
+
 def _make_cli_progress_callback(selected_stages: list[str]):
     stage_to_idx = {stage: idx + 1 for idx, stage in enumerate(selected_stages)}
     total = len(selected_stages)
+    _t0 = time.time()
 
     def _cb(event: str, stage: str) -> None:
         idx = stage_to_idx.get(stage)
         if idx is None:
             return
-        tag = "START" if event == "start" else "DONE "
-        print(f"[progress {idx:02d}/{total:02d}] {tag} {stage}", file=sys.stderr, flush=True)
+        label = _STAGE_LABELS.get(stage, stage)
+        elapsed = time.time() - _t0
+        elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60):02d}s" if elapsed >= 60 else f"{elapsed:.1f}s"
+        if event == "start":
+            _stage_start_times[stage] = time.time()
+            print(
+                f"\r  ┌ [{idx:02d}/{total:02d}] {label} …",
+                file=sys.stderr, flush=True,
+            )
+        else:
+            stage_dur = time.time() - _stage_start_times.pop(stage, time.time())
+            dur_str = f"{int(stage_dur // 60)}m {int(stage_dur % 60):02d}s" if stage_dur >= 60 else f"{stage_dur:.1f}s"
+            pct = int(idx / total * 100)
+            remaining = total - idx
+            print(
+                f"  └ [{idx:02d}/{total:02d}] {label}  "
+                f"{dur_str}  (total {elapsed_str}, {remaining} stage{'s' if remaining != 1 else ''} left)",
+                file=sys.stderr, flush=True,
+            )
 
     return _cb
 
@@ -60,25 +98,54 @@ def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
-def _print_watch_line(payload: dict) -> None:
+def _fmt_dur(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m {s:02d}s"
+
+
+def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> None:
     idx = int(payload.get("stage_index") or 0)
     total = int(payload.get("stage_total") or 0)
     status = str(payload.get("status") or "unknown")
-    current = payload.get("current_stage") or "—"
+    current_id = payload.get("current_stage") or ""
     done = len(payload.get("completed_stages") or [])
     started_at = float(payload.get("started_at") or time.time())
     stage_started_at = payload.get("current_stage_started_at")
     elapsed = max(0.0, time.time() - started_at)
     stage_elapsed = max(0.0, time.time() - float(stage_started_at)) if stage_started_at else 0.0
+
+    # Unicode block-element bar
+    bar_w = 24
+    filled_f = (done / max(total, 1)) * bar_w
+    filled = int(filled_f)
+    partial_eighths = int((filled_f - filled) * 8)
+    partial_chars = " ▏▎▍▌▋▊▉█"
+    bar = "█" * filled + (partial_chars[partial_eighths] if filled < bar_w else "") + " " * max(0, bar_w - filled - 1)
     pct = int((done / max(total, 1)) * 100)
-    bar_w = 20
-    filled = int((done / max(total, 1)) * bar_w)
-    bar = "#" * filled + "-" * (bar_w - filled)
-    print(
-        f"[watch {idx:02d}/{total:02d}] [{bar}] {pct:3d}% "
-        f"status={status:<7} stage={current:<10} done={done:<2} "
-        f"elapsed={elapsed:6.1f}s stage_elapsed={stage_elapsed:6.1f}s"
-    )
+
+    # Human-readable labels
+    current_label = _STAGE_LABELS.get(current_id, current_id) if current_id else "—"
+    status_icon = {"running": "⏳", "done": "✓", "failed": "✗", "dry_run": "⊙"}.get(status, "·")
+
+    if status == "done":
+        line = f"{status_icon} Done  [{bar}] {pct}%  {done}/{total} stages  total {_fmt_dur(elapsed)}"
+    elif status == "failed":
+        err = payload.get("error") or ""
+        first_line = err.splitlines()[-1][:60] if err else "unknown error"
+        line = f"{status_icon} Failed after {_fmt_dur(elapsed)} — {first_line}"
+    else:
+        line = (
+            f"{status_icon} [{bar}] {pct:3d}%  {done}/{total}  "
+            f"now: {current_label}  ({_fmt_dur(stage_elapsed)})  "
+            f"total {_fmt_dur(elapsed)}"
+        )
+
+    if use_carriage_return and status == "running":
+        print(f"\r{line}", end="", flush=True)
+    else:
+        print(line)
 
 
 def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool = False) -> None:
@@ -241,11 +308,18 @@ def main() -> None:
     bids_convert_parser = sub.add_parser("bids-convert", help="Add in-place BIDS metadata sidecars for a subject")
     bids_convert_parser.add_argument("--config", required=True)
     bids_convert_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
-    bids_validate_parser = sub.add_parser("bids-validate", help="Run bids-validator on the dataset root")
+    bids_validate_parser = sub.add_parser(
+        "bids-validate",
+        help="Check BIDS layout with mne_bids and bids_validator (not the Node CLI)",
+    )
     bids_validate_parser.add_argument("--config", default=None, help="YAML config path (uses data_root when set)")
     bids_validate_parser.add_argument("--root", default=None, help="Override BIDS root path")
     bids_validate_parser.add_argument("--subject", default=None, help="Optional subject filter, e.g., A2003")
-    bids_validate_parser.add_argument("--verbose", action="store_true", help="Pass --verbose to bids-validator")
+    bids_validate_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log each non-BIDS filename under the naming check",
+    )
     gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
     gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
     gui_parser.add_argument(
@@ -325,7 +399,7 @@ def main() -> None:
         log_offset = 0
         while True:
             if not state_path.exists():
-                print("Waiting for run_state.json...", flush=True)
+                print("\rWaiting for run_state.json...", end="", flush=True)
                 time.sleep(max(0.2, args.interval))
                 continue
             stat = state_path.stat()
@@ -338,7 +412,9 @@ def main() -> None:
             except Exception:
                 time.sleep(max(0.2, args.interval))
                 continue
-            _print_watch_line(payload)
+            status = payload.get("status")
+            use_cr = not args.verbose and status == "running"
+            _print_watch_line(payload, use_carriage_return=use_cr)
             if args.verbose and log_path.exists():
                 with log_path.open("r") as f:
                     f.seek(log_offset)
@@ -347,7 +423,9 @@ def main() -> None:
                 if chunk:
                     for line in chunk.rstrip().splitlines():
                         print(f"  {line}")
-            if payload.get("status") in {"done", "failed", "dry_run"}:
+            if status in {"done", "failed", "dry_run"}:
+                if use_cr:
+                    print()
                 err = payload.get("error")
                 if err:
                     print(f"error: {err}", file=sys.stderr)
