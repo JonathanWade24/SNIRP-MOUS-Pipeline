@@ -1,0 +1,44 @@
+---
+title: "MOUS Group Report"
+format: html
+params:
+  summary_json: "derivatives/mous_pipeline/group_summary.json"
+---
+
+```{python}
+import json
+from pathlib import Path
+import pandas as pd
+
+summary = json.loads(Path(params["summary_json"]).read_text())
+rows = []
+for metric, stats in summary.get("metrics", {}).items():
+    rec = {"metric": metric}
+    rec.update(stats)
+    rows.append(rec)
+tbl = pd.DataFrame(rows)
+```
+
+```{r}
+library(ggplot2)
+library(knitr)
+```
+
+## Group summary table
+
+```{python}
+tbl
+```
+
+## Group means by metric
+
+```{r}
+df <- as.data.frame(tbl)
+if ("mean" %in% names(df)) {
+  ggplot(df, aes(x = metric, y = mean)) +
+    geom_col() +
+    coord_flip() +
+    theme_minimal() +
+    labs(title = "Group mean by metric", x = "Metric", y = "Mean")
+}
+```

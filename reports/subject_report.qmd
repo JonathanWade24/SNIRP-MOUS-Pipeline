@@ -1,0 +1,53 @@
+---
+title: "MOUS Subject Report"
+format: html
+params:
+  subject: "A2002"
+  export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
+---
+
+```{python}
+import json
+from pathlib import Path
+import pandas as pd
+
+subject = params["subject"]
+export_dir = Path(params["export_dir"])
+metrics = json.loads((export_dir / f"{subject}_metrics.json").read_text())
+directions = pd.read_csv(export_dir / f"{subject}_directions.csv")
+sliding = pd.read_csv(export_dir / f"{subject}_sliding_dci.csv")
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(knitr)
+```
+
+## Metrics
+
+```{python}
+metrics
+```
+
+## Direction distributions
+
+```{r}
+dirs <- read.csv(file.path(params$export_dir, paste0(params$subject, "_directions.csv")))
+ggplot(dirs, aes(x = direction_rad, fill = condition)) +
+  geom_histogram(bins = 36, position = "identity", alpha = 0.5) +
+  coord_polar() +
+  facet_wrap(~condition, nrow = 1) +
+  theme_minimal() +
+  labs(title = paste("Direction rose plots:", params$subject), x = "Direction (rad)", y = "Count")
+```
+
+## Sliding DCI
+
+```{r}
+slide <- read.csv(file.path(params$export_dir, paste0(params$subject, "_sliding_dci.csv")))
+ggplot(slide, aes(x = time_s, y = dci, color = condition)) +
+  geom_line(linewidth = 1) +
+  theme_minimal() +
+  labs(title = paste("Sliding DCI:", params$subject), x = "Time (s)", y = "DCI")
+```

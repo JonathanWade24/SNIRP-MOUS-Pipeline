@@ -11,18 +11,36 @@ import mne
 import numpy as np
 
 from ..io import stage_output_dir
-from ..m8_reports.dashboard import render_subject
+from ..m4_features.hilbert import analytic_signal
+from ..m4_features.spectral import psd
 from ..m0_intake.naming import events_tsv, rest_ds, task_ds
 from ..m1_events.parse import parse_events
 from ..m2_preprocess.filter import apply_band, apply_notch_and_resample
 from ..m2_preprocess.ica import fit_and_apply
 from ..m3_epoching.rest import make_pseudo_epochs
 from ..m3_epoching.task import make_epochs
-from ..m6_waves.phase_gradient import directional_consistency_index, epochs_to_directions, get_sensor_positions
+from ..m5_source.forward import build_forward_model
+from ..m5_source.inverse import compute_inverse
+from ..m5_source.roi import extract_roi_timeseries
+from ..m6_waves.cfc import CFCDetector
+from ..m6_waves.fft2d import FFT2DDetector
+from ..m6_waves.flow_field import FlowFieldDetector
+from ..m6_waves.phase_gradient import (
+    directional_consistency_index,
+    epochs_to_directions,
+    get_sensor_positions,
+    sliding_dci,
+)
+from ..m6_waves.rotational import RotationalDetector
 from ..m7_stats.circular import rayleigh_p
 from ..m7_stats.permutation import perm_test_dci
+from ..m8_reports.dashboard import render_subject
+from ..m8_reports.export import export_subject_payload
+from ..m8_reports.quarto_report import render_quarto
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
 from .gating import PilotGate
+
+STAGE_ORDER = ["m1", "m2", "m3", "m4", "m5", "m6a", "m6_extra", "m7", "m8", "m9"]
 
 
 @dataclass
@@ -64,7 +82,7 @@ def run_subject(
     progress_callback: Callable[[str], None] | None = None,
 ) -> RunResult:
     result = RunResult(subject=subject)
-    selected = [s for s in ["m1", "m2", "m3", "m6a", "m7", "m8", "m9"] if _stage_selected(s, only, skip)]
+    selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
     result.metrics["selected_stages"] = selected
     if dry_run:
         result.metrics["dry_run"] = True
@@ -88,6 +106,7 @@ def run_subject(
         out_dir / f"sub-{subject}_dirs_zinnen.npy",
         out_dir / f"sub-{subject}_dirs_woorden.npy",
         out_dir / f"sub-{subject}_dirs_rest.npy",
+        out_dir / f"sub-{subject}_sliding_dci_zinnen.npy",
     ]
     if not force and all(p.exists() for p in out_files):
         result.metrics["cache_hit"] = True
@@ -110,6 +129,17 @@ def run_subject(
     if progress_callback and _stage_selected("m3", only, skip):
         progress_callback("m3")
 
+    analytic_features = None
+    if _stage_selected("m4", only, skip):
+        t0 = perf_counter()
+        analytic_features = analytic_signal(epochs, subject, cfg, "beta")
+        psd(epochs, subject, cfg, "beta", 13.0, 30.0)
+        result.stage_timings_s["m4"] = perf_counter() - t0
+        if progress_callback:
+            progress_callback("m4")
+    else:
+        result.skipped_stages.append("m4")
+
     rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
     rest_raw.apply_gradient_compensation(3)
     rest_raw = apply_notch_and_resample(rest_raw, cfg)
@@ -124,6 +154,13 @@ def run_subject(
     dirs_z, dci_z = epochs_to_directions(epochs["ZINNEN"], sensor_xy, meg_picks)
     dirs_w, dci_w = epochs_to_directions(epochs["WOORDEN"], sensor_xy, meg_picks)
     dirs_r, dci_r = epochs_to_directions(epochs_rest, sensor_xy, meg_picks)
+    sliding_t, sliding_z = sliding_dci(
+        epochs["ZINNEN"].get_data(picks=meg_picks),
+        sensor_xy,
+        epochs["ZINNEN"].times,
+        win=30,
+        step=5,
+    )
     result.stage_timings_s["m6a"] = perf_counter() - t0
     if progress_callback and _stage_selected("m6a", only, skip):
         progress_callback("m6a")
@@ -131,10 +168,62 @@ def run_subject(
     result.metrics["dci_woorden"] = float(np.mean(dci_w))
     result.metrics["dci_rest"] = float(np.mean(dci_r))
 
+    if _stage_selected("m5", only, skip):
+        source_cfg = getattr(cfg, "source", None)
+        if source_cfg and source_cfg.subjects_dir:
+            t0 = perf_counter()
+            try:
+                fwd, src = build_forward_model(subject, task_raw, cfg)
+                stcs = compute_inverse(epochs["ZINNEN"], fwd, cfg)
+                labels = mne.read_labels_from_annot(
+                    "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject}",
+                    parc="aparc",
+                    subjects_dir=source_cfg.subjects_dir,
+                )
+                roi_ts = extract_roi_timeseries(stcs, src, labels[: min(len(labels), 10)])
+                result.metrics["m5_n_labels"] = len(roi_ts)
+                result.metrics["m5_n_stcs"] = len(stcs)
+            except Exception as exc:
+                result.metrics["m5_error"] = str(exc)
+            result.stage_timings_s["m5"] = perf_counter() - t0
+            if progress_callback:
+                progress_callback("m5")
+        else:
+            result.metrics["m5_skipped_reason"] = "source.subjects_dir not configured"
+            result.skipped_stages.append("m5")
+    else:
+        result.skipped_stages.append("m5")
+
+    if _stage_selected("m6_extra", only, skip):
+        t0 = perf_counter()
+        if analytic_features is None:
+            analytic_features = analytic_signal(epochs, subject, cfg, "beta")
+        detectors = [CFCDetector(), FFT2DDetector(), RotationalDetector(), FlowFieldDetector()]
+        extra_metrics: dict[str, float | str] = {}
+        for detector in detectors:
+            try:
+                det_out = detector.detect(analytic_features)
+                for key, value in det_out.items():
+                    if np.isscalar(value):
+                        extra_metrics[f"{detector.name}_{key}"] = float(value)
+            except Exception as exc:
+                extra_metrics[f"{detector.name}_error"] = str(exc)
+        result.metrics.update(extra_metrics)
+        result.stage_timings_s["m6_extra"] = perf_counter() - t0
+        if progress_callback:
+            progress_callback("m6_extra")
+    else:
+        result.skipped_stages.append("m6_extra")
+
     t0 = perf_counter()
     _, p_sz = perm_test_dci(dci_z, dci_r)
+    _, p_wr = perm_test_dci(dci_w, dci_r)
+    _, p_zw = perm_test_dci(dci_z, dci_w)
     result.metrics["p_task_vs_rest"] = p_sz
+    result.metrics["p_woorden_vs_rest"] = p_wr
+    result.metrics["p_zinnen_vs_woorden"] = p_zw
     result.metrics["p_rayleigh_zinnen"] = rayleigh_p(dirs_z)
+    result.metrics["p_rayleigh_woorden"] = rayleigh_p(dirs_w)
     result.metrics["dci_zinnen_pooled"] = directional_consistency_index(dirs_z)
     result.metrics["dci_woorden_pooled"] = directional_consistency_index(dirs_w)
     result.metrics["dci_rest_pooled"] = directional_consistency_index(dirs_r)
@@ -153,10 +242,21 @@ def run_subject(
     np.save(out_dir / f"sub-{subject}_dirs_zinnen.npy", dirs_z)
     np.save(out_dir / f"sub-{subject}_dirs_woorden.npy", dirs_w)
     np.save(out_dir / f"sub-{subject}_dirs_rest.npy", dirs_r)
+    np.save(out_dir / f"sub-{subject}_sliding_dci_zinnen.npy", sliding_z)
     result.outputs.extend(out_files)
 
     if _stage_selected("m8", only, skip):
         t0 = perf_counter()
+        export_dir = export_subject_payload(
+            subject,
+            cfg,
+            dirs_z=dirs_z,
+            dirs_w=dirs_w,
+            dirs_r=dirs_r,
+            sliding_t=sliding_t,
+            sliding_dci_z=sliding_z,
+            metrics=result.metrics,
+        )
         report_path = render_subject(
             subject,
             cfg,
@@ -165,9 +265,18 @@ def run_subject(
                 "stage_timings_s": result.stage_timings_s,
                 "outputs": [str(p) for p in result.outputs],
             },
+            dirs_z=dirs_z,
+            dirs_w=dirs_w,
+            dirs_r=dirs_r,
+            sliding_t=sliding_t,
+            sliding_dci_z=sliding_z,
         )
         result.stage_timings_s["m8"] = perf_counter() - t0
         result.outputs.append(report_path)
+        result.outputs.append(export_dir)
+        quarto_path = render_quarto(subject, cfg)
+        if quarto_path:
+            result.outputs.append(quarto_path)
         if progress_callback:
             progress_callback("m8")
     else:

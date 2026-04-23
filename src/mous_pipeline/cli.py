@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from .m0_intake.repocli_rdr import (
     remote_subject_path,
     repocli_available,
 )
+from .m7_stats.group import run_group_model
 from .m9_orchestration.runner import run_subject
 
 
@@ -64,6 +66,13 @@ def main() -> None:
         action="store_true",
         help="Run repocli immediately (otherwise print the command only)",
     )
+    group_parser = sub.add_parser("group", help="Run group-level stats across subject manifests")
+    group_parser.add_argument(
+        "--derivatives-root",
+        default="derivatives/mous_pipeline",
+        help="Derivatives root containing sub-*/m9_orchestration/*_run_manifest.json",
+    )
+    group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
 
     args = parser.parse_args()
 
@@ -139,3 +148,21 @@ def main() -> None:
             if proc.stderr:
                 print(proc.stderr, file=sys.stderr)
             sys.exit(proc.returncode)
+    elif args.cmd == "group":
+        root = Path(args.derivatives_root)
+        metrics_list = []
+        for mf in root.glob("sub-*/m9_orchestration/*_run_manifest.json"):
+            try:
+                payload = json.loads(mf.read_text())
+                metrics = payload.get("metrics", {})
+                if metrics:
+                    metrics_list.append(metrics)
+            except Exception:
+                continue
+        if not metrics_list:
+            print("No subject manifests found for group analysis.", file=sys.stderr)
+            sys.exit(1)
+        summary = run_group_model(metrics_list, test=args.test)
+        out_path = root / "group_summary.json"
+        out_path.write_text(json.dumps(summary, indent=2))
+        print(f"Wrote group summary: {out_path}")

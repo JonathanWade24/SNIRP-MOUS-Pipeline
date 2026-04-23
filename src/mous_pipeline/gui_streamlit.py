@@ -16,12 +16,15 @@ from mous_pipeline.config import PipelineConfig, load_config
 from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
 from mous_pipeline.m9_orchestration.runner import run_subject
 
-STAGES = ["m1", "m2", "m3", "m6a", "m7", "m8", "m9"]
+STAGES = ["m1", "m2", "m3", "m4", "m5", "m6a", "m6_extra", "m7", "m8", "m9"]
 STAGE_DESCRIPTIONS = {
     "m1": "Parse events TSV and validate trial structure.",
     "m2": "Preprocess task/rest data: notch, resample, ICA, beta-band filter.",
     "m3": "Epoch task data around event onsets.",
+    "m4": "Feature extraction (Hilbert analytic signal + PSD summaries).",
+    "m5": "Optional source-space analysis (requires source.subjects_dir + FreeSurfer data).",
     "m6a": "Compute phase-gradient directions and directional consistency indices.",
+    "m6_extra": "Optional extra detectors (CFC, FFT2D, rotational, flow-field).",
     "m7": "Run circular/permutation statistics for wave consistency and significance.",
     "m8": "Generate the subject HTML report.",
     "m9": "Evaluate pilot gate and derive GO/MARGINAL/NO-GO verdict.",

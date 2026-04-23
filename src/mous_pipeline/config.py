@@ -48,12 +48,26 @@ class RdrConfig:
 
 
 @dataclass
+class SourceConfig:
+    subjects_dir: str = ""
+    use_fsaverage: bool = True
+    beamformer: str = "lcmv"
+    spacing: str = "oct6"
+    trans: str = "fsaverage"
+    conductivity: tuple[float, ...] = (0.3,)
+    reg: float = 0.05
+    pick_ori: str = "max-power"
+    weight_norm: str = "unit-noise-gain"
+
+
+@dataclass
 class PipelineConfig:
     data_root: Path = Path(".")
     derivatives_root: Path = Path("derivatives/mous_pipeline")
     subjects: list[str] = field(default_factory=list)
     paths: dict[str, str] = field(default_factory=dict)
     rdr: RdrConfig = field(default_factory=RdrConfig)
+    source: SourceConfig = field(default_factory=SourceConfig)
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     epoching: EpochingConfig = field(default_factory=EpochingConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
@@ -87,6 +101,19 @@ def load_config(path: str | Path) -> PipelineConfig:
         collection_path=str(rdr_raw.get("collection_path", "")),
         notes=str(rdr_raw.get("notes", "")),
     )
+    source_raw = raw.get("source", {})
+    conductivity_raw = source_raw.get("conductivity", [0.3])
+    source = SourceConfig(
+        subjects_dir=str(source_raw.get("subjects_dir", "")),
+        use_fsaverage=bool(source_raw.get("use_fsaverage", True)),
+        beamformer=str(source_raw.get("beamformer", "lcmv")),
+        spacing=str(source_raw.get("spacing", "oct6")),
+        trans=str(source_raw.get("trans", "fsaverage")),
+        conductivity=tuple(float(x) for x in conductivity_raw),
+        reg=float(source_raw.get("reg", 0.05)),
+        pick_ori=str(source_raw.get("pick_ori", "max-power")),
+        weight_norm=str(source_raw.get("weight_norm", "unit-noise-gain")),
+    )
 
     return PipelineConfig(
         data_root=Path(raw.get("data_root", ".")),
@@ -94,6 +121,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         subjects=raw.get("subjects", []),
         paths=raw.get("paths", {}),
         rdr=rdr,
+        source=source,
         preprocess=preprocess,
         epoching=epoching,
         features=features,
