@@ -278,7 +278,9 @@ def _smart_defaults(cfg: PipelineConfig) -> list[str]:
     if getattr(cfg, "source", None) and getattr(cfg.source, "subjects_dir", ""):
         defaults.append("m5")
     fmri_cfg = getattr(cfg, "fmri", None)
-    if fmri_cfg and getattr(fmri_cfg, "bold_path", ""):
+    # Include m10/m11 when either a bold_path is provided OR auto-discovery is
+    # enabled (skip_fmriprep=false means fMRIPrep will produce the BOLD output).
+    if fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)):
         defaults += ["m10", "m11"]
     return [s for s in STAGES if s in defaults]
 
@@ -312,7 +314,8 @@ def _sidebar() -> None:
                 st.markdown(f"**subjects in config:** {', '.join(cfg.subjects)}")
 
             wave_ok = getattr(cfg, "wave_validation", None) and getattr(cfg.wave_validation, "enabled", False)
-            fmri_ok = getattr(cfg, "fmri", None) and bool(getattr(cfg.fmri, "bold_path", ""))
+            _fmri = getattr(cfg, "fmri", None)
+            fmri_ok = _fmri and (bool(getattr(_fmri, "bold_path", "")) or not getattr(_fmri, "skip_fmriprep", True))
             src_ok = getattr(cfg, "source", None) and bool(getattr(cfg.source, "subjects_dir", ""))
             st.markdown("**Optional stages ready:**")
             st.markdown(f"- m12 wave validation: {'enabled' if wave_ok else 'disabled'}")

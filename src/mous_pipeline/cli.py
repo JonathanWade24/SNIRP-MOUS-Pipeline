@@ -110,10 +110,13 @@ def main() -> None:
         cfg = load_config(args.config)
         only = {s.strip() for s in args.only.split(",") if s.strip()} or None
         skip = {s.strip() for s in args.skip.split(",") if s.strip()} or None
-        if args.include_fmri:
-            only = (only or set()) | {"m10", "m11"}
-        if args.include_waves_validation:
-            only = (only or set()) | {"m12"}
+        # --include-fmri / --include-waves-validation are additive: they expand an
+        # explicit --only list.  When --only was not given (only=None) the runner
+        # already selects every stage, so the flags are a no-op.
+        if args.include_fmri and only is not None:
+            only = only | {"m10", "m11"}
+        if args.include_waves_validation and only is not None:
+            only = only | {"m12"}
         result = run_subject(
             args.subject,
             cfg,
