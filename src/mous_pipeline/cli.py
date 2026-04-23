@@ -52,6 +52,14 @@ def _run_state_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
+def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_live.log",
+        derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_live.log",
+    ]
+
+
 def _print_watch_line(payload: dict) -> None:
     idx = int(payload.get("stage_index") or 0)
     total = int(payload.get("stage_total") or 0)
@@ -187,6 +195,7 @@ def main() -> None:
     watch_parser.add_argument("--config", required=True)
     watch_parser.add_argument("--subject", required=True)
     watch_parser.add_argument("--interval", type=float, default=2.0, help="Polling interval in seconds")
+    watch_parser.add_argument("--verbose", action="store_true", help="Tail live run log while watching state")
 
     fetch_parser = sub.add_parser("fetch-subject", help="Build or execute Cyberduck duck download command")
     fetch_parser.add_argument("--subject", required=True, help="Subject ID without sub- prefix, e.g., A2003")
@@ -308,9 +317,12 @@ def main() -> None:
     elif args.cmd == "watch":
         cfg = load_config(args.config)
         candidates = _run_state_candidates(cfg.derivatives_root, args.subject)
+        log_candidates = _run_log_candidates(cfg.derivatives_root, args.subject)
         state_path = next((p for p in candidates if p.exists()), candidates[0])
+        log_path = next((p for p in log_candidates if p.exists()), log_candidates[0])
         print(f"Watching: {state_path}")
         last_mtime_ns = -1
+        log_offset = 0
         while True:
             if not state_path.exists():
                 print("Waiting for run_state.json...", flush=True)
@@ -327,6 +339,14 @@ def main() -> None:
                 time.sleep(max(0.2, args.interval))
                 continue
             _print_watch_line(payload)
+            if args.verbose and log_path.exists():
+                with log_path.open("r") as f:
+                    f.seek(log_offset)
+                    chunk = f.read()
+                    log_offset = f.tell()
+                if chunk:
+                    for line in chunk.rstrip().splitlines():
+                        print(f"  {line}")
             if payload.get("status") in {"done", "failed", "dry_run"}:
                 err = payload.get("error")
                 if err:

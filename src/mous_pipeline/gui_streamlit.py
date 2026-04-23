@@ -265,6 +265,22 @@ def _read_run_state(cfg: PipelineConfig, subject: str) -> dict[str, Any] | None:
     return None
 
 
+def _read_live_log_tail(cfg: PipelineConfig, subject: str, *, max_lines: int = 120) -> tuple[str | None, list[str]]:
+    sid = subject.removeprefix("sub-")
+    candidates = [
+        cfg.derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_live.log",
+        cfg.derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_live.log",
+    ]
+    for path in candidates:
+        if path.exists():
+            try:
+                lines = path.read_text().splitlines()
+            except Exception:
+                return str(path), []
+            return str(path), lines[-max_lines:]
+    return None, []
+
+
 def _load_stage_estimates(cfg: PipelineConfig, subject: str, selected: list[str]) -> dict[str, float]:
     """Estimate stage durations from last subject manifest; fallback to defaults."""
     defaults = {stage: 8.0 for stage in selected}
@@ -699,6 +715,14 @@ def _run_section() -> None:
             with st.expander("Live state JSON"):
                 st.json({k: v for k, v in live.items() if k != "_path"})
                 st.caption(f"Source: `{live.get('_path')}`")
+            log_path, log_lines = _read_live_log_tail(cfg, monitor_subject, max_lines=80)
+            with st.expander("Live log tail"):
+                if log_path:
+                    st.caption(f"Source: `{log_path}`")
+                if log_lines:
+                    st.code("\n".join(log_lines), language="text")
+                else:
+                    st.caption("No live log lines yet.")
         else:
             st.caption(f"No live run state found yet for sub-{monitor_subject}.")
 
