@@ -8,6 +8,8 @@ import shlex
 import sys
 from pathlib import Path
 
+import pandas as pd
+
 from .config import load_config
 from .m0_intake.cyberduck import build_duck_download_command, duck_available, execute_duck_command
 from .m0_intake.repocli_rdr import (
@@ -31,6 +33,8 @@ def main() -> None:
     run_parser.add_argument("--skip", default="", help="Comma-separated stage names to skip")
     run_parser.add_argument("--force", action="store_true", help="Ignore existing outputs and recompute")
     run_parser.add_argument("--dry-run", action="store_true", help="Print resolved run plan without processing data")
+    run_parser.add_argument("--include-fmri", action="store_true", help="Include m10/m11 stages")
+    run_parser.add_argument("--include-waves-validation", action="store_true", help="Include m12 stage")
 
     fetch_parser = sub.add_parser("fetch-subject", help="Build or execute Cyberduck duck download command")
     fetch_parser.add_argument("--subject", required=True, help="Subject ID without sub- prefix, e.g., A2003")
@@ -70,7 +74,7 @@ def main() -> None:
     group_parser.add_argument(
         "--derivatives-root",
         default="derivatives/mous_pipeline",
-        help="Derivatives root containing sub-*/m9_orchestration/*_run_manifest.json",
+        help="Derivatives root containing <subject>/m9_orchestration/*_run_manifest.json",
     )
     group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
 
@@ -80,6 +84,10 @@ def main() -> None:
         cfg = load_config(args.config)
         only = {s.strip() for s in args.only.split(",") if s.strip()} or None
         skip = {s.strip() for s in args.skip.split(",") if s.strip()} or None
+        if args.include_fmri:
+            only = (only or set()) | {"m10", "m11"}
+        if args.include_waves_validation:
+            only = (only or set()) | {"m12"}
         result = run_subject(
             args.subject,
             cfg,
@@ -151,12 +159,21 @@ def main() -> None:
     elif args.cmd == "group":
         root = Path(args.derivatives_root)
         metrics_list = []
-        for mf in root.glob("sub-*/m9_orchestration/*_run_manifest.json"):
+        trial_tables = []
+        for mf in root.glob("*/m9_orchestration/*_run_manifest.json"):
             try:
                 payload = json.loads(mf.read_text())
                 metrics = payload.get("metrics", {})
                 if metrics:
                     metrics_list.append(metrics)
+            except Exception:
+                continue
+        for tf in root.glob("*/m8_reports/exports/*_trials.csv"):
+            try:
+                df = pd.read_csv(tf)
+                if not df.empty:
+                    df["subject"] = tf.parts[-4].removeprefix("sub-")
+                    trial_tables.append(df)
             except Exception:
                 continue
         if not metrics_list:
@@ -166,3 +183,8 @@ def main() -> None:
         out_path = root / "group_summary.json"
         out_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote group summary: {out_path}")
+        if trial_tables:
+            group_trials = pd.concat(trial_tables, ignore_index=True)
+            trial_path = root / "group_trials.csv"
+            group_trials.to_csv(trial_path, index=False)
+            print(f"Wrote group trials: {trial_path}")

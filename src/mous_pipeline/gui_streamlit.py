@@ -16,15 +16,19 @@ from mous_pipeline.config import PipelineConfig, load_config
 from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
 from mous_pipeline.m9_orchestration.runner import run_subject
 
-STAGES = ["m1", "m2", "m3", "m4", "m5", "m6a", "m6_extra", "m7", "m8", "m9"]
+STAGES = ["m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m10", "m11", "m12", "m7", "m8", "m9"]
 STAGE_DESCRIPTIONS = {
     "m1": "Parse events TSV and validate trial structure.",
     "m2": "Preprocess task/rest data: notch, resample, ICA, beta-band filter.",
     "m3": "Epoch task data around event onsets.",
     "m4": "Feature extraction (Hilbert analytic signal + PSD summaries).",
+    "m4_trial": "Trial-level MEG metrics (pre-stim beta, N400m, block-aware trial table).",
     "m5": "Optional source-space analysis (requires source.subjects_dir + FreeSurfer data).",
     "m6a": "Compute phase-gradient directions and directional consistency indices.",
     "m6_extra": "Optional extra detectors (CFC, FFT2D, rotational, flow-field).",
+    "m10": "Optional fMRI stage (fMRIPrep orchestration + trialwise GLM + MTG extraction).",
+    "m11": "Optional MEG-fMRI coupling models on joined trial table.",
+    "m12": "Optional two-dipole null validation and source-vs-sensor wave comparison.",
     "m7": "Run circular/permutation statistics for wave consistency and significance.",
     "m8": "Generate the subject HTML report.",
     "m9": "Evaluate pilot gate and derive GO/MARGINAL/NO-GO verdict.",
@@ -263,14 +267,14 @@ def _results_section() -> None:
         return
     _, cfg = cfg_bundle
     root = cfg.derivatives_root
-    subjects = sorted([p.name.replace("sub-", "", 1) for p in root.glob("sub-*") if p.is_dir()]) if root.exists() else []
+    subjects = sorted([p.name.replace("sub-", "", 1) for p in root.iterdir() if p.is_dir()]) if root.exists() else []
     if not subjects:
         st.info("No processed subjects found.")
         return
     default_subject = st.session_state.get("last_run_summary", {}).get("subject")
     default_index = subjects.index(default_subject) if default_subject in subjects else 0
     subject = st.selectbox("Subject", subjects, index=default_index)
-    manifest_path = root / f"sub-{subject}" / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
+    manifest_path = root / subject / "m9_orchestration" / f"sub-{subject}_run_manifest.json"
     if not manifest_path.exists():
         st.warning(f"Manifest not found: {manifest_path}")
         return
@@ -309,7 +313,7 @@ def _results_section() -> None:
         ax.set_title(f"sub-{subject} stage timings")
         st.pyplot(fig)
 
-    report_path = root / f"sub-{subject}" / "m8_reports" / f"sub-{subject}_report.html"
+    report_path = root / subject / "m8_reports" / f"{subject}_report.html"
     st.markdown(f"**HTML report:** `{report_path}`")
 
 

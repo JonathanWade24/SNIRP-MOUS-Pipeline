@@ -47,7 +47,7 @@ def render_subject(
 
     dci_img = ""
     if sliding_t is not None and sliding_dci_z is not None and len(sliding_t) and len(sliding_dci_z):
-        fig, _ = dci_timecourse(sliding_t, sliding_dci_z, sliding_dci_z, "ZINNEN", "ZINNEN")
+        fig, _ = dci_timecourse(sliding_t, sliding_dci_z, None, "ZINNEN")
         dci_img = _fig_to_base64(fig)
 
     rows = "".join(
