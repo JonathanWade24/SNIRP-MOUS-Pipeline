@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -84,6 +85,11 @@ def main() -> None:
     bids_convert_parser = sub.add_parser("bids-convert", help="Add in-place BIDS metadata sidecars for a subject")
     bids_convert_parser.add_argument("--config", required=True)
     bids_convert_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
+    bids_validate_parser = sub.add_parser("bids-validate", help="Run bids-validator on the dataset root")
+    bids_validate_parser.add_argument("--config", default=None, help="YAML config path (uses data_root when set)")
+    bids_validate_parser.add_argument("--root", default=None, help="Override BIDS root path")
+    bids_validate_parser.add_argument("--subject", default=None, help="Optional subject filter, e.g., A2003")
+    bids_validate_parser.add_argument("--verbose", action="store_true", help="Pass --verbose to bids-validator")
     gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
     gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
     gui_parser.add_argument(
@@ -223,6 +229,28 @@ def main() -> None:
         print(f"Created/updated BIDS metadata for {len(bids_paths)} recording(s):")
         for bp in bids_paths:
             print(f"- {bp}")
+    elif args.cmd == "bids-validate":
+        if args.root:
+            root = Path(args.root).expanduser().resolve()
+        elif args.config:
+            root = load_config(args.config).data_root.resolve()
+        else:
+            root = Path(".").resolve()
+        if not root.exists():
+            print(f"BIDS root does not exist: {root}", file=sys.stderr)
+            sys.exit(1)
+        if shutil.which("bids-validator") is None:
+            print("bids-validator is not on PATH. Install Node bids-validator first.", file=sys.stderr)
+            sys.exit(1)
+        cmd = ["bids-validator", str(root)]
+        if args.subject:
+            cmd += ["--subject", args.subject.removeprefix("sub-")]
+        if args.verbose:
+            cmd.append("--verbose")
+        print("Running:", " ".join(shlex.quote(c) for c in cmd))
+        proc = subprocess.run(cmd, check=False)
+        if proc.returncode != 0:
+            sys.exit(proc.returncode)
     elif args.cmd == "gui":
         service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
         if args.base_url_path:

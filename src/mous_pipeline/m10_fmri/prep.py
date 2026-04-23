@@ -102,6 +102,8 @@ def _fmriprep_cmd(subject: str, bids_root: Path, out_dir: Path, work_dir: Path, 
         str(work_dir),
         "--fs-no-reconall",
     ]
+    if bool(getattr(cfg.fmri, "skip_bids_validation", False)):
+        fmriprep_args.append("--skip_bids_validation")
     container_path = str(getattr(cfg.fmri, "fmriprep_container", "")).strip()
     if container_path:
         container = Path(container_path).expanduser()
@@ -153,6 +155,8 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
         str(work_dir),
         "--fs-no-reconall",
     ]
+    if bool(getattr(cfg.fmri, "skip_bids_validation", False)):
+        fmriprep_args.append("--skip_bids_validation")
     if fs_license:
         fmriprep_args += ["--fs-license-file", fs_license]
     container_path = str(getattr(cfg.fmri, "fmriprep_container", "")).strip()

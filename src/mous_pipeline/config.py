@@ -70,6 +70,7 @@ class FmriConfig:
     fmriprep_container: str = ""
     fmriprep_output: str = ""
     skip_fmriprep: bool = True
+    skip_bids_validation: bool = False
     neurodesk_module: str = "fmriprep"
     fs_license_file: str = ""
 
@@ -147,6 +148,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         fmriprep_container=str(fmri_raw.get("fmriprep_container", "")),
         fmriprep_output=str(fmri_raw.get("fmriprep_output", "")),
         skip_fmriprep=bool(fmri_raw.get("skip_fmriprep", True)),
+        skip_bids_validation=bool(fmri_raw.get("skip_bids_validation", False)),
         neurodesk_module=str(fmri_raw.get("neurodesk_module", "fmriprep")),
         fs_license_file=str(fmri_raw.get("fs_license_file", "")),
     )

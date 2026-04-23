@@ -54,6 +54,7 @@ fmri:
   fmriprep_container: ""     # empty = use PATH binary (CVMFS/Neurodesk)
   fmriprep_output: "derivatives/fmriprep"
   skip_fmriprep: false       # set to true once fMRIPrep has already been run successfully
+  skip_bids_validation: false # strict mode: keep false once bids-convert + bids-validate pass
   neurodesk_module: "fmriprep"  # loaded via `ml fmriprep` before calling fmriprep binary
   fs_license_file: ""        # REQUIRED for fMRIPrep: path to FreeSurfer license.txt
                               #   e.g. /neurodesktop-storage/freesurfer/license.txt
