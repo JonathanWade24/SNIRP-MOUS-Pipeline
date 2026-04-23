@@ -30,6 +30,20 @@ def _ensure_bids_dataset_description(bids_root: Path) -> None:
     desc.write_text(json.dumps(payload, indent=2))
 
 
+def _safe_work_dir(cfg, subject: str, bids_root: Path, out_dir: Path) -> Path:
+    """Return a fMRIPrep work dir guaranteed to be outside bids_root."""
+    subject_id = subject.removeprefix("sub-")
+    default_work = out_dir / "work"
+    try:
+        if not default_work.resolve().is_relative_to(bids_root.resolve()):
+            return default_work
+    except Exception:
+        # If resolution/relative checks fail, fall back to external work dir.
+        pass
+    # Keep work products in project derivatives root, outside data_root/BIDS.
+    return cfg.derivatives_root / "_fmriprep_work" / f"sub-{subject_id}"
+
+
 def resolve_subject_bold_path(subject: str, cfg, *, bids_root: Path, fmriprep_out_dir: Path | None = None) -> Path | None:
     """Resolve subject BOLD path from config or nearby standard locations."""
     configured = str(getattr(cfg.fmri, "bold_path", "")).strip()
@@ -124,7 +138,7 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
         return out_dir
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = out_dir / "work"
+    work_dir = _safe_work_dir(cfg, subject, bids_root, out_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
     neurodesk_module = str(getattr(cfg.fmri, "neurodesk_module", "")).strip()
