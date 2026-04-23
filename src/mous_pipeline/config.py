@@ -12,6 +12,7 @@ import yaml
 @dataclass
 class PreprocessConfig:
     backend: str = "inhouse"
+    bids_pipeline_deriv_root: str = ""
     notch_freqs: list[float] = field(default_factory=lambda: [50.0, 100.0, 150.0])
     resample_hz: float = 300.0
     ica_n_components: int = 40

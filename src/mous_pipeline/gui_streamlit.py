@@ -198,6 +198,11 @@ MODULE_CATALOG = {
         "inputs": "Real DCI + wave_validation config.",
         "outputs": "Null comparison metrics (`aim3_two_dipole_z`, null summary).",
     },
+    "bids_pipeline_backend": {
+        "purpose": "Optional backend for m2/m3/m5 using MNE-BIDS-Pipeline preprocessing/source steps.",
+        "inputs": "BIDS data + generated MNE-BIDS config + `preprocess.backend: mne_bids_pipeline`.",
+        "outputs": "Derivative epochs/source outputs under `preprocess.bids_pipeline_deriv_root` or default deriv path.",
+    },
 }
 
 
@@ -373,7 +378,12 @@ def _setup_section() -> None:
     st.divider()
     st.subheader("One-time RDR credentials setup")
     repocli_ok = shutil.which("repocli") is not None
+    mne_bids_pipeline_ok = shutil.which("mne_bids_pipeline") is not None
     st.markdown(f"**repocli on PATH:** {'yes' if repocli_ok else 'no — run `setup.sh` first'}")
+    st.markdown(
+        f"**mne_bids_pipeline on PATH:** "
+        f"{'yes' if mne_bids_pipeline_ok else 'no — install with `pip install -e \".[bids]\"`'}"
+    )
     with st.expander("repocli one-time setup commands"):
         st.code(
             "repocli config\n"
@@ -598,7 +608,7 @@ def _run_section() -> None:
         st.dataframe(rows, use_container_width=True, hide_index=True)
     with st.expander("Full module catalog (m0-m12)"):
         module_rows = []
-        for module_id in [f"m{i}" for i in range(0, 13)]:
+        for module_id in [* [f"m{i}" for i in range(0, 13)], "bids_pipeline_backend"]:
             meta = MODULE_CATALOG.get(module_id, {"purpose": "", "inputs": "", "outputs": ""})
             module_rows.append(
                 {

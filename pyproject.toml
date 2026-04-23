@@ -31,6 +31,10 @@ mous-pipeline = "mous_pipeline.cli:main"
 gui = [
   "streamlit>=1.35",
 ]
+bids = [
+  "mne-bids-pipeline",
+  "mne-bids>=0.14",
+]
 fmri = [
   "nilearn>=0.10",
   "nibabel>=5",

@@ -149,17 +149,27 @@ def run_subject(
         return result
 
     t0 = perf_counter()
-    task_raw = mne.io.read_raw_ctf(str(task_path), preload=True, system_clock="truncate", verbose="WARNING")
-    task_raw.apply_gradient_compensation(3)
-    task_raw = apply_notch_and_resample(task_raw, cfg)
-    task_raw, ica = fit_and_apply(task_raw, cfg)
-    task_raw = apply_band(task_raw, 13, 30)
+    backend = getattr(cfg.preprocess, "backend", "inhouse")
+    task_raw = None
+    ica = None
+    if backend == "mne_bids_pipeline":
+        from ..m2_preprocess.bids_pipeline_backend import run_preprocessing
+
+        epochs, epochs_rest = run_preprocessing(subject, cfg)
+    else:
+        task_raw = mne.io.read_raw_ctf(str(task_path), preload=True, system_clock="truncate", verbose="WARNING")
+        task_raw.apply_gradient_compensation(3)
+        task_raw = apply_notch_and_resample(task_raw, cfg)
+        task_raw, ica = fit_and_apply(task_raw, cfg)
+        task_raw = apply_band(task_raw, 13, 30)
     result.stage_timings_s["m2"] = perf_counter() - t0
     if progress_callback and _stage_selected("m2", only, skip):
         progress_callback("m2")
 
     t0 = perf_counter()
-    epochs = make_epochs(task_raw, trials, cfg)
+    if backend != "mne_bids_pipeline":
+        assert task_raw is not None
+        epochs = make_epochs(task_raw, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
     if progress_callback and _stage_selected("m3", only, skip):
         progress_callback("m3")
@@ -194,13 +204,15 @@ def run_subject(
     else:
         result.skipped_stages.append("m4_trial")
 
-    rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
-    rest_raw.apply_gradient_compensation(3)
-    rest_raw = apply_notch_and_resample(rest_raw, cfg)
-    ica.apply(rest_raw)
-    rest_raw = apply_band(rest_raw, 13, 30)
-    epoch_len = cfg.epoching.tmax - cfg.epoching.tmin
-    epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
+    if backend != "mne_bids_pipeline":
+        rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
+        rest_raw.apply_gradient_compensation(3)
+        rest_raw = apply_notch_and_resample(rest_raw, cfg)
+        assert ica is not None
+        ica.apply(rest_raw)
+        rest_raw = apply_band(rest_raw, 13, 30)
+        epoch_len = cfg.epoching.tmax - cfg.epoching.tmin
+        epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
     result.metrics["n_rest"] = len(epochs_rest)
 
     t0 = perf_counter()
@@ -228,33 +240,46 @@ def run_subject(
         trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
 
     if _stage_selected("m5", only, skip):
-        source_cfg = getattr(cfg, "source", None)
-        if source_cfg and source_cfg.subjects_dir:
+        if backend == "mne_bids_pipeline":
             t0 = perf_counter()
             try:
-                fwd, src = build_forward_model(subject, task_raw, cfg)
-                stcs = compute_inverse(epochs["ZINNEN"], fwd, cfg)
-                labels = mne.read_labels_from_annot(
-                    "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject}",
-                    parc="aparc",
-                    subjects_dir=source_cfg.subjects_dir,
-                )
-                roi_ts = extract_roi_timeseries(stcs, src, labels[: min(len(labels), 10)])
-                result.metrics["m5_n_labels"] = len(roi_ts)
-                result.metrics["m5_n_stcs"] = len(stcs)
-                src_xy = source_positions_xy(src)
-                stc_data = stcs_to_matrix(stcs)
-                source_dirs, source_dci = epochs_to_directions(epochs["ZINNEN"], src_xy, data_override=stc_data)
-                result.metrics["source_dci_zinnen"] = float(np.mean(source_dci))
-                result.metrics["source_directions_count"] = int(len(source_dirs))
+                from ..m2_preprocess.bids_pipeline_backend import run_source
+
+                result.metrics.update(run_source(subject, cfg))
             except Exception as exc:
                 result.metrics["m5_error"] = str(exc)
             result.stage_timings_s["m5"] = perf_counter() - t0
             if progress_callback:
                 progress_callback("m5")
         else:
-            result.metrics["m5_skipped_reason"] = "source.subjects_dir not configured"
-            result.skipped_stages.append("m5")
+            source_cfg = getattr(cfg, "source", None)
+            if source_cfg and source_cfg.subjects_dir:
+                t0 = perf_counter()
+                try:
+                    assert task_raw is not None
+                    fwd, src = build_forward_model(subject, task_raw, cfg)
+                    stcs = compute_inverse(epochs["ZINNEN"], fwd, cfg)
+                    labels = mne.read_labels_from_annot(
+                        "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject}",
+                        parc="aparc",
+                        subjects_dir=source_cfg.subjects_dir,
+                    )
+                    roi_ts = extract_roi_timeseries(stcs, src, labels[: min(len(labels), 10)])
+                    result.metrics["m5_n_labels"] = len(roi_ts)
+                    result.metrics["m5_n_stcs"] = len(stcs)
+                    src_xy = source_positions_xy(src)
+                    stc_data = stcs_to_matrix(stcs)
+                    source_dirs, source_dci = epochs_to_directions(epochs["ZINNEN"], src_xy, data_override=stc_data)
+                    result.metrics["source_dci_zinnen"] = float(np.mean(source_dci))
+                    result.metrics["source_directions_count"] = int(len(source_dirs))
+                except Exception as exc:
+                    result.metrics["m5_error"] = str(exc)
+                result.stage_timings_s["m5"] = perf_counter() - t0
+                if progress_callback:
+                    progress_callback("m5")
+            else:
+                result.metrics["m5_skipped_reason"] = "source.subjects_dir not configured"
+                result.skipped_stages.append("m5")
     else:
         result.skipped_stages.append("m5")
 
