@@ -1,4 +1,4 @@
-data_root: "."
+data_root: "~/MOUS/Pipeline WIP/mous_data/"
 derivatives_root: "derivatives/mous_pipeline"
 subjects: []
 # RDR (Repocli): one-time `repocli config` with base URL https://webdav.data.ru.nl

@@ -283,6 +283,15 @@ def _smart_defaults(cfg: PipelineConfig) -> list[str]:
     return [s for s in STAGES if s in defaults]
 
 
+def _discover_config_files() -> list[str]:
+    """Return repo-local YAML config files for the Setup picker."""
+    cfg_dir = Path.cwd() / "configs"
+    if not cfg_dir.exists():
+        return []
+    files = sorted(list(cfg_dir.glob("*.yaml")) + list(cfg_dir.glob("*.yml")))
+    return [str(p.relative_to(Path.cwd())) for p in files]
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 def _sidebar() -> None:
@@ -326,6 +335,20 @@ def _sidebar() -> None:
 
 def _setup_section() -> None:
     st.header("Setup")
+    discovered = _discover_config_files()
+    custom_opt = "(custom path)"
+    picker_options = discovered + [custom_opt]
+    current = st.session_state.get("config_path", "")
+    default_idx = picker_options.index(current) if current in picker_options else len(picker_options) - 1
+
+    selected_cfg = st.selectbox(
+        "Available config files",
+        picker_options,
+        index=default_idx,
+        help="Pick a config from `configs/`, or choose custom path.",
+    )
+    if selected_cfg != custom_opt:
+        st.session_state["config_path"] = selected_cfg
 
     col1, col2 = st.columns([3, 1])
     with col1:
