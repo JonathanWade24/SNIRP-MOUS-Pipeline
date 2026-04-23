@@ -38,6 +38,7 @@ def test_convert_subject_to_bids_writes_for_task_and_rest(monkeypatch, tmp_path:
     cfg = PipelineConfig(data_root=data_root)
     bids_paths = convert_subject_to_bids("A2002", cfg)
     assert len(bids_paths) == 2
-    assert len(written) == 2
-    assert (data_root / "sub-A2002" / "meg" / "sub-A2002_task-auditory_meg.json").exists()
-    assert (data_root / "sub-A2002" / "meg" / "sub-A2002_task-rest_meg.json").exists()
+    # When CTF is already at the BIDS path, the converter skips `write_raw_bids` and only
+    # normalizes sidecars. Non-zero "written" would require a legacy source path != target.
+    assert len(written) == 0
+    assert (data_root / "dataset_description.json").exists()
