@@ -24,10 +24,11 @@ def rose_plot(ax, angles, title, color, n_bins=36):
     ax.set_rticks([])
 
 
-def dci_timecourse(t, dci_a, dci_b, label_a="ZINNEN", label_b="WOORDEN"):
+def dci_timecourse(t, dci_a, dci_b=None, label_a="ZINNEN", label_b="WOORDEN"):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(t, dci_a, lw=2, label=label_a)
-    ax.plot(t, dci_b, lw=2, label=label_b)
+    if dci_b is not None:
+        ax.plot(t, dci_b, lw=2, label=label_b)
     ax.axvline(0, color="k", ls="--", lw=1, label="Audio onset")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Directional Consistency Index")

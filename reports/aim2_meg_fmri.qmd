@@ -1,0 +1,30 @@
+---
+format: html
+params:
+  subject: "A2002"
+  export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
+---
+
+## Aim 2 MEG-fMRI Coupling (Left MTG)
+
+```{python}
+import pandas as pd
+from pathlib import Path
+subject = params["subject"]
+export_dir = Path(params["export_dir"])
+joined = pd.read_csv(export_dir / f"{subject}_trials_joined.csv")
+joined.head()
+```
+
+```{r}
+library(ggplot2)
+library(lmerTest)
+library(readr)
+subject <- params$subject
+export_dir <- params$export_dir
+joined <- read_csv(file.path(export_dir, paste0(subject, "_trials_joined.csv")), show_col_types = FALSE)
+joined$condition <- factor(joined$condition)
+fit <- lmer(mtg_beta ~ prestim_beta + n400m + dci_trial + condition + pos_in_block + (1|block_id), data = joined)
+print(summary(fit))
+ggplot(joined, aes(x=prestim_beta, y=mtg_beta, color=condition)) + geom_point(alpha=.6) + geom_smooth(method="lm", se=FALSE)
+```

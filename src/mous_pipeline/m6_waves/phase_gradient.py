@@ -33,10 +33,13 @@ def directional_consistency_index(directions: np.ndarray) -> float:
     return float(np.abs(np.mean(np.exp(1j * directions))))
 
 
-def epochs_to_directions(epochs_obj, sensor_xy, meg_picks):
+def epochs_to_directions(epochs_obj, sensor_xy, meg_picks=None, data_override: np.ndarray | None = None):
     all_dirs = []
     all_dci = []
-    data = epochs_obj.get_data(picks=meg_picks)
+    if data_override is None:
+        data = epochs_obj.get_data(picks=meg_picks)
+    else:
+        data = data_override
     for ep_data in data:
         dirs, _ = compute_wave_directions(ep_data, sensor_xy)
         all_dirs.append(dirs)

@@ -17,14 +17,30 @@ def parse_events(tsv_path: str, *, strict: bool = True) -> pd.DataFrame:
         raise ValueError(f"Events TSV missing required columns: {sorted(missing)}")
 
     conds: list[str | None] = []
+    block_ids: list[int | None] = []
+    block_positions: list[int | None] = []
     current: str | None = None
+    current_block_id = -1
+    current_pos = 0
     seen_conditions: set[str] = set()
     for _, row in df.iterrows():
         if row["type"] == "Picture" and row["value"] in CONDITION_IDS:
             current = row["value"]
+            current_block_id += 1
+            current_pos = 0
             seen_conditions.add(current)
         conds.append(current)
+        if current is None:
+            block_ids.append(None)
+            block_positions.append(None)
+        else:
+            block_ids.append(current_block_id)
+            block_positions.append(current_pos)
+            if row["type"] == "Nothing" and isinstance(row["value"], str) and "Audio onset" in row["value"]:
+                current_pos += 1
     df["condition"] = conds
+    df["block_id"] = block_ids
+    df["pos_in_block"] = block_positions
 
     if strict and seen_conditions != set(CONDITION_IDS):
         raise ValueError(
@@ -45,7 +61,7 @@ def parse_events(tsv_path: str, *, strict: bool = True) -> pd.DataFrame:
     if strict and unknown_conditions:
         raise ValueError(f"Audio onset rows contain unknown conditions: {sorted(unknown_conditions)}")
 
-    return audio[["onset", "sample", "condition"]]
+    return audio[["onset", "sample", "condition", "block_id", "pos_in_block"]]
 
 
 def make_events_array(trials: pd.DataFrame, sfreq: float) -> np.ndarray:
@@ -56,3 +72,10 @@ def make_events_array(trials: pd.DataFrame, sfreq: float) -> np.ndarray:
             trials["condition"].map(CONDITION_IDS).astype(int),
         ]
     )
+
+
+def make_events_metadata(trials: pd.DataFrame) -> pd.DataFrame:
+    """Return event-aligned trial metadata for epoch-level analyses."""
+    return trials.reset_index(drop=True).assign(trial_id=lambda d: np.arange(len(d), dtype=int))[
+        ["trial_id", "condition", "block_id", "pos_in_block"]
+    ]
