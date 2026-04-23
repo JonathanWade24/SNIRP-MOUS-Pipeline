@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -136,7 +137,8 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
         subprocess.run(cmd, check=True)
     elif neurodesk_module:
         # Load Neurodesk/Lmod module and run fmriprep in the same shell.
-        shell_cmd = f"ml {neurodesk_module} && fmriprep {' '.join(fmriprep_args)}"
+        quoted_args = " ".join(shlex.quote(arg) for arg in fmriprep_args)
+        shell_cmd = f"ml {shlex.quote(neurodesk_module)} && fmriprep {quoted_args}"
         subprocess.run(shell_cmd, shell=True, check=True, executable="/bin/bash",
                        env={**os.environ, "MODULEPATH": os.environ.get("MODULEPATH", "")})
     else:
