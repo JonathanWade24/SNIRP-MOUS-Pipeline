@@ -2,7 +2,7 @@ data_root: "."
 derivatives_root: "derivatives/mous_pipeline"
 subjects: []
 # RDR (Repocli): one-time `repocli config` with base URL https://webdav.data.ru.nl
-# Then: mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+# Then: mous-pipeline fetch-rdr --config configs/pilot_A2003_fmri.yaml --subject A2003 --execute
 rdr:
   collection_path: "dccn/DSC_3011020.09_236_v1"
 preprocess:
@@ -25,15 +25,15 @@ features:
     beta: [13.0, 30.0]
     gamma: [30.0, 80.0]
 
-# Optional Aim 2 fMRI coupling configuration.
-# fmri:
-#   bold_path: "/home/jovyan/MAUS/Pipeline WIP/mous_data/sub-A2002/func/sub-A2002_task-auditory_bold.nii.gz"
-#   tr: 2.0
-#   atlas: "glasser"
-#   roi: "L_TE1a"
-#   fmriprep_container: "/neurodesktop-storage/containers/fmriprep.sif"
-#   fmriprep_output: "derivatives/fmriprep"
-#   skip_fmriprep: true
+# Aim 2 fMRI coupling configuration.
+fmri:
+  bold_path: ""
+  tr: 2.0
+  atlas: "glasser"
+  roi: "L_TE1a"
+  fmriprep_container: ""
+  fmriprep_output: "derivatives/fmriprep"
+  skip_fmriprep: true
 
 # Optional Aim 3 null-wave validation stage.
 # wave_validation:

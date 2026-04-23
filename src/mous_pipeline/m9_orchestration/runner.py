@@ -316,26 +316,40 @@ def run_subject(
         t0 = perf_counter()
         try:
             fmri_cfg = getattr(cfg, "fmri", None)
-            if fmri_cfg and fmri_cfg.bold_path:
+            if fmri_cfg:
                 from ..m10_fmri.glm import trialwise_betas
-                from ..m10_fmri.prep import run_fmriprep, validate_tr_from_sidecar
-                from ..m10_fmri.roi import extract_mtg_beta
+                from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
 
-                sidecar = Path(str(fmri_cfg.bold_path).replace(".nii.gz", ".json"))
-                if sidecar.exists():
-                    validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
-                run_fmriprep(subject, cfg, bids_root=cfg.data_root)
-                beta_tbl = trialwise_betas(str(fmri_cfg.bold_path), trial_df, fmri_cfg.tr)
-                mtg_beta = np.linspace(0.0, 1.0, len(beta_tbl))
-                try:
-                    mtg_beta = extract_mtg_beta([str(fmri_cfg.bold_path)] * len(beta_tbl), fmri_cfg.atlas, fmri_cfg.roi)
-                except Exception:
-                    pass
-                beta_tbl["mtg_beta"] = mtg_beta
-                joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
-                result.metrics["m10_n_trials_joined"] = int(len(joined_df))
+                fmriprep_out = run_fmriprep(subject, cfg, bids_root=cfg.data_root)
+                bold_path = resolve_subject_bold_path(
+                    subject,
+                    cfg,
+                    bids_root=cfg.data_root,
+                    fmriprep_out_dir=fmriprep_out,
+                )
+                if bold_path is None:
+                    expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
+                    expected_func_dir.mkdir(parents=True, exist_ok=True)
+                    result.metrics["m10_skipped_reason"] = (
+                        "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
+                        f"{fmriprep_out}/sub-{subject.removeprefix('sub-')}/func. "
+                        f"Created expected directory: {expected_func_dir}"
+                    )
+                else:
+                    sidecar = Path(str(bold_path).replace(".nii.gz", ".json"))
+                    if sidecar.exists():
+                        validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
+                    beta_tbl = trialwise_betas(
+                        str(bold_path),
+                        trial_df,
+                        fmri_cfg.tr,
+                        atlas=fmri_cfg.atlas,
+                        roi=fmri_cfg.roi,
+                    )
+                    joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
+                    result.metrics["m10_n_trials_joined"] = int(len(joined_df))
             else:
-                result.metrics["m10_skipped_reason"] = "fmri.bold_path not configured"
+                result.metrics["m10_skipped_reason"] = "fmri configuration missing"
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
         result.stage_timings_s["m10"] = perf_counter() - t0
