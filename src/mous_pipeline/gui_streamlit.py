@@ -16,6 +16,7 @@ import streamlit as st
 from mous_pipeline.config import PipelineConfig, load_config
 from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
 from mous_pipeline.m9_orchestration.runner import run_subject
+from mous_pipeline.stage_dependencies import STAGE_DEPENDENCIES, list_missing_stage_dependencies
 
 # ── Stage catalogue ──────────────────────────────────────────────────────────
 
@@ -55,22 +56,6 @@ STAGE_DESCRIPTIONS = {
     "m7":       "Rayleigh + permutation significance for wave consistency across conditions.",
     "m8":       "Embedded-figure HTML dashboard + aim-specific Quarto reports.",
     "m9":       "Evaluate pilot gate criteria and return GO / MARGINAL / NO-GO verdict.",
-}
-
-STAGE_DEPENDENCIES = {
-    "m2": {"m1"},
-    "m3": {"m2"},
-    "m4": {"m3"},
-    "m4_trial": {"m3"},
-    "m5": {"m3"},
-    "m6a": {"m3"},
-    "m6_extra": {"m4"},
-    "m7": {"m6a"},
-    "m8": {"m7"},
-    "m9": {"m7"},
-    "m10": {"m4_trial"},
-    "m11": {"m10"},
-    "m12": {"m6a"},
 }
 
 STAGE_IO = {
@@ -207,13 +192,7 @@ MODULE_CATALOG = {
 
 
 def _validate_stage_selection(selected: list[str]) -> list[str]:
-    errors: list[str] = []
-    selected_set = set(selected)
-    for stage in selected:
-        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
-        if missing:
-            errors.append(f"{stage} requires {', '.join(missing)}")
-    return errors
+    return list_missing_stage_dependencies(selected)
 
 
 def _planned_outputs_for_subject(subject: str, selected: list[str], cfg: PipelineConfig) -> list[str]:
@@ -650,11 +629,13 @@ def _run_section() -> None:
 
         skip = set(STAGES) - set(selected)
         history: list[dict] = st.session_state.get("run_history", [])
+        current_run_summaries: list[dict] = []
 
         for subj in subjects_to_run:
             st.markdown(f"---\n#### sub-{subj}")
             summary = _run_one(subj, cfg, cfg_path, skip, selected, force)
             history.append(summary)
+            current_run_summaries.append(summary)
             if summary["ok"]:
                 v = summary["verdict"]
                 fn = st.success if v == "GO" else (st.warning if v == "MARGINAL" else st.error)
@@ -669,7 +650,7 @@ def _run_section() -> None:
             st.divider()
             st.subheader("Batch summary")
             rows = []
-            for h in [e for e in history if e["subject"] in subjects_to_run]:
+            for h in current_run_summaries:
                 rows.append({
                     "subject": h["subject"],
                     "verdict": h.get("verdict"),
@@ -741,8 +722,14 @@ def _results_section() -> None:
         st.metric("ZINNEN", metrics.get("n_zinnen", "—"))
         st.metric("WOORDEN", metrics.get("n_woorden", "—"))
     with c2:
-        st.metric("DCI ZINNEN", _fmt(metrics.get("dci_zinnen_pooled") or metrics.get("dci_zinnen")))
-        st.metric("DCI WOORDEN", _fmt(metrics.get("dci_woorden_pooled") or metrics.get("dci_woorden")))
+        dci_zinnen = metrics.get("dci_zinnen_pooled")
+        if dci_zinnen is None:
+            dci_zinnen = metrics.get("dci_zinnen")
+        dci_woorden = metrics.get("dci_woorden_pooled")
+        if dci_woorden is None:
+            dci_woorden = metrics.get("dci_woorden")
+        st.metric("DCI ZINNEN", _fmt(dci_zinnen))
+        st.metric("DCI WOORDEN", _fmt(dci_woorden))
         st.metric("p task vs rest", _fmt(metrics.get("p_task_vs_rest")))
     with c3:
         st.metric("Rayleigh p (ZINNEN)", _fmt(metrics.get("p_rayleigh_zinnen")))

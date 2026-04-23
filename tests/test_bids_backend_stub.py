@@ -11,8 +11,15 @@ def test_run_preprocessing_calls_pipeline_and_returns_epochs(monkeypatch, tmp_pa
         pass
 
     class DummyRaw:
+        ica_applied = False
+
         def apply_gradient_compensation(self, _):
             return None
+
+    class DummyICA:
+        def apply(self, raw):
+            raw.ica_applied = True
+            return raw
 
     calls: list[list[str]] = []
 
@@ -20,8 +27,16 @@ def test_run_preprocessing_calls_pipeline_and_returns_epochs(monkeypatch, tmp_pa
     monkeypatch.setattr(backend, "make_pseudo_epochs", lambda raw, epoch_len: "rest-epochs")
     monkeypatch.setattr(backend, "apply_notch_and_resample", lambda raw, cfg: raw)
     monkeypatch.setattr(backend, "apply_band", lambda raw, lo, hi: raw)
+    monkeypatch.setattr(backend, "fit_and_apply", lambda raw, cfg: (raw, DummyICA()))
     monkeypatch.setattr(backend.mne, "read_epochs", lambda *args, **kwargs: DummyEpochs())
-    monkeypatch.setattr(backend.mne.io, "read_raw_ctf", lambda *args, **kwargs: DummyRaw())
+    rest_raw = DummyRaw()
+
+    def fake_read_raw_ctf(path, *args, **kwargs):
+        if "task-auditory" in str(path):
+            return DummyRaw()
+        return rest_raw
+
+    monkeypatch.setattr(backend.mne.io, "read_raw_ctf", fake_read_raw_ctf)
     monkeypatch.setattr(backend, "_find_task_epochs", lambda deriv_root, subject: tmp_path / "dummy-epo.fif")
 
     def fake_run(cmd, check, capture_output, text):
@@ -40,6 +55,7 @@ def test_run_preprocessing_calls_pipeline_and_returns_epochs(monkeypatch, tmp_pa
     task_epochs, rest_epochs = backend.run_preprocessing("A2002", cfg)
     assert isinstance(task_epochs, DummyEpochs)
     assert rest_epochs == "rest-epochs"
+    assert rest_raw.ica_applied is True
     assert calls
     assert calls[0][0] == "mne_bids_pipeline"
     assert any("--steps=preprocessing" in part for part in calls[0])

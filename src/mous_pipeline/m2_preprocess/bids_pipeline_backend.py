@@ -9,8 +9,9 @@ import mne
 import numpy as np
 
 from ..m0_intake.bids_convert import convert_subject_to_bids
-from ..m0_intake.naming import rest_ds
+from ..m0_intake.naming import rest_ds, task_ds
 from ..m2_preprocess.filter import apply_band, apply_notch_and_resample
+from ..m2_preprocess.ica import fit_and_apply
 from ..m3_epoching.rest import make_pseudo_epochs
 
 
@@ -93,6 +94,17 @@ def run_preprocessing(subject: str, cfg) -> tuple[mne.Epochs, mne.Epochs]:
         raise FileNotFoundError(f"Could not find MNE-BIDS-Pipeline epochs for sub-{_subject_label(subject)} in {deriv_root}")
     task_epochs = mne.read_epochs(str(task_epochs_path), preload=True, verbose="ERROR")
 
+    # Match inhouse behavior: fit ICA on task recording and apply it to rest.
+    task_raw_for_ica = mne.io.read_raw_ctf(
+        str(task_ds(_subject_label(subject), cfg.data_root)),
+        preload=True,
+        system_clock="truncate",
+        verbose="WARNING",
+    )
+    task_raw_for_ica.apply_gradient_compensation(3)
+    task_raw_for_ica = apply_notch_and_resample(task_raw_for_ica, cfg)
+    _, ica = fit_and_apply(task_raw_for_ica, cfg)
+
     rest_raw = mne.io.read_raw_ctf(
         str(rest_ds(_subject_label(subject), cfg.data_root)),
         preload=True,
@@ -101,6 +113,7 @@ def run_preprocessing(subject: str, cfg) -> tuple[mne.Epochs, mne.Epochs]:
     )
     rest_raw.apply_gradient_compensation(3)
     rest_raw = apply_notch_and_resample(rest_raw, cfg)
+    ica.apply(rest_raw)
     rest_raw = apply_band(rest_raw, 13, 30)
     epoch_len = cfg.epoching.tmax - cfg.epoching.tmin
     rest_epochs = make_pseudo_epochs(rest_raw, epoch_len)

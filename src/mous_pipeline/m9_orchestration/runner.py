@@ -45,25 +45,8 @@ from ..m11_coupling.regress import run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
 from ..m12_wave_validation.simulate import simulate_two_dipoles
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
+from ..stage_dependencies import STAGE_ORDER, list_missing_stage_dependencies
 from .gating import PilotGate
-
-STAGE_ORDER = ["m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m10", "m11", "m12", "m7", "m8", "m9"]
-STAGE_DEPENDENCIES: dict[str, set[str]] = {
-    "m2": {"m1"},
-    "m3": {"m2"},
-    "m4": {"m3"},
-    "m4_trial": {"m3"},
-    "m5": {"m3"},
-    "m6a": {"m3"},
-    "m6_extra": {"m4"},
-    "m7": {"m6a"},
-    "m8": {"m7"},
-    "m9": {"m7"},
-    "m10": {"m4_trial"},
-    "m11": {"m10"},
-    "m12": {"m6a"},
-}
-
 
 @dataclass
 class RunResult:
@@ -93,12 +76,7 @@ def _resolve_path(cfg, subject: str, key: str, fallback: Path) -> Path:
 
 
 def _validate_stage_dependencies(selected: list[str]) -> None:
-    selected_set = set(selected)
-    errs = []
-    for stage in selected:
-        missing = sorted(dep for dep in STAGE_DEPENDENCIES.get(stage, set()) if dep not in selected_set)
-        if missing:
-            errs.append(f"{stage} requires {', '.join(missing)}")
+    errs = list_missing_stage_dependencies(selected)
     if errs:
         raise ValueError("Invalid stage selection: " + "; ".join(errs))
 

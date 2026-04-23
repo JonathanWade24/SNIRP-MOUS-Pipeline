@@ -271,7 +271,7 @@ def main() -> None:
                     full_urls.append(f"{host.rstrip('/')}{proxy_path}")
         for url in dict.fromkeys(full_urls):
             print(f"- Full URL: {url}")
-        print("- If using local browser from same machine: http://localhost:8501")
+        print(f"- If using local browser from same machine: http://localhost:{args.port}")
         print("")
-        print("Tip: stop old instances with `lsof -ti :8501 | xargs -r kill -9`.")
+        print(f"Tip: stop old instances with `lsof -ti :{args.port} | xargs -r kill -9`.")
         subprocess.run(cmd, check=False)
