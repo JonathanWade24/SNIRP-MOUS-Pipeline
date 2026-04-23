@@ -10,10 +10,18 @@ import subprocess
 from pathlib import Path
 
 
-def _resolve_output_dir(path_value: str, bids_root: Path) -> Path:
+def _resolve_output_dir(path_value: str, bids_root: Path, project_root: Path | None = None) -> Path:
+    """Resolve *path_value* to an absolute path.
+
+    Relative paths are anchored to *project_root* (the pipeline's working
+    directory) rather than *bids_root*, because bids_root may contain spaces
+    that FSL/ANTs cannot handle.  If *project_root* is None, falls back to
+    ``Path.cwd()``.
+    """
     out_dir = Path(path_value).expanduser()
     if not out_dir.is_absolute():
-        out_dir = (bids_root / out_dir).resolve()
+        base = project_root if project_root is not None else Path.cwd()
+        out_dir = (base / out_dir).resolve()
     return out_dir
 
 
@@ -126,9 +134,10 @@ def _assert_no_spaces(path: Path, label: str) -> None:
         raise ValueError(
             f"fMRIPrep cannot run because {label} contains a space:\n"
             f"  {path}\n"
-            "Create a symlink without spaces and point data_root at it, e.g.:\n"
-            "  ln -s '/home/jovyan/MOUS/Pipeline WIP/mous_data' /home/jovyan/mous_data\n"
-            "Then set  data_root: '~/mous_data'  in your config."
+            "FSL and ANTs split on spaces in command-line arguments.\n"
+            "Fix: set fmri.fmriprep_output to an absolute path with no spaces, e.g.:\n"
+            "  fmriprep_output: '~/MOUS/Sandbox/MOUS/derivatives/fmriprep'\n"
+            "Or create a symlink:  ln -s '/path/with spaces/data' /path/without/spaces"
         )
 
 
@@ -145,7 +154,8 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
     """
     if not str(cfg.fmri.fmriprep_output).strip():
         raise ValueError("fmri.fmriprep_output is required.")
-    out_dir = _resolve_output_dir(cfg.fmri.fmriprep_output, bids_root)
+    project_root = Path.cwd()
+    out_dir = _resolve_output_dir(cfg.fmri.fmriprep_output, bids_root, project_root)
     _ensure_bids_dataset_description(bids_root)
     if cfg.fmri.skip_fmriprep:
         out_dir.mkdir(parents=True, exist_ok=True)
