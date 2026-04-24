@@ -108,6 +108,14 @@ def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
+def _run_manifest_candidates(derivatives_root: Path, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_manifest.json",
+        derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_manifest.json",
+    ]
+
+
 def _latest_existing_path(candidates: list[Path]) -> Path | None:
     existing = [p for p in candidates if p.exists()]
     if not existing:
@@ -120,6 +128,29 @@ def _fmt_dur(seconds: float) -> str:
         return f"{seconds:.0f}s"
     m, s = divmod(int(seconds), 60)
     return f"{m}m {s:02d}s"
+
+
+def _collect_stage_warnings(metrics: dict) -> list[str]:
+    """Return human-readable warnings for silent per-stage failures.
+
+    Accepts a metrics dict (from run_manifest.json → metrics, or from
+    SubjectResult.metrics).  These are errors that don't abort the pipeline
+    but must be visible to the operator after the run completes.
+    """
+    warnings: list[str] = []
+    m10_err = metrics.get("m10_error")
+    if m10_err:
+        warnings.append(
+            f"m10 (fMRI GLM) failed silently — m10_error={m10_err!r}. "
+            "MEG-fMRI trial table was not produced; m11 was skipped."
+        )
+    m10_skip = metrics.get("m10_skipped_reason")
+    if m10_skip:
+        warnings.append(f"m10 skipped — {m10_skip}")
+    m11_skip = metrics.get("m11_skipped_reason")
+    if m11_skip:
+        warnings.append(f"m11 skipped — {m11_skip}")
+    return warnings
 
 
 def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> None:
@@ -515,6 +546,16 @@ def main() -> None:
                 err = payload.get("error")
                 if err:
                     print(f"error: {err}", file=sys.stderr)
+                # Surface silent per-stage warnings from the run manifest metrics
+                manifest_candidates = _run_manifest_candidates(cfg.derivatives_root, args.subject)
+                manifest_path = _latest_existing_path(manifest_candidates)
+                if manifest_path and manifest_path.exists():
+                    try:
+                        manifest_metrics = json.loads(manifest_path.read_text()).get("metrics", {})
+                        for w in _collect_stage_warnings(manifest_metrics):
+                            print(f"warning: {w}", file=sys.stderr)
+                    except Exception:
+                        pass
                 break
     elif args.cmd == "fetch-subject":
         cmd = build_duck_download_command(
