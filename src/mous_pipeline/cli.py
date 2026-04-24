@@ -138,6 +138,15 @@ def _collect_stage_warnings(metrics: dict) -> list[str]:
     but must be visible to the operator after the run completes.
     """
     warnings: list[str] = []
+    m5_err = metrics.get("m5_error")
+    if m5_err:
+        warnings.append(
+            f"m5 (source reconstruction) failed - m5_error={m5_err!r}. "
+            "Source-space outputs were not produced."
+        )
+    m5_skip = metrics.get("m5_skipped_reason")
+    if m5_skip:
+        warnings.append(f"m5 skipped - {m5_skip}")
     m10_err = metrics.get("m10_error")
     if m10_err:
         warnings.append(
@@ -157,6 +166,7 @@ def _verify_run_manifest(
     manifest_payload: dict,
     *,
     require_skip_m5: bool = False,
+    require_m5: bool = False,
     strict_mode: bool = False,
 ) -> list[str]:
     errors: list[str] = []
@@ -166,7 +176,17 @@ def _verify_run_manifest(
         errors.append(f"run_status must be done/completed_with_skips, got {run_status!r}")
     skipped = metrics.get("skipped_stages") or []
     if require_skip_m5 and "m5" not in skipped:
-        errors.append("m5 must be present in skipped_stages")
+        errors.append("m5 must be present in skipped_stages (--require-skip-m5)")
+    if require_m5:
+        if "m5" in skipped:
+            errors.append("m5 must not be skipped (--require-m5)")
+        m5_err = metrics.get("m5_error")
+        if m5_err:
+            errors.append(f"m5 completed with error (--require-m5): {m5_err!r}")
+        if not metrics.get("source_dci_zinnen") and not metrics.get("m5_n_stcs"):
+            errors.append(
+                "m5 produced no source-space outputs: source_dci_zinnen and m5_n_stcs both absent"
+            )
     if strict_mode:
         if metrics.get("m10_error"):
             errors.append("strict verification failed: m10_error present")
@@ -384,6 +404,11 @@ def main() -> None:
     verify_parser.add_argument("--config", required=True)
     verify_parser.add_argument("--subject", required=True)
     verify_parser.add_argument("--require-skip-m5", action="store_true", help="Require m5 to be skipped")
+    verify_parser.add_argument(
+        "--require-m5",
+        action="store_true",
+        help="Require m5 (source reconstruction) to have run and produced outputs",
+    )
     verify_parser.add_argument(
         "--strict-mode",
         action="store_true",
@@ -612,6 +637,7 @@ def main() -> None:
         errors = _verify_run_manifest(
             payload,
             require_skip_m5=args.require_skip_m5,
+            require_m5=args.require_m5,
             strict_mode=args.strict_mode,
         )
         if errors:
