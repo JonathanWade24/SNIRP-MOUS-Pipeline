@@ -37,6 +37,12 @@ mous-pipeline run --config <cfg> --subject <id> --skip m5 --force
 mous-pipeline verify-run --config <cfg> --subject <id> --require-skip-m5 --strict-mode
 ```
 
+For SLURM orchestration changes, also include a dry-run proof:
+
+```bash
+scripts/run_aims_priority.sh --config <cfg> --subjects <id1,id2> --fetch-missing --dry-run
+```
+
 ### Quality expectations
 
 - Keep PR scope small and reviewable; avoid mixing unrelated cleanup and behavioral changes.

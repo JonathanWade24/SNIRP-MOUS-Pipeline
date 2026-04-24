@@ -211,6 +211,31 @@ mous-pipeline group --derivatives-root derivatives/mous_pipeline
 mous-pipeline group --derivatives-root derivatives/mous_pipeline --test lme
 ```
 
+## SLURM automation (Aim 1/2/3)
+
+For cluster-oriented orchestration, use:
+
+```bash
+scripts/run_aims_priority.sh \
+  --config configs/pilot_A2003_fmri.yaml \
+  --subjects A2003,A2004 \
+  --fetch-missing
+```
+
+What it does:
+- resolves subjects from config `subjects:` or `--subjects` override,
+- optionally fetches missing subjects via `mous-pipeline fetch-rdr --execute`,
+- runs a post-merge Aim 1 regression/QC audit on the first subject,
+- submits fMRIPrep as an `sbatch --array` job,
+- runs per-subject MEG stages for Aim 1/Aim 3 (`--skip m5,m10,m11`),
+- runs group aggregation and writes Aim 3 null summary artifacts.
+
+Preview all commands without executing:
+
+```bash
+scripts/run_aims_priority.sh --config configs/pilot_A2003_fmri.yaml --subjects A2003 --fetch-missing --dry-run
+```
+
 ## Testing
 
 The `tests/` directory contains pytest-based tests covering stages, CLI commands, and edge cases:
@@ -230,6 +255,9 @@ Tests use fixtures in `tests/conftest.py` for sample data and configs.
 
 **"No BOLD file found"** (m10)
 : Stage m10 requires fMRI data. Either configure `fmri.bold_path` in your YAML, run fMRIPrep, or skip m10/m11 with `--skip m10,m11`.
+
+**"too many indices for array: array is 1-dimensional, but 2 were indexed"** (m10)
+: This indicates an ROI signal shape mismatch during trial-wise beta extraction. The current `trialwise_betas` implementation tolerates both 1D and 2D masker outputs; if you still see this, update to latest `main` and rerun.
 
 **"repocli is not on PATH"**
 : Install [repocli](https://github.com/Donders-Institute/dr-tools/releases) and run `repocli config` once with base URL `https://webdav.data.ru.nl`.

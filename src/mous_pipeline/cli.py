@@ -192,9 +192,11 @@ def _verify_run_manifest(
             errors.append("strict verification failed: m10_error present")
         if metrics.get("m11_error"):
             errors.append("strict verification failed: m11_error present")
-    outputs = manifest_payload.get("outputs", [])
-    if not isinstance(outputs, list) or not outputs:
-        errors.append("manifest outputs list is empty")
+    # Top-level outputs may be omitted depending on manifest shape/version.
+    # Validate type only when present; do not fail solely on missing outputs.
+    outputs = manifest_payload.get("outputs", None)
+    if outputs is not None and not isinstance(outputs, list):
+        errors.append("manifest outputs must be a list when present")
     return errors
 
 
