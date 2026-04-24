@@ -1,0 +1,26 @@
+project:
+  type: default
+
+format:
+  html:
+    theme: [flatly, custom.scss]
+    toc: true
+    toc-location: left
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+    fig-align: center
+    fig-dpi: 150
+    fig-responsive: true
+    highlight-style: github
+    df-print: paged
+    smooth-scroll: true
+    date-format: "MMMM D, YYYY"
+    html-math-method: katex
+
+execute:
+  echo: false
+  message: false
+  warning: false

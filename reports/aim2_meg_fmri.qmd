@@ -1,18 +1,19 @@
 ---
-format: html
+title: "Aim 2 – MEG–fMRI Coupling"
+subtitle: "Left MTG BOLD as a function of MEG trial-level features"
+date: last-modified
 params:
   subject: "A2002"
   export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
 ---
 
-## Aim 2 MEG-fMRI Coupling (Left MTG)
-
 ```{python}
 import pandas as pd
 from pathlib import Path
-subject = params["subject"]
+
+subject    = params["subject"]
 export_dir = Path(params["export_dir"])
-joined = pd.read_csv(export_dir / f"{subject}_trials_joined.csv")
+joined     = pd.read_csv(export_dir / f"{subject}_trials_joined.csv")
 joined.head()
 ```
 
@@ -20,11 +21,60 @@ joined.head()
 library(ggplot2)
 library(lmerTest)
 library(readr)
-subject <- params$subject
+
+theme_mous <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title       = element_text(face = "bold", size = base_size + 1, color = "#0f172a"),
+      plot.subtitle    = element_text(color = "#64748b", size = base_size - 1, margin = margin(b = 8)),
+      axis.title       = element_text(color = "#475569", size = base_size - 1),
+      axis.text        = element_text(color = "#64748b"),
+      panel.grid.major = element_line(color = "#e2e8f0"),
+      panel.grid.minor = element_blank(),
+      legend.title     = element_text(size = 11, color = "#334155"),
+      legend.text      = element_text(size = 10, color = "#475569")
+    )
+}
+
+COND_COLORS <- c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")
+
+subject    <- params$subject
 export_dir <- params$export_dir
-joined <- read_csv(file.path(export_dir, paste0(subject, "_trials_joined.csv")), show_col_types = FALSE)
+joined <- read_csv(
+  file.path(export_dir, paste0(subject, "_trials_joined.csv")),
+  show_col_types = FALSE
+)
 joined$condition <- factor(joined$condition)
-fit <- lmer(mtg_beta ~ prestim_beta + n400m + dci_trial + condition + pos_in_block + (1|block_id), data = joined)
-print(summary(fit))
-ggplot(joined, aes(x=prestim_beta, y=mtg_beta, color=condition)) + geom_point(alpha=.6) + geom_smooth(method="lm", se=FALSE)
+```
+
+## Mixed-Effects Model: MTG β ~ MEG Features
+
+```{r}
+#| code-fold: true
+fit <- lmer(
+  mtg_beta ~ prestim_beta + n400m + dci_trial + condition + pos_in_block + (1 | block_id),
+  data = joined
+)
+summary(fit)
+```
+
+## Pre-stim β → MTG BOLD
+
+```{r}
+#| label: fig-meg-fmri-scatter
+#| fig-cap: "Scatter of MEG pre-stimulus β power vs. left-MTG fMRI β weight, coloured by condition. Lines are per-condition OLS fits."
+#| fig-width: 8
+#| fig-height: 5
+
+ggplot(joined, aes(x = prestim_beta, y = mtg_beta, color = condition)) +
+  geom_point(alpha = 0.45, size = 1.8) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1, alpha = 0.15) +
+  scale_color_manual(values = COND_COLORS, name = "Condition") +
+  theme_mous() +
+  labs(
+    title    = paste("MEG–fMRI coupling –", subject),
+    subtitle = "Pre-stimulus beta power predicts left-MTG BOLD response",
+    x = "Pre-stim β power (MEG, a.u.)",
+    y = "Left-MTG β weight (fMRI)"
+  )
 ```

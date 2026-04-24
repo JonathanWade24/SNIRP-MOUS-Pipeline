@@ -1,0 +1,269 @@
+/*-- scss:defaults --*/
+
+// Import Inter + JetBrains Mono from Google Fonts
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap');
+
+// Color palette
+$primary:   #2563eb;
+$secondary: #64748b;
+$success:   #16a34a;
+$warning:   #d97706;
+$danger:    #dc2626;
+$info:      #0891b2;
+$dark:      #1e293b;
+$light:     #f1f5f9;
+
+// Typography
+$font-family-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+$font-family-monospace:  "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+$font-size-base:         1rem;
+$line-height-base:       1.7;
+
+// Body
+$body-bg:    #f8fafc;
+$body-color: #1e293b;
+
+// Headings
+$headings-color:       #0f172a;
+$headings-font-weight: 600;
+$headings-line-height: 1.3;
+
+// Links
+$link-color:       $primary;
+$link-decoration:  none;
+$link-hover-color: darken($primary, 12%);
+
+// Code
+$code-bg:    #f1f5f9;
+$code-color: #be185d;
+
+// Cards / panels
+$card-border-radius: 0.5rem;
+$card-border-color:  #e2e8f0;
+
+/*-- scss:rules --*/
+
+// ─── Layout ──────────────────────────────────────────────────────────────────
+
+body {
+  letter-spacing: -0.01em;
+}
+
+.quarto-title-banner {
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%);
+  color: #fff;
+  padding: 2.5rem 0 2rem;
+}
+
+.quarto-title-banner .quarto-title h1.title {
+  color: #fff;
+  font-size: 2rem;
+  font-weight: 700;
+  border: none;
+}
+
+.quarto-title-banner .quarto-title .description,
+.quarto-title-banner .quarto-title-meta-heading,
+.quarto-title-banner .quarto-title-meta-contents {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+// ─── Navigation / TOC ────────────────────────────────────────────────────────
+
+#TOC {
+  font-size: 0.85rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1rem 0.75rem;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+
+  .toc-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 0.6rem;
+  }
+
+  a {
+    color: #475569;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    display: block;
+    transition: background 0.15s, color 0.15s;
+
+    &:hover {
+      color: $primary;
+      background: #eff6ff;
+    }
+
+    &.active {
+      color: $primary;
+      font-weight: 600;
+      background: #eff6ff;
+      border-left: 3px solid $primary;
+    }
+  }
+}
+
+// ─── Headings ────────────────────────────────────────────────────────────────
+
+h1:not(.title) {
+  font-size: 1.75rem;
+  color: $headings-color;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.4rem;
+  margin-top: 2.5rem;
+  margin-bottom: 1rem;
+}
+
+h2 {
+  font-size: 1.35rem;
+  color: #0f172a;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 0.3rem;
+  margin-top: 2rem;
+  margin-bottom: 0.9rem;
+}
+
+h3 {
+  font-size: 1.1rem;
+  color: #334155;
+  margin-top: 1.5rem;
+  margin-bottom: 0.6rem;
+}
+
+// ─── Code blocks ─────────────────────────────────────────────────────────────
+
+div.sourceCode {
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+pre.sourceCode {
+  border-radius: 0 0 8px 8px !important;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+
+details.code-fold > summary {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: $primary;
+  background: #eff6ff;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid #bfdbfe;
+  border-bottom: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  letter-spacing: 0.01em;
+
+  &:hover {
+    background: #dbeafe;
+  }
+}
+
+// Inline code
+code:not([class]) {
+  background: #f1f5f9;
+  color: #be185d;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+// ─── Tables ──────────────────────────────────────────────────────────────────
+
+.dataframe,
+table.table,
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+  margin: 1rem 0 1.5rem;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+
+  thead th {
+    background: $primary;
+    color: #fff;
+    padding: 0.7rem 1rem;
+    font-weight: 600;
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+    text-align: left;
+    border: none;
+  }
+
+  tbody {
+    tr:nth-child(even) { background: #f8fafc; }
+    tr:hover           { background: #eff6ff; }
+
+    td {
+      padding: 0.55rem 1rem;
+      border-bottom: 1px solid #f1f5f9;
+      color: #334155;
+    }
+  }
+}
+
+// paged table nav buttons
+.dataTables_wrapper .dataTables_paginate .paginate_button.current {
+  background: $primary !important;
+  color: #fff !important;
+  border-radius: 4px;
+}
+
+// ─── Figures ─────────────────────────────────────────────────────────────────
+
+figure {
+  margin: 1.5rem 0;
+}
+
+figcaption,
+.figure-caption,
+p.caption {
+  color: #64748b;
+  font-size: 0.82rem;
+  font-style: italic;
+  text-align: center;
+  margin-top: 0.4rem;
+}
+
+// ─── Callouts ────────────────────────────────────────────────────────────────
+
+.callout {
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.callout-note    { border-left-color: $primary; }
+.callout-tip     { border-left-color: $success; }
+.callout-warning { border-left-color: $warning; }
+.callout-important { border-left-color: $danger; }
+
+// ─── Verdict badge (subject report) ─────────────────────────────────────────
+
+.verdict-badge {
+  display: inline-block;
+  padding: 0.6rem 2rem;
+  border-radius: 8px;
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+// ─── Print ───────────────────────────────────────────────────────────────────
+
+@media print {
+  #TOC { display: none; }
+  .quarto-title-banner { background: none; color: #000; }
+}

@@ -1,18 +1,19 @@
 ---
-format: html
+title: "Aim 1 – Trial-Level Readiness"
+subtitle: "Pre-stimulus β power and N400m as trial-level predictors"
+date: last-modified
 params:
   subject: "A2002"
   export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
 ---
 
-## Aim 1 Trial-Level Readiness
-
 ```{python}
 import pandas as pd
 from pathlib import Path
-subject = params["subject"]
+
+subject    = params["subject"]
 export_dir = Path(params["export_dir"])
-trials = pd.read_csv(export_dir / f"{subject}_trials.csv")
+trials     = pd.read_csv(export_dir / f"{subject}_trials.csv")
 trials.head()
 ```
 
@@ -20,11 +21,57 @@ trials.head()
 library(ggplot2)
 library(lmerTest)
 library(readr)
-subject <- params$subject
+
+theme_mous <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title       = element_text(face = "bold", size = base_size + 1, color = "#0f172a"),
+      plot.subtitle    = element_text(color = "#64748b", size = base_size - 1, margin = margin(b = 8)),
+      axis.title       = element_text(color = "#475569", size = base_size - 1),
+      axis.text        = element_text(color = "#64748b"),
+      panel.grid.major = element_line(color = "#e2e8f0"),
+      panel.grid.minor = element_blank(),
+      strip.text       = element_text(face = "bold"),
+      legend.position  = "none"
+    )
+}
+
+COND_COLORS <- c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")
+
+subject    <- params$subject
 export_dir <- params$export_dir
-trials <- read_csv(file.path(export_dir, paste0(subject, "_trials.csv")), show_col_types = FALSE)
+trials <- read_csv(
+  file.path(export_dir, paste0(subject, "_trials.csv")),
+  show_col_types = FALSE
+)
 trials$condition <- factor(trials$condition)
-fit <- lmer(prestim_beta ~ condition + pos_in_block + (1|block_id), data = trials)
-print(summary(fit))
-ggplot(trials, aes(x=condition, y=prestim_beta, fill=condition)) + geom_violin(trim=FALSE, alpha=.4) + geom_boxplot(width=.15, outlier.shape = NA)
+```
+
+## Mixed-Effects Model: Pre-stim β ~ Condition
+
+```{r}
+#| code-fold: true
+fit <- lmer(prestim_beta ~ condition + pos_in_block + (1 | block_id), data = trials)
+summary(fit)
+```
+
+## Pre-stim β by Condition
+
+```{r}
+#| label: fig-prestim-beta
+#| fig-cap: "Distribution of pre-stimulus β power across conditions. Violin shows density; box shows median ± IQR."
+#| fig-width: 7
+#| fig-height: 4.5
+
+ggplot(trials, aes(x = condition, y = prestim_beta, fill = condition, color = condition)) +
+  geom_violin(trim = FALSE, alpha = 0.35, linewidth = 0.6) +
+  geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.8, linewidth = 0.7) +
+  scale_fill_manual(values  = COND_COLORS) +
+  scale_color_manual(values = COND_COLORS) +
+  theme_mous() +
+  labs(
+    title    = paste("Pre-stimulus β power by condition –", subject),
+    subtitle = "Mixed-effects model controls for position-in-block and block random effects",
+    x = NULL, y = "Pre-stim β power (a.u.)"
+  )
 ```

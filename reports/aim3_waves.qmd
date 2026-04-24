@@ -1,26 +1,91 @@
 ---
-format: html
+title: "Aim 3 – Traveling-Wave Validation"
+subtitle: "Directionality and spatial structure of MEG traveling waves"
+date: last-modified
 params:
   subject: "A2002"
   export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
 ---
 
-## Aim 3 Traveling-Wave Validation
-
 ```{python}
 import json
 from pathlib import Path
-subject = params["subject"]
+
+subject    = params["subject"]
 export_dir = Path(params["export_dir"])
-metrics = json.loads((export_dir / f"{subject}_metrics.json").read_text())
+metrics    = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 metrics
 ```
 
 ```{r}
 library(ggplot2)
 library(readr)
-subject <- params$subject
+
+theme_mous <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title       = element_text(face = "bold", size = base_size + 1, color = "#0f172a"),
+      plot.subtitle    = element_text(color = "#64748b", size = base_size - 1, margin = margin(b = 8)),
+      axis.title       = element_text(color = "#475569", size = base_size - 1),
+      axis.text        = element_text(color = "#64748b"),
+      panel.grid.major = element_line(color = "#e2e8f0"),
+      panel.grid.minor = element_blank(),
+      strip.text       = element_text(face = "bold", color = "#1e293b"),
+      legend.position  = "none"
+    )
+}
+
+COND_COLORS <- c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")
+
+subject    <- params$subject
 export_dir <- params$export_dir
-dirs <- read_csv(file.path(export_dir, paste0(subject, "_directions.csv")), show_col_types = FALSE)
-ggplot(dirs, aes(x=direction_rad, fill=condition)) + geom_histogram(bins=36, alpha=.5, position="identity")
+dirs <- read_csv(
+  file.path(export_dir, paste0(subject, "_directions.csv")),
+  show_col_types = FALSE
+)
+dirs$condition <- factor(dirs$condition)
+```
+
+## Wave Direction Distributions
+
+```{r}
+#| label: fig-wave-directions
+#| fig-cap: "Polar histograms of traveling-wave propagation directions, overlaid by condition. Uniform distributions indicate no directional preference."
+#| fig-width: 10
+#| fig-height: 4
+
+ggplot(dirs, aes(x = direction_rad, fill = condition)) +
+  geom_histogram(bins = 36, alpha = 0.7, position = "identity",
+                 color = "white", linewidth = 0.15) +
+  facet_wrap(~condition, nrow = 1) +
+  coord_polar() +
+  scale_fill_manual(values = COND_COLORS) +
+  theme_mous() +
+  labs(
+    title    = paste("Traveling-wave directions –", subject),
+    subtitle = "Each bin spans 10°; filled bars show count per angular bin",
+    x = NULL, y = "Count"
+  )
+```
+
+## Direction Density (Overlay)
+
+```{r}
+#| label: fig-wave-density
+#| fig-cap: "Smoothed angular density curves for each condition overlaid on a single polar plot."
+#| fig-width: 6
+#| fig-height: 5
+
+ggplot(dirs, aes(x = direction_rad, color = condition, fill = condition)) +
+  geom_density(alpha = 0.2, linewidth = 0.9, bw = 0.3) +
+  coord_polar() +
+  scale_color_manual(values = COND_COLORS, name = "Condition") +
+  scale_fill_manual(values  = COND_COLORS, name = "Condition") +
+  theme_mous() +
+  theme(legend.position = "right") +
+  labs(
+    title    = paste("Wave direction density –", subject),
+    subtitle = "Smoothed KDE overlaid across conditions",
+    x = NULL, y = NULL
+  )
 ```

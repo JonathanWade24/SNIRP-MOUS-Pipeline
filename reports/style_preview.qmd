@@ -1,0 +1,93 @@
+---
+title: "MOUS Style Preview"
+subtitle: "Placeholder content for visual design review"
+date: last-modified
+---
+
+::: {.callout-note}
+## Preview only
+This page uses placeholder text and synthetic values so you can evaluate layout, typography, tables, and chart styling.
+:::
+
+## Executive Snapshot
+
+```{r}
+library(knitr)
+
+summary_tbl <- data.frame(
+  Metric = c(
+    "Pipeline status",
+    "Subjects processed",
+    "Mean DCI (task)",
+    "Rayleigh p",
+    "Model AUC"
+  ),
+  Value = c("READY", "24", "0.63", "0.0042", "0.78")
+)
+
+kable(summary_tbl, caption = "Synthetic report summary values for style preview")
+```
+
+## Placeholder Figure
+
+```{r}
+#| label: fig-placeholder-timeseries
+#| fig-cap: "Synthetic time-series preview for style checking."
+#| fig-width: 9
+#| fig-height: 3.5
+
+library(ggplot2)
+set.seed(42)
+
+t <- seq(0, 8, length.out = 200)
+y <- 0.52 + 0.08 * sin(2 * pi * t / 3) + rnorm(length(t), sd = 0.015)
+df <- data.frame(time_s = t, dci = y)
+
+ggplot(df, aes(time_s, dci)) +
+  geom_ribbon(aes(ymin = 0.5, ymax = pmax(dci, 0.5)), fill = "#bfdbfe", alpha = 0.6) +
+  geom_line(color = "#2563eb", linewidth = 1.1) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "#94a3b8") +
+  theme_minimal(base_size = 13) +
+  labs(title = "Synthetic DCI over time", x = "Time (s)", y = "DCI")
+```
+
+## Placeholder Category Plot
+
+```{r}
+#| label: fig-placeholder-bars
+#| fig-cap: "Synthetic category means with error bars."
+#| fig-width: 8
+#| fig-height: 4.5
+
+library(ggplot2)
+
+cats <- data.frame(
+  condition = c("ZINNEN", "WOORDEN", "REST"),
+  mean = c(0.68, 0.61, 0.49),
+  sd = c(0.06, 0.05, 0.04)
+)
+
+ggplot(cats, aes(condition, mean, fill = condition)) +
+  geom_col(alpha = 0.85, width = 0.65) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.18) +
+  scale_fill_manual(values = c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none") +
+  labs(title = "Synthetic condition means", x = NULL, y = "Value")
+```
+
+## Placeholder Notes
+
+- Body text rhythm and heading hierarchy
+- TOC card style and left navigation behavior
+- Table striping + hover behavior
+- Figure captions and code-fold controls
+
+```{r}
+# Quick code chunk so you can see code-fold UI in action.
+preview_status <- function() {
+  "Design preview active"
+}
+
+preview_status()
+```

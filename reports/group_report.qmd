@@ -1,6 +1,7 @@
 ---
 title: "MOUS Group Report"
-format: html
+subtitle: "Cohort-level MEG pipeline summary"
+date: last-modified
 params:
   summary_json: "derivatives/mous_pipeline/group_summary.json"
 ---
@@ -22,23 +23,58 @@ tbl = pd.DataFrame(rows)
 ```{r}
 library(ggplot2)
 library(knitr)
+
+theme_mous <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title       = element_text(face = "bold", size = base_size + 1, color = "#0f172a"),
+      plot.subtitle    = element_text(color = "#64748b", size = base_size - 1, margin = margin(b = 8)),
+      axis.title       = element_text(color = "#475569", size = base_size - 1),
+      axis.text        = element_text(color = "#64748b"),
+      panel.grid.major = element_line(color = "#e2e8f0"),
+      panel.grid.minor = element_blank()
+    )
+}
 ```
 
-## Group summary table
+## Group Summary Table
 
 ```{python}
-tbl
+tbl.style.format(precision=4)
 ```
 
-## Group means by metric
+## Group Means by Metric
 
 ```{r}
+#| label: fig-group-means
+#| fig-cap: "Group-level mean ± SD for each pipeline metric, sorted by mean value."
+#| fig-width: 9
+#| fig-height: 5
+
 df <- as.data.frame(tbl)
 if ("mean" %in% names(df)) {
-  ggplot(df, aes(x = metric, y = mean)) +
-    geom_col() +
+  df <- df[order(df$mean), ]
+  df$metric <- factor(df$metric, levels = df$metric)
+
+  p <- ggplot(df, aes(x = metric, y = mean, fill = mean)) +
+    geom_col(alpha = 0.85, width = 0.7) +
+    scale_fill_gradient(low = "#bfdbfe", high = "#1d4ed8") +
+    theme_mous() +
+    theme(legend.position = "none") +
     coord_flip() +
-    theme_minimal() +
-    labs(title = "Group mean by metric", x = "Metric", y = "Mean")
+    labs(
+      title    = "Group mean by metric",
+      subtitle = "Sorted ascending; colour intensity encodes magnitude",
+      x = NULL, y = "Mean"
+    )
+
+  if ("sd" %in% names(df)) {
+    p <- p + geom_errorbar(
+      aes(ymin = mean - sd, ymax = mean + sd),
+      width = 0.25, color = "#475569", linewidth = 0.6
+    )
+  }
+
+  print(p)
 }
 ```

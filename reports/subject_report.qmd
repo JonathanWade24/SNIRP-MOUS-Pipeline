@@ -1,20 +1,13 @@
 ---
 title: "MOUS Subject Report"
-format:
-  html:
-    toc: true
-    toc-location: left
-    code-fold: true
-    theme: cosmo
-    embed-resources: true
+subtitle: "Single-subject MEG pipeline summary"
+date: last-modified
 params:
   subject: "A2002"
   export_dir: "derivatives/mous_pipeline/sub-A2002/m8_reports/exports"
 ---
 
 ```{python}
-#| echo: false
-#| message: false
 import json
 from pathlib import Path
 import pandas as pd
@@ -26,10 +19,10 @@ metrics = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 directions = pd.read_csv(export_dir / f"{subject}_directions.csv")
 sliding = pd.read_csv(export_dir / f"{subject}_sliding_dci.csv")
 
-source_dirs_path   = export_dir / f"{subject}_source_directions.csv"
-source_dci_path    = export_dir / f"{subject}_source_dci.csv"
-source_roi_path    = export_dir / f"{subject}_source_roi_summary.csv"
-trials_path        = export_dir / f"{subject}_trials.csv"
+source_dirs_path = export_dir / f"{subject}_source_directions.csv"
+source_dci_path  = export_dir / f"{subject}_source_dci.csv"
+source_roi_path  = export_dir / f"{subject}_source_roi_summary.csv"
+trials_path      = export_dir / f"{subject}_trials.csv"
 
 source_dirs = pd.read_csv(source_dirs_path) if source_dirs_path.exists() else None
 source_dci  = pd.read_csv(source_dci_path)  if source_dci_path.exists()  else None
@@ -38,26 +31,38 @@ trials      = pd.read_csv(trials_path)      if trials_path.exists()      else No
 ```
 
 ```{r}
-#| echo: false
-#| message: false
 library(ggplot2)
 library(dplyr)
 library(knitr)
+
+# Shared ggplot2 theme for all plots in this report
+theme_mous <- function(base_size = 13) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title       = element_text(face = "bold", size = base_size + 1, color = "#0f172a"),
+      plot.subtitle    = element_text(color = "#64748b", size = base_size - 1, margin = margin(b = 8)),
+      axis.title       = element_text(color = "#475569", size = base_size - 1),
+      axis.text        = element_text(color = "#64748b"),
+      panel.grid.major = element_line(color = "#e2e8f0"),
+      panel.grid.minor = element_blank(),
+      strip.text       = element_text(face = "bold", color = "#1e293b"),
+      legend.position  = "none"
+    )
+}
+
+COND_COLORS <- c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")
 ```
 
 ## Pilot Verdict
 
 ```{python}
-#| echo: false
 from IPython.display import HTML
 
 verdict = metrics.get("pilot_verdict", "unknown")
-color_map = {"GO": "#2e7d32", "MARGINAL": "#e65100", "NO-GO": "#b71c1c"}
-bg = color_map.get(str(verdict).upper(), "#455a64")
+color_map = {"GO": "#16a34a", "MARGINAL": "#d97706", "NO-GO": "#dc2626"}
+bg = color_map.get(str(verdict).upper(), "#475569")
 HTML(
-    f'<div style="display:inline-block;padding:12px 32px;border-radius:6px;'
-    f'background:{bg};color:#fff;font-size:1.4em;font-weight:700;'
-    f'letter-spacing:0.05em;">'
+    f'<div class="verdict-badge" style="background:{bg};color:#fff;">'
     f'Pilot verdict: {verdict}</div>'
 )
 ```
@@ -65,24 +70,23 @@ HTML(
 ## Key Metrics
 
 ```{python}
-#| echo: false
 _labels = {
-    "run_status":               "Run status",
-    "n_trials":                 "Total trials",
-    "n_zinnen":                 "ZINNEN trials",
-    "n_woorden":                "WOORDEN trials",
-    "n_rest":                   "REST pseudo-epochs",
-    "dci_zinnen":               "Mean DCI – ZINNEN",
-    "dci_woorden":              "Mean DCI – WOORDEN",
-    "dci_rest":                 "Mean DCI – REST",
-    "p_task_vs_rest":           "p (task vs REST, permutation)",
-    "p_woorden_vs_rest":        "p (WOORDEN vs REST)",
-    "p_zinnen_vs_woorden":      "p (ZINNEN vs WOORDEN)",
-    "p_rayleigh_zinnen":        "Rayleigh p – ZINNEN",
-    "p_rayleigh_woorden":       "Rayleigh p – WOORDEN",
-    "aim1_prestim_auc":         "Pre-stim β AUC (AIM 1)",
+    "run_status":                    "Run status",
+    "n_trials":                      "Total trials",
+    "n_zinnen":                      "ZINNEN trials",
+    "n_woorden":                     "WOORDEN trials",
+    "n_rest":                        "REST pseudo-epochs",
+    "dci_zinnen":                    "Mean DCI – ZINNEN",
+    "dci_woorden":                   "Mean DCI – WOORDEN",
+    "dci_rest":                      "Mean DCI – REST",
+    "p_task_vs_rest":                "p (task vs REST, permutation)",
+    "p_woorden_vs_rest":             "p (WOORDEN vs REST)",
+    "p_zinnen_vs_woorden":           "p (ZINNEN vs WOORDEN)",
+    "p_rayleigh_zinnen":             "Rayleigh p – ZINNEN",
+    "p_rayleigh_woorden":            "Rayleigh p – WOORDEN",
+    "aim1_prestim_auc":              "Pre-stim β AUC (AIM 1)",
     "aim1_n400m_zinnen_vs_woorden_t": "N400m t (AIM 1)",
-    "aim1_dci_block_effect_p":  "DCI block-effect p (AIM 1)",
+    "aim1_dci_block_effect_p":       "DCI block-effect p (AIM 1)",
 }
 
 def _fmt(v):
@@ -101,38 +105,42 @@ pd.DataFrame(rows).style.hide(axis="index")
 ## Direction Distributions
 
 ```{r}
-#| echo: false
+#| label: fig-directions
+#| fig-cap: "Polar histograms of wave propagation directions per condition (36 bins)."
 #| fig-width: 10
 #| fig-height: 4
+
 dirs <- read.csv(file.path(params$export_dir, paste0(params$subject, "_directions.csv")))
 ggplot(dirs, aes(x = direction_rad, fill = condition)) +
-  geom_histogram(bins = 36, position = "identity", alpha = 0.65) +
+  geom_histogram(bins = 36, position = "identity", alpha = 0.75, color = "white", linewidth = 0.2) +
   coord_polar() +
   facet_wrap(~condition, nrow = 1) +
-  scale_fill_manual(
-    values = c("ZINNEN" = "#1f77b4", "WOORDEN" = "#2ca02c", "REST" = "#ff7f0e")
-  ) +
-  theme_minimal() +
+  scale_fill_manual(values = COND_COLORS) +
+  theme_mous() +
   labs(
-    title = paste("Wave direction distributions:", params$subject),
+    title    = paste("Wave direction distributions –", params$subject),
+    subtitle = "Each panel shows the angular distribution of sensor-space traveling waves",
     x = NULL, y = "Count"
-  ) +
-  theme(legend.position = "none", strip.text = element_text(face = "bold"))
+  )
 ```
 
 ## Sliding DCI
 
 ```{r}
-#| echo: false
+#| label: fig-sliding-dci
+#| fig-cap: "Directionality Consistency Index (DCI) over time for ZINNEN trials. Dashed line = chance (0.5)."
 #| fig-width: 9
 #| fig-height: 3.5
+
 slide <- read.csv(file.path(params$export_dir, paste0(params$subject, "_sliding_dci.csv")))
 ggplot(slide, aes(x = time_s, y = dci)) +
-  geom_line(color = "#1f77b4", linewidth = 1) +
-  geom_hline(yintercept = 0.5, linetype = "dashed", color = "#999", linewidth = 0.7) +
-  theme_minimal() +
+  geom_ribbon(aes(ymin = 0.5, ymax = pmax(dci, 0.5)), fill = "#bfdbfe", alpha = 0.5) +
+  geom_line(color = "#2563eb", linewidth = 1.1) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "#94a3b8", linewidth = 0.7) +
+  theme_mous() +
   labs(
-    title = paste("Sliding DCI – ZINNEN:", params$subject),
+    title    = paste("Sliding DCI – ZINNEN:", params$subject),
+    subtitle = "Blue shading = above-chance directionality",
     x = "Time (s)", y = "DCI"
   )
 ```
@@ -140,18 +148,17 @@ ggplot(slide, aes(x = time_s, y = dci)) +
 ## Source-Space Summary (m5)
 
 ```{python}
-#| echo: false
 m5_keys = [
     "source_dci_zinnen", "source_directions_count",
     "m5_n_labels", "m5_n_stcs", "m5_error", "m5_skipped_reason",
 ]
 m5_labels = {
-    "source_dci_zinnen":        "Source DCI – ZINNEN",
-    "source_directions_count":  "Source direction count",
-    "m5_n_labels":              "ROI labels",
-    "m5_n_stcs":                "Source estimates (STCs)",
-    "m5_error":                 "Error",
-    "m5_skipped_reason":        "Skipped reason",
+    "source_dci_zinnen":       "Source DCI – ZINNEN",
+    "source_directions_count": "Source direction count",
+    "m5_n_labels":             "ROI labels",
+    "m5_n_stcs":               "Source estimates (STCs)",
+    "m5_error":                "Error",
+    "m5_skipped_reason":       "Skipped reason",
 }
 m5_rows = [
     {"Metric": m5_labels.get(k, k), "Value": _fmt(metrics[k])}
@@ -164,60 +171,72 @@ else:
 ```
 
 ```{r}
-#| echo: false
+#| label: fig-source-directions
+#| fig-cap: "Source-space wave direction distribution (ZINNEN), parcellated across all ROI labels."
 #| fig-width: 9
 #| fig-height: 4
+
 source_dirs_file <- file.path(params$export_dir, paste0(params$subject, "_source_directions.csv"))
 source_dci_file  <- file.path(params$export_dir, paste0(params$subject, "_source_dci.csv"))
 
 if (file.exists(source_dirs_file)) {
   src_dirs <- read.csv(source_dirs_file)
-  p1 <- ggplot(src_dirs, aes(x = source_direction_rad)) +
-    geom_histogram(bins = 36, fill = "#9467bd", color = "white", alpha = 0.8) +
+  ggplot(src_dirs, aes(x = source_direction_rad)) +
+    geom_histogram(bins = 36, fill = "#7c3aed", color = "white", alpha = 0.85, linewidth = 0.2) +
     coord_polar() +
-    theme_minimal() +
-    labs(title = paste("Source-space directions (ZINNEN):", params$subject), x = NULL, y = "Count")
-  print(p1)
+    theme_mous() +
+    labs(
+      title    = paste("Source-space directions (ZINNEN):", params$subject),
+      subtitle = "Pooled across all parcels",
+      x = NULL, y = "Count"
+    )
 } else {
   cat("No source-direction CSV found (m5 skipped or not yet run).\n")
-}
-
-if (file.exists(source_dci_file)) {
-  src_dci <- read.csv(source_dci_file)
-  p2 <- ggplot(src_dci, aes(x = source_dci)) +
-    geom_histogram(bins = 30, fill = "#9467bd", color = "white", alpha = 0.8) +
-    geom_vline(xintercept = 0.5, linetype = "dashed", color = "#999") +
-    theme_minimal() +
-    labs(
-      title = paste("Source DCI distribution:", params$subject),
-      x = "Source DCI", y = "Count"
-    )
-  print(p2)
 }
 ```
 
 ```{r}
-#| echo: false
+#| label: fig-source-dci
+#| fig-cap: "Distribution of trial-wise source-space DCI values. Dashed line = chance (0.5)."
+#| fig-width: 9
+#| fig-height: 3.5
+
+if (file.exists(source_dci_file)) {
+  src_dci <- read.csv(source_dci_file)
+  ggplot(src_dci, aes(x = source_dci)) +
+    geom_histogram(bins = 30, fill = "#7c3aed", color = "white", alpha = 0.85, linewidth = 0.2) +
+    geom_vline(xintercept = 0.5, linetype = "dashed", color = "#94a3b8", linewidth = 0.8) +
+    theme_mous() +
+    labs(
+      title    = paste("Source DCI distribution:", params$subject),
+      subtitle = "Trial-level directionality in source space",
+      x = "Source DCI", y = "Count"
+    )
+}
+```
+
+```{r}
+#| label: tbl-roi-summary
+
 roi_file <- file.path(params$export_dir, paste0(params$subject, "_source_roi_summary.csv"))
 if (file.exists(roi_file)) {
   roi <- read.csv(roi_file)
   roi_summary <- roi |>
     group_by(label) |>
     summarise(
-      mean_beta   = mean(mean_beta, na.rm = TRUE),
-      sd_beta     = sd(mean_beta, na.rm = TRUE),
-      n_epochs    = n(),
-      .groups = "drop"
+      mean_beta = mean(mean_beta, na.rm = TRUE),
+      sd_beta   = sd(mean_beta,  na.rm = TRUE),
+      n_epochs  = n(),
+      .groups   = "drop"
     ) |>
     arrange(desc(mean_beta))
-  kable(roi_summary, digits = 4, caption = "Mean beta power by ROI label (m5)")
+  kable(roi_summary, digits = 4, caption = "Mean beta power by ROI label (m5 source space)")
 }
 ```
 
 ## Trial-Level Features
 
 ```{python}
-#| echo: false
 if trials is not None and not trials.empty:
     trial_cols = [c for c in ["condition", "prestim_beta", "n400m", "dci_trial"] if c in trials.columns]
     if trial_cols:
