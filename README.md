@@ -1,10 +1,10 @@
 # MOUS Pipeline
 
-**mous-pipeline** is a modular Python toolkit for MOUS MEG analyses: event parsing, preprocessing, epoching, spectral and trial-level features, source imaging, traveling-wave and CFC metrics, statistics, Quarto/HTML reporting, and orchestration. Optional stages add fMRI trial coupling (Aim 2) and simulation-based wave validation (Aim 3).
+Python package for MOUS MEG analysis: events, CTF preprocessing, epoching, spectral and trial features, optional source space, phase-gradient / wave metrics, stats, and HTML/Quarto reports. Optional stages cover fMRI (m10/m11) and wave-validation nulls (m12).
 
-- **Python:** 3.10+ (see `pyproject.toml`)
-- **Entry point:** `mous-pipeline` (console script)
-- **Authoritative code:** `src/mous_pipeline/` (notebooks are for exploration only; see `AGENTS.md`)
+- Python 3.10+ (`pyproject.toml`)
+- CLI: `mous-pipeline`
+- Code: `src/mous_pipeline/`
 
 ## System requirements
 
@@ -169,7 +169,7 @@ repocli config   # baseurl: https://webdav.data.ru.nl
 
 **Platform note:** `setup.sh` is Linux x86_64 only (downloads `repocli.x86_64`). On **macOS**, **Windows**, or other platforms, skip the script and install manually (`pip install -e ".[gui]"` + download `repocli` from [releases](https://github.com/Donders-Institute/dr-tools/releases)).
 
-Launch the Streamlit UI from the **repo root**:
+From the repo root:
 
 ```bash
 source .venv/bin/activate
@@ -177,9 +177,7 @@ mous-pipeline gui
 # or: streamlit run src/mous_pipeline/gui_streamlit.py
 ```
 
-JupyterLab: open `notebooks/mous_gui.ipynb`, run the cell, then use the `/proxy/8501/` link your hub provides.
-
-Tabs cover setup validation, RDR fetch, pipeline run with stage progress, and results (manifest, timings, report links).
+On JupyterHub, use the printed proxy URL (often `/proxy/8501/`) to open the app.
 
 ## Group-level analysis
 
@@ -224,4 +222,4 @@ Tests use fixtures in `tests/conftest.py` for sample data and configs.
 
 ## Contributing
 
-Module ownership and notebook policy: **`AGENTS.md`**.
+See `CONTRIBUTING.md`.
