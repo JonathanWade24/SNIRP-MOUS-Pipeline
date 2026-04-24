@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -75,11 +76,52 @@ class RunResult:
     outputs: list[Path] = field(default_factory=list)
     stage_timings_s: dict[str, float] = field(default_factory=dict)
     skipped_stages: list[str] = field(default_factory=list)
+    status: str = "done"
 
     def summary(self) -> str:
         verdict = self.metrics.get("pilot_verdict", "unknown")
         skipped = f", skipped={','.join(self.skipped_stages)}" if self.skipped_stages else ""
-        return f"Subject {self.subject}: pilot verdict={verdict}{skipped}"
+        return f"Subject {self.subject}: status={self.status}, pilot verdict={verdict}{skipped}"
+
+
+def _strict_stage_failures_enabled(cfg) -> bool:
+    pipeline_cfg = getattr(cfg, "pipeline", {}) or {}
+    configured = pipeline_cfg.get("strict_stage_failures")
+    if configured is not None:
+        return bool(configured)
+    # Default to strict in CI; permissive for interactive/local unless explicitly enabled.
+    return bool(os.getenv("CI"))
+
+
+def _is_critical_stage(stage: str, cfg) -> bool:
+    pipeline_cfg = getattr(cfg, "pipeline", {}) or {}
+    configured = pipeline_cfg.get("critical_failure_stages")
+    if isinstance(configured, list) and configured:
+        return stage in {str(s) for s in configured}
+    return stage in {"m10", "m11"}
+
+
+def _mark_critical_failure(
+    *,
+    result: RunResult,
+    state: dict[str, object],
+    stage: str,
+    error: Exception,
+    only: set[str] | None,
+    skip: set[str] | None,
+) -> list[str]:
+    blocked_by_stage: dict[str, tuple[str, ...]] = {
+        "m10": ("m11", "m12", "m8"),
+        "m11": ("m12", "m8"),
+    }
+    blocked = [s for s in blocked_by_stage.get(stage, ()) if _stage_selected(s, only, skip)]
+    result.metrics["failed_stage"] = stage
+    result.metrics["blocked_stages"] = blocked
+    result.metrics["error"] = str(error)
+    result.status = "failed"
+    result.skipped_stages.extend([s for s in blocked if s not in result.skipped_stages])
+    state["error"] = f"{stage} failed: {error}"
+    return blocked
 
 
 def _stage_selected(stage: str, only: set[str] | None, skip: set[str] | None) -> bool:
@@ -115,6 +157,49 @@ def _append_live_log(path: Path, message: str, *, reset_file: bool = False) -> N
         f.write(message.rstrip() + "\n")
 
 
+def _finalize_run(
+    *,
+    subject: str,
+    cfg,
+    result: RunResult,
+    out_dir: Path,
+    state: dict[str, object],
+    state_path: Path,
+    live_log_path: Path,
+    only: set[str] | None,
+    skip: set[str] | None,
+    force: bool,
+    config_path: Path | None,
+) -> RunResult:
+    manifest = build_run_manifest(
+        subject=subject,
+        stage="m9_orchestration",
+        params={
+            "only": sorted(only) if only else [],
+            "skip": sorted(skip) if skip else [],
+            "force": force,
+            "seed": 42,
+            "config_fingerprint": config_fingerprint(config_path) if config_path else "unknown",
+            "stage_timings_s": result.stage_timings_s,
+        },
+    )
+    result.metrics["run_status"] = result.status
+    result.metrics["skipped_stages"] = list(dict.fromkeys(result.skipped_stages))
+    manifest["metrics"] = result.metrics
+    write_manifest(out_dir / f"sub-{subject}_run_manifest.json", manifest)
+    result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
+    state["status"] = result.status
+    state["current_stage"] = None
+    state["current_stage_description"] = None
+    state["current_stage_started_at"] = None
+    state["stage_timings_s"] = dict(result.stage_timings_s)
+    state["last_event"] = "done:all" if result.status == "done" else "failed"
+    state["updated_at"] = time.time()
+    _write_run_state(state_path, state)
+    _append_live_log(live_log_path, f"[run] status={result.status}")
+    return result
+
+
 def run_subject(
     subject: str,
     cfg,
@@ -130,9 +215,11 @@ def run_subject(
     memory_profile_interval_s: float = 0.5,
 ) -> RunResult:
     result = RunResult(subject=subject)
+    strict_stage_failures = _strict_stage_failures_enabled(cfg)
     selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
     _validate_stage_dependencies(selected)
     result.metrics["selected_stages"] = selected
+    result.metrics["strict_stage_failures"] = strict_stage_failures
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
     m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
     state_path = out_dir / f"sub-{subject}_run_state.json"
@@ -236,6 +323,7 @@ def run_subject(
             completed,
             _emit,
             memory_probe,
+            strict_stage_failures,
         )
     finally:
         if memory_probe is not None:
@@ -269,6 +357,7 @@ def _run_subject_body(
     completed: list[str],
     _emit: Callable[[str, str], None],
     memory_probe: StageRSSProbe | None,
+    strict_stage_failures: bool,
 ) -> RunResult:
     _ = memory_probe  # reserved for future intra-body hooks
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
@@ -593,6 +682,7 @@ def _run_subject_body(
                 from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
 
                 verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
+                m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
                 fmriprep_out = run_fmriprep(
                     subject,
                     cfg,
@@ -629,6 +719,7 @@ def _run_subject_body(
                         fmri_cfg.tr,
                         atlas=fmri_cfg.atlas,
                         roi=fmri_cfg.roi,
+                        n_jobs=m10_n_jobs,
                     )
                     joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
                     result.metrics["m10_n_trials_joined"] = int(len(joined_df))
@@ -640,6 +731,31 @@ def _run_subject_body(
                 result.metrics["m10_skipped_reason"] = "fmri configuration missing"
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
+            if not strict_stage_failures:
+                result.status = "completed_with_skips"
+            if strict_stage_failures and _is_critical_stage("m10", cfg):
+                blocked = _mark_critical_failure(
+                    result=result,
+                    state=state,
+                    stage="m10",
+                    error=exc,
+                    only=only,
+                    skip=skip,
+                )
+                _append_live_log(live_log_path, f"[run] critical_failure stage=m10 error={exc}")
+                return _finalize_run(
+                    subject=subject,
+                    cfg=cfg,
+                    result=result,
+                    out_dir=out_dir,
+                    state=state,
+                    state_path=state_path,
+                    live_log_path=live_log_path,
+                    only=only,
+                    skip=skip,
+                    force=force,
+                    config_path=config_path,
+                )
         result.stage_timings_s["m10"] = perf_counter() - t0
         _emit("done", "m10")
         if progress_callback:
@@ -647,9 +763,10 @@ def _run_subject_body(
         # Release any large fMRI locals before leaving m10 so joblib/nilearn
         # pool teardown happens here (inside m10's wall-clock) instead of
         # stalling the gap between m10 and m11.
-        import gc as _gc
-        _gc.collect()
-        _append_live_log(live_log_path, "[m10:cleanup] released fMRI locals, advancing")
+        if bool(getattr(cfg, "pipeline", {}).get("m10_force_gc", True)):
+            import gc as _gc
+            _gc.collect()
+            _append_live_log(live_log_path, "[m10:cleanup] released fMRI locals, advancing")
     else:
         result.skipped_stages.append("m10")
 
@@ -662,6 +779,31 @@ def _run_subject_body(
                 result.metrics["m11_coupling"] = coupling
             except Exception as exc:
                 result.metrics["m11_error"] = str(exc)
+                if not strict_stage_failures:
+                    result.status = "completed_with_skips"
+                if strict_stage_failures and _is_critical_stage("m11", cfg):
+                    blocked = _mark_critical_failure(
+                        result=result,
+                        state=state,
+                        stage="m11",
+                        error=exc,
+                        only=only,
+                        skip=skip,
+                    )
+                    _append_live_log(live_log_path, f"[run] critical_failure stage=m11 error={exc}")
+                    return _finalize_run(
+                        subject=subject,
+                        cfg=cfg,
+                        result=result,
+                        out_dir=out_dir,
+                        state=state,
+                        state_path=state_path,
+                        live_log_path=live_log_path,
+                        only=only,
+                        skip=skip,
+                        force=force,
+                        config_path=config_path,
+                    )
         else:
             result.metrics["m11_skipped_reason"] = "No joined MEG-fMRI trial table."
         result.stage_timings_s["m11"] = perf_counter() - t0
@@ -772,28 +914,18 @@ def _run_subject_body(
     else:
         result.skipped_stages.append("m8")
 
-    manifest = build_run_manifest(
+    if result.status not in {"failed", "completed_with_skips"}:
+        result.status = "done"
+    return _finalize_run(
         subject=subject,
-        stage="m9_orchestration",
-        params={
-            "only": sorted(only) if only else [],
-            "skip": sorted(skip) if skip else [],
-            "force": force,
-            "seed": 42,
-            "config_fingerprint": config_fingerprint(config_path) if config_path else "unknown",
-            "stage_timings_s": result.stage_timings_s,
-        },
+        cfg=cfg,
+        result=result,
+        out_dir=out_dir,
+        state=state,
+        state_path=state_path,
+        live_log_path=live_log_path,
+        only=only,
+        skip=skip,
+        force=force,
+        config_path=config_path,
     )
-    manifest["metrics"] = result.metrics
-    write_manifest(out_dir / f"sub-{subject}_run_manifest.json", manifest)
-    result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
-    state["status"] = "done"
-    state["current_stage"] = None
-    state["current_stage_description"] = None
-    state["current_stage_started_at"] = None
-    state["stage_timings_s"] = dict(result.stage_timings_s)
-    state["last_event"] = "done:all"
-    state["updated_at"] = time.time()
-    _write_run_state(state_path, state)
-    _append_live_log(live_log_path, "[run] status=done")
-    return result

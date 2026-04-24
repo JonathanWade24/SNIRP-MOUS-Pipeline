@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -14,6 +15,7 @@ from mous_pipeline.m9_orchestration.runner import run_subject
 from mous_pipeline.config import PipelineConfig
 from mous_pipeline.stage_dependencies import parallel_execution_fronts
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 def test_parallel_execution_fronts_full_pipeline():
     fronts = parallel_execution_fronts()
@@ -89,8 +91,8 @@ def test_cli_parallelization_plan_smoke():
         capture_output=True,
         text=True,
         check=True,
-        cwd="/workspace",
-        env={**os.environ, "PYTHONPATH": "src"},
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
     )
     assert "Front 1" in proc.stdout
     assert "m4" in proc.stdout
@@ -113,8 +115,8 @@ def test_cli_parallelization_plan_with_peak_rss():
         capture_output=True,
         text=True,
         check=True,
-        cwd="/workspace",
-        env={**os.environ, "PYTHONPATH": "src"},
+        cwd=str(PROJECT_ROOT),
+        env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src")},
     )
     assert '"n_subjects_max_conservative": 2' in proc.stdout
     assert "max_front_width" in proc.stdout

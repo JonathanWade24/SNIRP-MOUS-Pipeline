@@ -21,6 +21,27 @@ Pipeline code belongs under `src/mous_pipeline/`. Configs live in `configs/`, te
 
 ## PRs
 
-Branch from `main`, run `pytest`, and open a PR with a short description of the change and how you tested it.
+Branch from `main`, run the checks below, and open a focused PR with clear test evidence.
+
+### Required pre-PR checks
+
+```bash
+pytest tests/ -v
+```
+
+For full-pipeline verification (without source reconstruction), run:
+
+```bash
+mous-pipeline run --config <cfg> --subject <id> --skip m5 --dry-run
+mous-pipeline run --config <cfg> --subject <id> --skip m5 --force
+mous-pipeline verify-run --config <cfg> --subject <id> --require-skip-m5 --strict-mode
+```
+
+### Quality expectations
+
+- Keep PR scope small and reviewable; avoid mixing unrelated cleanup and behavioral changes.
+- Bug fixes must include: reproduction signal, root cause, and a regression test.
+- Critical stages (`m10`, `m11` by default) should fail explicitly in strict mode instead of silently degrading.
+- If you intentionally run in permissive mode (`pipeline.strict_stage_failures: false`), document why in the PR.
 
 Questions: [Issues](https://github.com/JonathanWade24/MOUS/issues).

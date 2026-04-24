@@ -34,20 +34,20 @@ def trialwise_betas(
     atlas: str = "glasser",
     roi: str = "L_TE1a",
     confounds: pd.DataFrame | None = None,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     """Fit LSS GLM and return trial-wise MTG beta values.
 
-    Forces single-process nilearn (``n_jobs=1``) and eagerly tears down large
-    objects + joblib pools before returning so the caller can advance to the
-    next stage without blocking on a loky/joblib cleanup deadlock (seen on
-    containerized fMRI runs where shutdown of worker pools can stall).
+    Uses configurable nilearn worker count (``n_jobs``) and eagerly tears down
+    large objects + joblib pools before returning so the caller can advance to
+    the next stage without blocking on pool cleanup stalls.
     """
     model = FirstLevelModel(
         t_r=tr,
         hrf_model="spm",
         noise_model="ar1",
         standardize=False,
-        n_jobs=1,
+        n_jobs=max(1, int(n_jobs)),
     )
     design = _lss_design(events_df)
     model.fit(bold_nii, events=design, confounds=confounds)

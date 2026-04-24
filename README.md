@@ -54,6 +54,11 @@ mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002
 
 Example configs live under `configs/` (e.g. `pilot_A2002.yaml`, `pilot_A2003_fmri.yaml`, `default.yaml`). YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, and optional `fmri` / `wave_validation` blocks.
 
+Pipeline behavior toggles can be set under `pipeline`, for example:
+- `strict_stage_failures` (default true in CI): hard-fail critical stage errors (`m10`, `m11`),
+- `m10_n_jobs` (default `1`): nilearn `FirstLevelModel` worker count for m10 GLM,
+- `m10_force_gc` (default `true`): force cleanup pass after m10.
+
 **Outputs:** Derivatives land under `derivatives_root/<subject>/` organized by stage (e.g. `m4_features/`, `m9_orchestration/`, `m8_reports/`). The HTML report and manifest live in `m8_reports/` and `m9_orchestration/` respectively.
 
 ## Pipeline stages
@@ -103,6 +108,23 @@ mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m6
 
 `--include-fmri` / `--include-waves-validation` **add** `m10,m11` or `m12` to an explicit `--only` list. If you omit `--only`, the runner already selects all stages, so those flags are unnecessary.
 
+### Full-run verification (skip m5)
+
+Use this protocol before Neurodesk pull/runs when source reconstruction (`m5`) is deferred:
+
+```bash
+mous-pipeline run --config <cfg> --subject <id> --skip m5 --dry-run
+mous-pipeline run --config <cfg> --subject <id> --skip m5 --force
+mous-pipeline watch --config <cfg> --subject <id> --verbose
+mous-pipeline verify-run --config <cfg> --subject <id> --require-skip-m5 --strict-mode
+```
+
+Expected acceptance checks:
+- run manifest `metrics.run_status` is `done` or `completed_with_skips`,
+- `metrics.skipped_stages` includes `m5`,
+- strict verification has no `m10_error` or `m11_error`,
+- manifest contains non-empty outputs.
+
 ### Watch a run
 
 Polls `derivatives/.../m9_orchestration/sub-<id>_run_state.json` written during `run`:
@@ -118,6 +140,7 @@ mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002 --verbose
 |---------|---------|
 | `run` | Full or partial subject pipeline |
 | `watch` | Live progress from `run_state.json` |
+| `verify-run` | Validate run-manifest invariants for acceptance checks |
 | `fetch-subject` | Build or run Cyberduck `duck` download for subject archives |
 | `fetch-rdr` | Build or run `repocli get` for Radboud Data Repository (WebDAV) |
 | `group` | Aggregate manifests under `derivatives_root` → `group_summary.json` (and trial CSV if present) |

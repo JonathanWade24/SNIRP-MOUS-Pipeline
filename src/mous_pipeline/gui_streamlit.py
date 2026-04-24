@@ -246,17 +246,17 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _collect_stage_warnings(metrics: dict) -> list[str]:
-    """Return human-readable warnings for silent per-stage failures.
+    """Return human-readable warnings for degraded per-stage failures.
 
-    These are errors that don't abort the pipeline but must be visible after
+    These are errors that don't necessarily abort the pipeline but must be visible after
     the run completes (e.g. m10 KeyError stored as m10_error metric).
     """
     warnings: list[str] = []
     m10_err = metrics.get("m10_error")
     if m10_err:
         warnings.append(
-            f"m10 (fMRI GLM) failed silently — m10_error={m10_err!r}. "
-            "MEG-fMRI trial table was not produced; m11 was skipped."
+            f"m10 (fMRI GLM) failed — m10_error={m10_err!r}. "
+            "MEG-fMRI trial table was not produced; downstream stages may be blocked."
         )
     m10_skip = metrics.get("m10_skipped_reason")
     if m10_skip:
