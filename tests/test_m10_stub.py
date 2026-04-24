@@ -34,11 +34,25 @@ class _DummyModel:
 
 
 class _DummyMasker:
+    def __init__(self, *args, **kwargs):
+        pass
+
     def fit(self, *args, **kwargs):
         return self
 
     def transform(self, img):
         return np.ones((1, 3))
+
+
+class _DummyMasker1D:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def fit(self, *args, **kwargs):
+        return self
+
+    def transform(self, img):
+        return np.ones(3)
 
 
 # ── tests ──────────────────────────────────────────────────────────────────────
@@ -110,3 +124,17 @@ def test_trialwise_betas_accepts_trial_meta_dataframe(monkeypatch):
     out = trialwise_betas("dummy_bold.nii.gz", events, tr=2.0)
     assert list(out.columns) == ["trial_id", "mtg_beta"]
     assert len(out) == 3
+
+
+def test_trialwise_betas_accepts_1d_masker_output(monkeypatch):
+    """Regression: tolerate 1D ROI signal arrays from masker stubs/backends."""
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.FirstLevelModel", _DummyModel)
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.NiftiLabelsMasker", _DummyMasker1D)
+    monkeypatch.setattr(
+        "mous_pipeline.m10_fmri.glm._atlas_and_label",
+        lambda *a, **k: ("dummy_atlas", ["L_TE1a"], "L_TE1a"),
+    )
+    events = pd.DataFrame({"onset": [0.0, 6.0], "duration": [6.0, 6.0]})
+    out = trialwise_betas("dummy_bold.nii.gz", events, tr=2.0)
+    assert list(out.columns) == ["trial_id", "mtg_beta"]
+    assert len(out) == 2
