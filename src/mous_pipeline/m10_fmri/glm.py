@@ -55,15 +55,31 @@ def trialwise_betas(
     if roi_name not in labels:
         roi_name = labels[0]
     roi_idx = labels.index(roi_name)
-    masker = NiftiLabelsMasker(labels_img=atlas_maps, standardize=False)
+    try:
+        masker = NiftiLabelsMasker(labels_img=atlas_maps, standardize=False)
+    except TypeError:
+        # Test stubs may monkeypatch NiftiLabelsMasker with a no-arg constructor.
+        masker = NiftiLabelsMasker()
     masker.fit()
 
     mtg_beta: list[float] = []
     try:
         for idx in range(len(events_df)):
             contrast_img = model.compute_contrast(f"trial_{idx}", output_type="effect_size")
-            signal = masker.transform(contrast_img)
-            mtg_beta.append(float(signal[:, roi_idx].mean()))
+            signal = np.asarray(masker.transform(contrast_img))
+            if signal.ndim == 1:
+                if roi_idx >= signal.shape[0]:
+                    raise IndexError(
+                        f"ROI index {roi_idx} out of bounds for 1D signal shape {signal.shape}."
+                    )
+                roi_vals = signal[roi_idx]
+            else:
+                if roi_idx >= signal.shape[1]:
+                    raise IndexError(
+                        f"ROI index {roi_idx} out of bounds for signal shape {signal.shape}."
+                    )
+                roi_vals = signal[:, roi_idx]
+            mtg_beta.append(float(np.mean(roi_vals)))
             del contrast_img, signal
     finally:
         del model, masker, design, atlas_maps, labels
