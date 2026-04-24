@@ -4,8 +4,10 @@
 #SBATCH --error=logs/mous_cohort_%A_%a.err
 #SBATCH --array=0-14
 #SBATCH --time=04:00:00
-#SBATCH --mem=32G
-#SBATCH --cpus-per-task=6
+#SBATCH --mem=16G
+#SBATCH --cpus-per-task=4
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=
 
 # ============================================================
 # analysis_01_cohort_fetch_and_run.sh
