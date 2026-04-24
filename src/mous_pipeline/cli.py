@@ -108,6 +108,14 @@ def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
+def _run_manifest_candidates(derivatives_root: Path, subject: str) -> list[Path]:
+    sid = subject.removeprefix("sub-")
+    return [
+        derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_manifest.json",
+        derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_manifest.json",
+    ]
+
+
 def _latest_existing_path(candidates: list[Path]) -> Path | None:
     existing = [p for p in candidates if p.exists()]
     if not existing:
@@ -120,6 +128,54 @@ def _fmt_dur(seconds: float) -> str:
         return f"{seconds:.0f}s"
     m, s = divmod(int(seconds), 60)
     return f"{m}m {s:02d}s"
+
+
+def _collect_stage_warnings(metrics: dict) -> list[str]:
+    """Return human-readable warnings for degraded per-stage failures.
+
+    Accepts a metrics dict (from run_manifest.json → metrics, or from
+    SubjectResult.metrics).  These are errors that don't necessarily abort the pipeline
+    but must be visible to the operator after the run completes.
+    """
+    warnings: list[str] = []
+    m10_err = metrics.get("m10_error")
+    if m10_err:
+        warnings.append(
+            f"m10 (fMRI GLM) failed — m10_error={m10_err!r}. "
+            "MEG-fMRI trial table was not produced; downstream stages may be blocked."
+        )
+    m10_skip = metrics.get("m10_skipped_reason")
+    if m10_skip:
+        warnings.append(f"m10 skipped — {m10_skip}")
+    m11_skip = metrics.get("m11_skipped_reason")
+    if m11_skip:
+        warnings.append(f"m11 skipped — {m11_skip}")
+    return warnings
+
+
+def _verify_run_manifest(
+    manifest_payload: dict,
+    *,
+    require_skip_m5: bool = False,
+    strict_mode: bool = False,
+) -> list[str]:
+    errors: list[str] = []
+    metrics = manifest_payload.get("metrics", {}) if isinstance(manifest_payload, dict) else {}
+    run_status = str(metrics.get("run_status") or "")
+    if run_status not in {"done", "completed_with_skips"}:
+        errors.append(f"run_status must be done/completed_with_skips, got {run_status!r}")
+    skipped = metrics.get("skipped_stages") or []
+    if require_skip_m5 and "m5" not in skipped:
+        errors.append("m5 must be present in skipped_stages")
+    if strict_mode:
+        if metrics.get("m10_error"):
+            errors.append("strict verification failed: m10_error present")
+        if metrics.get("m11_error"):
+            errors.append("strict verification failed: m11_error present")
+    outputs = manifest_payload.get("outputs", [])
+    if not isinstance(outputs, list) or not outputs:
+        errors.append("manifest outputs list is empty")
+    return errors
 
 
 def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> None:
@@ -145,7 +201,13 @@ def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> Non
 
     # Human-readable labels
     current_label = _STAGE_LABELS.get(current_id, current_id) if current_id else "—"
-    status_icon = {"running": "⏳", "done": "✓", "failed": "✗", "dry_run": "⊙"}.get(status, "·")
+    status_icon = {
+        "running": "⏳",
+        "done": "✓",
+        "completed_with_skips": "!",
+        "failed": "✗",
+        "dry_run": "⊙",
+    }.get(status, "·")
 
     if status == "done":
         line = f"{status_icon} Done  [{bar}] {pct}%  {done}/{total} stages  total {_fmt_dur(elapsed)}"
@@ -318,6 +380,15 @@ def main() -> None:
     watch_parser.add_argument("--subject", required=True)
     watch_parser.add_argument("--interval", type=float, default=2.0, help="Polling interval in seconds")
     watch_parser.add_argument("--verbose", action="store_true", help="Tail live run log while watching state")
+    verify_parser = sub.add_parser("verify-run", help="Verify run manifest invariants")
+    verify_parser.add_argument("--config", required=True)
+    verify_parser.add_argument("--subject", required=True)
+    verify_parser.add_argument("--require-skip-m5", action="store_true", help="Require m5 to be skipped")
+    verify_parser.add_argument(
+        "--strict-mode",
+        action="store_true",
+        help="Fail verification when m10_error/m11_error are present",
+    )
 
     fetch_parser = sub.add_parser("fetch-subject", help="Build or execute Cyberduck duck download command")
     fetch_parser.add_argument("--subject", required=True, help="Subject ID without sub- prefix, e.g., A2003")
@@ -509,13 +580,45 @@ def main() -> None:
                 if chunk:
                     for line in chunk.rstrip().splitlines():
                         print(f"  {line}")
-            if status in {"done", "failed", "dry_run"}:
+            if status in {"done", "completed_with_skips", "failed", "dry_run"}:
                 if use_cr:
                     print()
                 err = payload.get("error")
                 if err:
                     print(f"error: {err}", file=sys.stderr)
+                # Surface silent per-stage warnings from the run manifest metrics
+                manifest_candidates = _run_manifest_candidates(cfg.derivatives_root, args.subject)
+                manifest_path = _latest_existing_path(manifest_candidates)
+                if manifest_path and manifest_path.exists():
+                    try:
+                        manifest_metrics = json.loads(manifest_path.read_text()).get("metrics", {})
+                        for w in _collect_stage_warnings(manifest_metrics):
+                            print(f"warning: {w}", file=sys.stderr)
+                    except Exception:
+                        pass
                 break
+    elif args.cmd == "verify-run":
+        cfg = load_config(args.config)
+        candidates = _run_manifest_candidates(cfg.derivatives_root, args.subject)
+        manifest_path = _latest_existing_path(candidates)
+        if manifest_path is None or not manifest_path.exists():
+            print("No run manifest found for subject.", file=sys.stderr)
+            sys.exit(2)
+        try:
+            payload = json.loads(manifest_path.read_text())
+        except Exception as exc:
+            print(f"Could not parse manifest: {exc}", file=sys.stderr)
+            sys.exit(2)
+        errors = _verify_run_manifest(
+            payload,
+            require_skip_m5=args.require_skip_m5,
+            strict_mode=args.strict_mode,
+        )
+        if errors:
+            for err in errors:
+                print(f"verify-run: {err}", file=sys.stderr)
+            sys.exit(1)
+        print(f"verify-run: OK ({manifest_path})")
     elif args.cmd == "fetch-subject":
         cmd = build_duck_download_command(
             protocol=args.protocol,

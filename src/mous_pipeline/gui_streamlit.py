@@ -245,6 +245,28 @@ def _fmt_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _collect_stage_warnings(metrics: dict) -> list[str]:
+    """Return human-readable warnings for degraded per-stage failures.
+
+    These are errors that don't necessarily abort the pipeline but must be visible after
+    the run completes (e.g. m10 KeyError stored as m10_error metric).
+    """
+    warnings: list[str] = []
+    m10_err = metrics.get("m10_error")
+    if m10_err:
+        warnings.append(
+            f"m10 (fMRI GLM) failed — m10_error={m10_err!r}. "
+            "MEG-fMRI trial table was not produced; downstream stages may be blocked."
+        )
+    m10_skip = metrics.get("m10_skipped_reason")
+    if m10_skip:
+        warnings.append(f"m10 skipped — {m10_skip}")
+    m11_skip = metrics.get("m11_skipped_reason")
+    if m11_skip:
+        warnings.append(f"m11 skipped — {m11_skip}")
+    return warnings
+
+
 def _run_state_candidates(cfg: PipelineConfig, subject: str) -> list[Path]:
     sid = subject.removeprefix("sub-")
     return [
@@ -666,8 +688,18 @@ def _run_one(subject: str, cfg, cfg_path: Path, skip: set[str], selected: list[s
             logs.append(f"     p (task vs rest): {p_val:.4f}\n")
         logs.append(f"     Total time: {_fmt_duration(total_elapsed)}\n")
 
+        # Surface silent per-stage failures that don't abort the pipeline
+        _stage_warn_lines = _collect_stage_warnings(result.metrics)
+        if _stage_warn_lines:
+            logs.append(f"  {'─'*52}\n")
+            for _w in _stage_warn_lines:
+                logs.append(f"  ⚠️  {_w}\n")
+
         progress.progress(100, text=f"sub-{subject} — {verdict} · {_fmt_duration(total_elapsed)}")
         log_box.code("".join(logs))
+        if _stage_warn_lines:
+            for _w in _stage_warn_lines:
+                st.warning(_w)
         return {
             "subject": subject,
             "verdict": verdict,
