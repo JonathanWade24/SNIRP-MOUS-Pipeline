@@ -185,7 +185,9 @@ def run_subject(
                 completed.append(stage)
             state["stage_timings_s"] = dict(result.stage_timings_s)
             state["last_event"] = f"done:{stage}"
+            state["current_stage"] = None
             state["current_stage_description"] = None
+            state["current_stage_started_at"] = None
             dur = float(result.stage_timings_s.get(stage, 0.0))
             _append_live_log(
                 live_log_path,
@@ -642,6 +644,12 @@ def _run_subject_body(
         _emit("done", "m10")
         if progress_callback:
             progress_callback("m10")
+        # Release any large fMRI locals before leaving m10 so joblib/nilearn
+        # pool teardown happens here (inside m10's wall-clock) instead of
+        # stalling the gap between m10 and m11.
+        import gc as _gc
+        _gc.collect()
+        _append_live_log(live_log_path, "[m10:cleanup] released fMRI locals, advancing")
     else:
         result.skipped_stages.append("m10")
 

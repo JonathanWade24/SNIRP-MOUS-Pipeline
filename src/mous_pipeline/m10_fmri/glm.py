@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+
 import numpy as np
 import pandas as pd
 from nilearn.glm.first_level import FirstLevelModel
@@ -33,8 +35,20 @@ def trialwise_betas(
     roi: str = "L_TE1a",
     confounds: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Fit LSS GLM and return trial-wise MTG beta values."""
-    model = FirstLevelModel(t_r=tr, hrf_model="spm", noise_model="ar1", standardize=False)
+    """Fit LSS GLM and return trial-wise MTG beta values.
+
+    Forces single-process nilearn (``n_jobs=1``) and eagerly tears down large
+    objects + joblib pools before returning so the caller can advance to the
+    next stage without blocking on a loky/joblib cleanup deadlock (seen on
+    containerized fMRI runs where shutdown of worker pools can stall).
+    """
+    model = FirstLevelModel(
+        t_r=tr,
+        hrf_model="spm",
+        noise_model="ar1",
+        standardize=False,
+        n_jobs=1,
+    )
     design = _lss_design(events_df)
     model.fit(bold_nii, events=design, confounds=confounds)
     atlas_maps, labels, roi_name = _atlas_and_label(atlas, roi)
@@ -42,12 +56,18 @@ def trialwise_betas(
         roi_name = labels[0]
     roi_idx = labels.index(roi_name)
     masker = NiftiLabelsMasker(labels_img=atlas_maps, standardize=False)
+    masker.fit()
 
     mtg_beta: list[float] = []
-    for idx in range(len(events_df)):
-        contrast_img = model.compute_contrast(f"trial_{idx}", output_type="effect_size")
-        signal = masker.fit_transform(contrast_img)
-        mtg_beta.append(float(signal[:, roi_idx].mean()))
+    try:
+        for idx in range(len(events_df)):
+            contrast_img = model.compute_contrast(f"trial_{idx}", output_type="effect_size")
+            signal = masker.transform(contrast_img)
+            mtg_beta.append(float(signal[:, roi_idx].mean()))
+            del contrast_img, signal
+    finally:
+        del model, masker, design, atlas_maps, labels
+        gc.collect()
 
     trial_ids = (
         events_df["trial_id"].to_numpy(dtype=int)
