@@ -50,4 +50,38 @@ def export_subject_payload(
         trials_df.to_csv(out_dir / f"{subject}_trials.csv", index=False)
     if joined_df is not None and not joined_df.empty:
         joined_df.to_csv(out_dir / f"{subject}_trials_joined.csv", index=False)
+
+    # Optional m5 exports (when source reconstruction ran and wrote arrays).
+    m5_dir = stage_output_dir(cfg, subject, "m5_source")
+    source_dirs_path = m5_dir / f"sub-{subject}_source_dirs.npy"
+    source_dci_path = m5_dir / f"sub-{subject}_source_dci.npy"
+    if source_dirs_path.exists():
+        source_dirs = np.load(source_dirs_path)
+        pd.DataFrame(
+            {
+                "epoch": np.arange(len(source_dirs)),
+                "source_direction_rad": source_dirs,
+            }
+        ).to_csv(out_dir / f"{subject}_source_directions.csv", index=False)
+    if source_dci_path.exists():
+        source_dci = np.load(source_dci_path)
+        pd.DataFrame(
+            {
+                "epoch": np.arange(len(source_dci)),
+                "source_dci": source_dci,
+            }
+        ).to_csv(out_dir / f"{subject}_source_dci.csv", index=False)
+
+    roi_ts_path = m5_dir / f"sub-{subject}_source_roi_ts.npz"
+    roi_labels_path = m5_dir / f"sub-{subject}_source_roi_labels.json"
+    if roi_ts_path.exists() and roi_labels_path.exists():
+        roi_matrix = np.load(roi_ts_path)["roi_matrix"]  # (n_epochs, n_labels, n_times)
+        roi_labels = json.loads(roi_labels_path.read_text())
+        rows = [
+            {"epoch": ep, "label": label, "mean_beta": float(np.mean(roi_matrix[ep, li, :]))}
+            for ep in range(roi_matrix.shape[0])
+            for li, label in enumerate(roi_labels)
+        ]
+        pd.DataFrame(rows).to_csv(out_dir / f"{subject}_source_roi_summary.csv", index=False)
+
     return out_dir

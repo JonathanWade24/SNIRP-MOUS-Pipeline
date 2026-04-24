@@ -72,6 +72,7 @@ tests/test_m10_stub.py
 tests/test_m1_events.py
 tests/test_m1_events_validation.py
 tests/test_m3_epoching.py
+tests/test_m5_reporting.py
 tests/test_m6_phase_gradient.py
 tests/test_m7_circular.py
 tests/test_m9_pilot_gating.py

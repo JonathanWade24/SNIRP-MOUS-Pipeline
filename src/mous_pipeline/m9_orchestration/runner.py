@@ -603,6 +603,15 @@ def _run_subject_body(
                         m5_out / f"sub-{subject}_source_dirs.npy",
                         m5_out / f"sub-{subject}_source_dci.npy",
                     ]
+                    # Save ROI timeseries for downstream export and QA.
+                    if roi_ts:
+                        roi_labels = list(roi_ts.keys())
+                        roi_matrix = np.stack(list(roi_ts.values()), axis=1)  # (n_epochs, n_labels, n_times)
+                        roi_ts_path = m5_out / f"sub-{subject}_source_roi_ts.npz"
+                        roi_labels_path = m5_out / f"sub-{subject}_source_roi_labels.json"
+                        np.savez(roi_ts_path, roi_matrix=roi_matrix)
+                        roi_labels_path.write_text(json.dumps(roi_labels))
+                        result.outputs += [roi_ts_path, roi_labels_path]
                 except Exception as exc:
                     result.metrics["m5_error"] = str(exc)
                 result.stage_timings_s["m5"] = perf_counter() - t0
