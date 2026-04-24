@@ -77,5 +77,5 @@ def make_events_array(trials: pd.DataFrame, sfreq: float) -> np.ndarray:
 def make_events_metadata(trials: pd.DataFrame) -> pd.DataFrame:
     """Return event-aligned trial metadata for epoch-level analyses."""
     return trials.reset_index(drop=True).assign(trial_id=lambda d: np.arange(len(d), dtype=int))[
-        ["trial_id", "condition", "block_id", "pos_in_block"]
+        ["trial_id", "onset", "condition", "block_id", "pos_in_block"]
     ]
