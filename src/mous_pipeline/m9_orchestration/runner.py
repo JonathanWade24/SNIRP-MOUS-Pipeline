@@ -51,6 +51,23 @@ from ..stage_dependencies import STAGE_ORDER, list_missing_stage_dependencies
 from .gating import PilotGate
 from .memory_probe import StageRSSProbe
 
+_STAGE_BRIEFS: dict[str, str] = {
+    "m1": "Reads event timings and trial labels.",
+    "m2": "Cleans MEG data (noise, artifacts, filtering).",
+    "m3": "Cuts cleaned MEG into trial-sized chunks.",
+    "m4": "Computes beta-band signal and power summaries.",
+    "m4_trial": "Builds trial-level MEG features for stats.",
+    "m5": "Estimates source-space activity in the brain.",
+    "m6a": "Measures traveling-wave direction consistency.",
+    "m6_extra": "Runs extra wave detectors for QA metrics.",
+    "m7": "Tests whether effects are statistically reliable.",
+    "m8": "Builds exports and visual reports.",
+    "m9": "Applies pilot decision rules (GO/MARGINAL/NO-GO).",
+    "m10": "Runs fMRI preprocessing and trial-level GLM.",
+    "m11": "Fits MEG-fMRI coupling models.",
+    "m12": "Checks wave effects against a simulation null.",
+}
+
 @dataclass
 class RunResult:
     subject: str
@@ -126,6 +143,7 @@ def run_subject(
         "status": "running",
         "selected_stages": selected,
         "current_stage": None,
+        "current_stage_description": None,
         "current_stage_started_at": None,
         "stage_index": 0,
         "stage_total": len(selected),
@@ -154,6 +172,7 @@ def run_subject(
             memory_probe.record(event, stage)
         if event == "start":
             state["current_stage"] = stage
+            state["current_stage_description"] = _STAGE_BRIEFS.get(stage, "")
             state["current_stage_started_at"] = time.time()
             # Execution order can differ from STAGE_ORDER (e.g. m7 before m10); index by run position.
             state["stage_index"] = len(completed) + 1
@@ -166,6 +185,7 @@ def run_subject(
                 completed.append(stage)
             state["stage_timings_s"] = dict(result.stage_timings_s)
             state["last_event"] = f"done:{stage}"
+            state["current_stage_description"] = None
             dur = float(result.stage_timings_s.get(stage, 0.0))
             _append_live_log(
                 live_log_path,
@@ -180,6 +200,7 @@ def run_subject(
         result.metrics["dry_run"] = True
         state["status"] = "dry_run"
         state["current_stage"] = None
+        state["current_stage_description"] = None
         state["current_stage_started_at"] = None
         state["updated_at"] = time.time()
         _write_run_state(state_path, state)
@@ -569,7 +590,15 @@ def _run_subject_body(
                 from ..m10_fmri.glm import trialwise_betas
                 from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
 
-                fmriprep_out = run_fmriprep(subject, cfg, bids_root=cfg.data_root)
+                verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
+                fmriprep_out = run_fmriprep(
+                    subject,
+                    cfg,
+                    bids_root=cfg.data_root,
+                    log_callback=(lambda line: _append_live_log(live_log_path, f"[m10:fmriprep] {line}"))
+                    if verbose_tools
+                    else None,
+                )
                 bold_path = resolve_subject_bold_path(
                     subject,
                     cfg,
@@ -752,6 +781,7 @@ def _run_subject_body(
     result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
     state["status"] = "done"
     state["current_stage"] = None
+    state["current_stage_description"] = None
     state["current_stage_started_at"] = None
     state["stage_timings_s"] = dict(result.stage_timings_s)
     state["last_event"] = "done:all"

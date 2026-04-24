@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 
 def _resolve_output_dir(path_value: str, bids_root: Path, project_root: Path | None = None) -> Path:
@@ -141,7 +142,51 @@ def _assert_no_spaces(path: Path, label: str) -> None:
         )
 
 
-def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
+def _run_cmd_streaming(cmd: list[str], *, log_callback: Callable[[str], None] | None = None) -> None:
+    if log_callback is None:
+        subprocess.run(cmd, check=True)
+        return
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        msg = line.rstrip()
+        if msg:
+            log_callback(msg)
+    code = proc.wait()
+    if code != 0:
+        raise subprocess.CalledProcessError(code, cmd)
+
+
+def _run_shell_streaming(shell_cmd: str, *, log_callback: Callable[[str], None] | None = None) -> None:
+    if log_callback is None:
+        subprocess.run(shell_cmd, shell=True, check=True, executable="/bin/bash",
+                       env={**os.environ, "MODULEPATH": os.environ.get("MODULEPATH", "")})
+        return
+    proc = subprocess.Popen(
+        ["/bin/bash", "-lc", shell_cmd],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env={**os.environ, "MODULEPATH": os.environ.get("MODULEPATH", "")},
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        msg = line.rstrip()
+        if msg:
+            log_callback(msg)
+    code = proc.wait()
+    if code != 0:
+        raise subprocess.CalledProcessError(code, shell_cmd)
+
+
+def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[str], None] | None = None) -> Path:
     """Run fMRIPrep for a subject, with Neurodesk module and container support.
 
     Execution modes (checked in order):
@@ -192,13 +237,12 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
         if not container.exists():
             raise FileNotFoundError(f"fMRIPrep container not found: {container}")
         cmd = ["singularity", "exec", str(container), "fmriprep"] + fmriprep_args
-        subprocess.run(cmd, check=True)
+        _run_cmd_streaming(cmd, log_callback=log_callback)
     elif neurodesk_module:
         # Load Neurodesk/Lmod module and run fmriprep in the same shell.
         quoted_args = " ".join(shlex.quote(arg) for arg in fmriprep_args)
         shell_cmd = f"ml {shlex.quote(neurodesk_module)} && fmriprep {quoted_args}"
-        subprocess.run(shell_cmd, shell=True, check=True, executable="/bin/bash",
-                       env={**os.environ, "MODULEPATH": os.environ.get("MODULEPATH", "")})
+        _run_shell_streaming(shell_cmd, log_callback=log_callback)
     else:
         if not shutil.which("fmriprep"):
             raise FileNotFoundError(
@@ -206,6 +250,6 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path) -> Path:
                 "In Neurodesk run `ml fmriprep` before launching the pipeline, "
                 "or set fmri.neurodesk_module: fmriprep in your config."
             )
-        subprocess.run(["fmriprep"] + fmriprep_args, check=True)
+        _run_cmd_streaming(["fmriprep"] + fmriprep_args, log_callback=log_callback)
 
     return out_dir

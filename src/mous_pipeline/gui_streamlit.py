@@ -253,15 +253,22 @@ def _run_state_candidates(cfg: PipelineConfig, subject: str) -> list[Path]:
     ]
 
 
+def _latest_existing_path(candidates: list[Path]) -> Path | None:
+    existing = [p for p in candidates if p.exists()]
+    if not existing:
+        return None
+    return max(existing, key=lambda p: p.stat().st_mtime_ns)
+
+
 def _read_run_state(cfg: PipelineConfig, subject: str) -> dict[str, Any] | None:
-    for path in _run_state_candidates(cfg, subject):
-        if path.exists():
-            try:
-                payload = json.loads(path.read_text())
-            except Exception:
-                return None
-            payload["_path"] = str(path)
-            return payload
+    path = _latest_existing_path(_run_state_candidates(cfg, subject))
+    if path and path.exists():
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            return None
+        payload["_path"] = str(path)
+        return payload
     return None
 
 
@@ -271,13 +278,13 @@ def _read_live_log_tail(cfg: PipelineConfig, subject: str, *, max_lines: int = 1
         cfg.derivatives_root / sid / "m9_orchestration" / f"sub-{sid}_run_live.log",
         cfg.derivatives_root / f"sub-{sid}" / "m9_orchestration" / f"sub-{sid}_run_live.log",
     ]
-    for path in candidates:
-        if path.exists():
-            try:
-                lines = path.read_text().splitlines()
-            except Exception:
-                return str(path), []
-            return str(path), lines[-max_lines:]
+    path = _latest_existing_path(candidates)
+    if path and path.exists():
+        try:
+            lines = path.read_text().splitlines()
+        except Exception:
+            return str(path), []
+        return str(path), lines[-max_lines:]
     return None, []
 
 
@@ -791,6 +798,7 @@ def _run_section() -> None:
                 total = int(live.get("stage_total") or 0)
                 status = str(live.get("status") or "unknown")
                 current = live.get("current_stage") or "—"
+                current_desc = str(live.get("current_stage_description") or "").strip()
                 done = len(live.get("completed_stages") or [])
                 started_at = float(live.get("started_at") or 0.0)
                 stage_started_at = live.get("current_stage_started_at")
@@ -809,6 +817,8 @@ def _run_section() -> None:
                     f"**Index:** `{idx}/{total}`  •  **Elapsed:** `{_fmt_duration(elapsed_s)}`  •  "
                     f"**Stage elapsed:** `{_fmt_duration(stage_elapsed_s)}`"
                 )
+                if current_desc:
+                    st.caption(f"Stage role: {current_desc}")
                 
                 if live.get("error"):
                     st.error(str(live.get("error")))

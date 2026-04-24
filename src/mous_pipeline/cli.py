@@ -108,6 +108,13 @@ def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
+def _latest_existing_path(candidates: list[Path]) -> Path | None:
+    existing = [p for p in candidates if p.exists()]
+    if not existing:
+        return None
+    return max(existing, key=lambda p: p.stat().st_mtime_ns)
+
+
 def _fmt_dur(seconds: float) -> str:
     if seconds < 60:
         return f"{seconds:.0f}s"
@@ -120,6 +127,7 @@ def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> Non
     total = int(payload.get("stage_total") or 0)
     status = str(payload.get("status") or "unknown")
     current_id = payload.get("current_stage") or ""
+    current_desc = str(payload.get("current_stage_description") or "").strip()
     done = len(payload.get("completed_stages") or [])
     started_at = float(payload.get("started_at") or time.time())
     stage_started_at = payload.get("current_stage_started_at")
@@ -151,6 +159,8 @@ def _print_watch_line(payload: dict, *, use_carriage_return: bool = True) -> Non
             f"now: {current_label}  ({_fmt_dur(stage_elapsed)})  "
             f"total {_fmt_dur(elapsed)}"
         )
+        if current_desc:
+            line += f"  — {current_desc}"
 
     if use_carriage_return and status == "running":
         print(f"\r{line}", end="", flush=True)
@@ -466,12 +476,14 @@ def main() -> None:
         cfg = load_config(args.config)
         candidates = _run_state_candidates(cfg.derivatives_root, args.subject)
         log_candidates = _run_log_candidates(cfg.derivatives_root, args.subject)
-        state_path = next((p for p in candidates if p.exists()), candidates[0])
-        log_path = next((p for p in log_candidates if p.exists()), log_candidates[0])
+        state_path = _latest_existing_path(candidates) or candidates[0]
+        log_path = _latest_existing_path(log_candidates) or log_candidates[0]
         print(f"Watching: {state_path}")
         last_mtime_ns = -1
         log_offset = 0
         while True:
+            state_path = _latest_existing_path(candidates) or candidates[0]
+            log_path = _latest_existing_path(log_candidates) or log_candidates[0]
             if not state_path.exists():
                 print("\rWaiting for run_state.json...", end="", flush=True)
                 time.sleep(max(0.2, args.interval))
