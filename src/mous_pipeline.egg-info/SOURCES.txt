@@ -41,6 +41,7 @@ src/mous_pipeline/m4_features/hilbert.py
 src/mous_pipeline/m4_features/n400m.py
 src/mous_pipeline/m4_features/prestim.py
 src/mous_pipeline/m4_features/spectral.py
+src/mous_pipeline/m5_source/__init__.py
 src/mous_pipeline/m5_source/forward.py
 src/mous_pipeline/m5_source/inverse.py
 src/mous_pipeline/m5_source/roi.py
@@ -68,6 +69,7 @@ src/mous_pipeline/m9_orchestration/runner.py
 tests/test_bids_backend_stub.py
 tests/test_bids_convert.py
 tests/test_cyberduck.py
+tests/test_m10_onset_regression.py
 tests/test_m10_stub.py
 tests/test_m1_events.py
 tests/test_m1_events_validation.py

@@ -1,6 +1,6 @@
-data_root: "~/MOUS/Pipeline WIP/mous_data/"
+data_root: "~/mous_data"
 derivatives_root: "derivatives/mous_pipeline"
-subjects: ["A2003"]
+subjects: ["A2003", "A2002", "A2006"]
 
 # RDR (Repocli): one-time `repocli config` with base URL https://webdav.data.ru.nl
 # Then: mous-pipeline fetch-rdr --config configs/pilot_A2003_fmri.yaml --subject A2003 --execute

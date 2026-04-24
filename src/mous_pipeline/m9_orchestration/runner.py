@@ -786,6 +786,7 @@ def _run_subject_body(
             try:
                 coupling = run_coupling_models(joined_df)
                 result.metrics["m11_coupling"] = coupling
+                result.metrics["m11_trials_rows"] = joined_df.to_dict(orient="records")
             except Exception as exc:
                 result.metrics["m11_error"] = str(exc)
                 if not strict_stage_failures:
