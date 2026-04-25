@@ -401,13 +401,13 @@ def _run_subject_body(
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
-    _m4trial_hit = (
-        not force
-        and _m4t_prestim.exists()
-        and _m4t_n400m.exists()
-        and len(np.load(_m4t_prestim)["prestim_beta"]) == len(trial_meta)
-        and len(np.load(_m4t_n400m)["n400m"]) == len(trial_meta)
-    )
+    _m4trial_cache: tuple[np.ndarray, np.ndarray] | None = None
+    if not force and _m4t_prestim.exists() and _m4t_n400m.exists():
+        _pb = np.load(_m4t_prestim)["prestim_beta"]
+        _na = np.load(_m4t_n400m)["n400m"]
+        if len(_pb) == len(trial_meta) and len(_na) == len(trial_meta):
+            _m4trial_cache = (_pb, _na)
+    _m4trial_hit = _m4trial_cache is not None
     _m6a_hit     = (
         not force
         and all(p.exists() for p in _m6a_paths.values())
@@ -492,8 +492,8 @@ def _run_subject_body(
         t0 = perf_counter()
         if _m4trial_hit:
             result.metrics["m4_trial_cache_hit"] = True
-            prestim_beta = np.load(_m4t_prestim)["prestim_beta"]
-            n400m        = np.load(_m4t_n400m)["n400m"]
+            assert _m4trial_cache is not None
+            prestim_beta, n400m = _m4trial_cache
         else:
             assert epochs is not None
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta)

@@ -63,7 +63,7 @@ fmri:
   fmriprep_container: ""
   fmriprep_output: "derivatives/fmriprep"
   skip_fmriprep: false
-  skip_bids_validation: true
+  skip_bids_validation: false
   neurodesk_module: "fmriprep"
   fs_license_file: "/data/freesurfer/license.txt"
 
