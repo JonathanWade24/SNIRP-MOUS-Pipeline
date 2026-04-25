@@ -22,8 +22,8 @@ def fit_and_apply(raw: mne.io.BaseRaw, cfg: PipelineConfig) -> tuple[mne.io.Base
     ica.fit(raw_fit, picks="meg")
 
     ecg_indices, ecg_scores = ica.find_bads_ecg(raw, method="correlation", threshold=cfg.preprocess.ecg_threshold)
-    if len(ecg_indices) > cfg.preprocess.ecg_max_components:
-        top = sorted(range(len(ecg_scores)), key=lambda i: abs(ecg_scores[i]), reverse=True)[
+    if ecg_indices and len(ecg_indices) > cfg.preprocess.ecg_max_components:
+        top = sorted(range(len(ecg_indices)), key=lambda i: abs(ecg_scores[i]), reverse=True)[
             : cfg.preprocess.ecg_max_components
         ]
         ecg_indices = [ecg_indices[i] for i in sorted(top)]

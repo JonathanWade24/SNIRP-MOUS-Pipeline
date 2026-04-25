@@ -2,7 +2,7 @@
 #SBATCH --job-name=mous_cohort
 #SBATCH --output=logs/mous_cohort_%A_%a.out
 #SBATCH --error=logs/mous_cohort_%A_%a.err
-#SBATCH --array=0-14
+#SBATCH --array=0-12
 #SBATCH --time=04:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
@@ -39,8 +39,8 @@ CONFIG="configs/cohort_15subjects_fmri.yaml"
 
 SUBJECTS=(
   A2002 A2003 A2004 A2005 A2006
-  A2007 A2008 A2009 A2010 A2011
-  A2012 A2013 A2014 A2015 A2027
+  A2007 A2008 A2009 A2010 A2013
+  A2014 A2015 A2027
 )
 
 # When running under SLURM, pick subject from array index.
