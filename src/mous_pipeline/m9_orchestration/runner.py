@@ -401,7 +401,13 @@ def _run_subject_body(
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
-    _m4trial_hit = not force and _m4t_prestim.exists() and _m4t_n400m.exists()
+    _m4trial_hit = (
+        not force
+        and _m4t_prestim.exists()
+        and _m4t_n400m.exists()
+        and len(np.load(_m4t_prestim)["prestim_beta"]) == len(trial_meta)
+        and len(np.load(_m4t_n400m)["n400m"]) == len(trial_meta)
+    )
     _m6a_hit     = (
         not force
         and all(p.exists() for p in _m6a_paths.values())
