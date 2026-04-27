@@ -107,3 +107,4 @@ scripts/palmetto_submit.sh \
 - FreeSurfer errors: verify `fmri.fs_license_file` or `MOUS_FREESURFER_LICENSE` exists and is readable.
 - m5 still skipped: verify `source.subjects_dir` points to completed recon-all outputs and use `--include-m5`.
 - `repocli` fetch failures: run `repocli config` once using `https://webdav.data.ru.nl`.
+

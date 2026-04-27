@@ -377,6 +377,7 @@ def _run_subject_body(
     result.metrics["n_zinnen"] = int((trials["condition"] == "ZINNEN").sum())
     result.metrics["n_woorden"] = int((trials["condition"] == "WOORDEN").sum())
     trial_meta = make_events_metadata(trials)
+    trial_meta_aligned = trial_meta.copy()
 
     # ── Per-stage output file paths ───────────────────────────────────────────
     _m4_analytic  = m4_out_dir / f"{subject}_beta_analytic.npz"
@@ -401,12 +402,25 @@ def _run_subject_body(
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
-    _m4trial_cache: tuple[np.ndarray, np.ndarray] | None = None
+    _m4trial_cache: tuple[np.ndarray, np.ndarray, pd.DataFrame] | None = None
     if not force and _m4t_prestim.exists() and _m4t_n400m.exists():
-        _pb = np.load(_m4t_prestim)["prestim_beta"]
-        _na = np.load(_m4t_n400m)["n400m"]
-        if len(_pb) == len(trial_meta) and len(_na) == len(trial_meta):
-            _m4trial_cache = (_pb, _na)
+        _prestim_cache = np.load(_m4t_prestim)
+        _n400m_cache = np.load(_m4t_n400m)
+        _pb = _prestim_cache["prestim_beta"]
+        _na = _n400m_cache["n400m"]
+        _pb_trial_id = _prestim_cache.get("trial_id")
+        _na_trial_id = _n400m_cache.get("trial_id")
+        if (
+            _pb_trial_id is not None
+            and _na_trial_id is not None
+            and len(_pb) == len(_pb_trial_id)
+            and len(_na) == len(_na_trial_id)
+            and np.array_equal(_pb_trial_id, _na_trial_id)
+        ):
+            _trial_lookup = trial_meta.set_index("trial_id")
+            if np.isin(_pb_trial_id, _trial_lookup.index).all():
+                _aligned = _trial_lookup.loc[_pb_trial_id].reset_index()
+                _m4trial_cache = (_pb, _na, _aligned)
     _m4trial_hit = _m4trial_cache is not None
     _m6a_hit     = (
         not force
@@ -460,6 +474,14 @@ def _run_subject_body(
     if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
         epochs = make_epochs(task_raw, trials, cfg)
+    if epochs is not None:
+        selection = np.asarray(getattr(epochs, "selection", np.arange(len(epochs))), dtype=int)
+        if selection.shape[0] != len(epochs):
+            selection = np.arange(len(epochs), dtype=int)
+        trial_meta_aligned = trial_meta.iloc[selection].reset_index(drop=True)
+        dropped = int(len(trial_meta) - len(trial_meta_aligned))
+        if dropped > 0:
+            result.metrics["n_rejected_task_epochs"] = dropped
     result.stage_timings_s["m3"] = perf_counter() - t0
     _emit("done", "m3")
     if progress_callback and _stage_selected("m3", only, skip):
@@ -467,7 +489,7 @@ def _run_subject_body(
 
     # ── m4: analytic signal + PSD ─────────────────────────────────────────────
     analytic_features = None
-    trial_df = trial_meta.copy()
+    trial_df = trial_meta_aligned.copy()
     if _stage_selected("m4", only, skip):
         _emit("start", "m4")
         t0 = perf_counter()
@@ -493,16 +515,17 @@ def _run_subject_body(
         if _m4trial_hit:
             result.metrics["m4_trial_cache_hit"] = True
             assert _m4trial_cache is not None
-            prestim_beta, n400m = _m4trial_cache
+            prestim_beta, n400m, trial_meta_aligned = _m4trial_cache
+            trial_df = trial_meta_aligned.copy()
         else:
             assert epochs is not None
-            prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta)
-            n400m        = n400m_amplitude(epochs, subject, cfg, trial_meta)
-        y = (trial_meta["condition"] == "ZINNEN").to_numpy(dtype=int)
+            prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta_aligned)
+            n400m        = n400m_amplitude(epochs, subject, cfg, trial_meta_aligned)
+        y = (trial_meta_aligned["condition"] == "ZINNEN").to_numpy(dtype=int)
         result.metrics["aim1_prestim_auc"] = logreg_condition_from_prestim(prestim_beta, y)
         result.metrics["aim1_n400m_zinnen_vs_woorden_t"] = n400m_condition_t(
             n400m,
-            trial_meta["condition"].to_numpy(dtype=str),
+            trial_meta_aligned["condition"].to_numpy(dtype=str),
         )
         trial_df["prestim_beta"] = prestim_beta
         trial_df["n400m"] = n400m

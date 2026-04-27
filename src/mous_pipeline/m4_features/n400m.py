@@ -31,6 +31,12 @@ def n400m_amplitude(
     # produce larger positive amplitudes (N400-like effect size convention).
     n400m = -data.mean(axis=(1, 2))
 
+    if len(trial_meta) != len(n400m):
+        raise ValueError(
+            "trial_meta length does not match epoch count for n400m_amplitude. "
+            "Align metadata to kept epochs (for example, with epochs.selection) before calling."
+        )
+
     out_dir = stage_output_dir(cfg, subject, "m4_features")
     np.savez(
         out_dir / f"{subject}_n400m.npz",
