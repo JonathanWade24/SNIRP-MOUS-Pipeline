@@ -3,7 +3,7 @@
 #SBATCH --output=logs/mous_cohort_%A_%a.out
 #SBATCH --error=logs/mous_cohort_%A_%a.err
 #SBATCH --array=0-12
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --mail-type=END,FAIL
@@ -12,8 +12,8 @@
 # ============================================================
 # analysis_01_cohort_fetch_and_run.sh
 #
-# Fetch + run the full MOUS pipeline (m1-m12, m5 skipped) for
-# 15 subjects in a SLURM array job.
+# Fetch + run the full MOUS pipeline (m1-m12, including m5 source
+# reconstruction) for the configured cohort in a SLURM array job.
 #
 # Usage:
 #   # 1. Make sure repocli is configured (one-time):
@@ -69,19 +69,18 @@ else
   echo "[fetch] sub-${SID} already present, skipping download."
 fi
 
-# ── Step 2: Run full pipeline (m5 skipped — no FreeSurfer recon yet) ────────
+# ── Step 2: Run full pipeline, including m5 source reconstruction ───────────
 echo "[run] Launching pipeline for sub-${SID}..."
 mous-pipeline run \
   --config "${CONFIG}" \
-  --subject "${SID}" \
-  --skip m5
+  --subject "${SID}"
 
 # ── Step 3: Verify run completed cleanly ────────────────────────────────────
 echo "[verify] Checking run manifest..."
 mous-pipeline verify-run \
   --config "${CONFIG}" \
   --subject "${SID}" \
-  --require-skip-m5 \
+  --require-m5 \
   --strict-mode
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Done: ${SID}"

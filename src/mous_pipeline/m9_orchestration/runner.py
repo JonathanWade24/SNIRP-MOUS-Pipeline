@@ -590,7 +590,7 @@ def _run_subject_body(
                     fwd, src = build_forward_model(subject, task_raw, cfg)
                     stcs = compute_inverse(epochs["ZINNEN"], fwd, cfg)
                     labels = mne.read_labels_from_annot(
-                        "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject}",
+                        "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject.removeprefix('sub-')}",
                         parc="aparc",
                         subjects_dir=source_cfg.subjects_dir,
                     )
