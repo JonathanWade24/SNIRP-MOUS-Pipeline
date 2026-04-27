@@ -42,9 +42,10 @@ features:
     beta: [13.0, 30.0]
     gamma: [30.0, 80.0]
 
-# Aim 1 / m5 source reconstruction — leave subjects_dir empty to skip m5.
+# Aim 1 / m5 source reconstruction. FreeSurfer recon-all outputs are written by
+# scripts/analysis_02_freesurfer_recon.sh.
 source:
-  subjects_dir: ""
+  subjects_dir: "derivatives/freesurfer"
   use_fsaverage: true
   beamformer: "lcmv"
   spacing: "oct6"

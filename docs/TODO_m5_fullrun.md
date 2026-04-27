@@ -27,8 +27,9 @@ The pipeline code for M5 is fully implemented. The only blocker is FreeSurfer ou
   configs/
     cohort_15subjects_fmri.yaml       ← Main cohort config (edit source.subjects_dir here)
   scripts/
+    analysis_00_hpc_setup.sh          ← Creates/checks HPC directories and can submit jobs
     analysis_01_cohort_fetch_and_run.sh
-    analysis_02_freesurfer_recon.sh   ← TO BE SUBMITTED (see below)
+    analysis_02_freesurfer_recon.sh   ← FreeSurfer recon-all array job
   derivatives/
     freesurfer/                       ← recon-all outputs go here (create this)
       sub-A2002/
@@ -49,9 +50,47 @@ The pipeline code for M5 is fully implemented. The only blocker is FreeSurfer ou
 
 ---
 
+## Step 0 — Prepare HPC Workspace
+
+**Script added:** `scripts/analysis_00_hpc_setup.sh`
+
+Run this on the SLURM login node from the repository root:
+
+```bash
+bash scripts/analysis_00_hpc_setup.sh --check-data
+```
+
+The setup script creates the expected HPC-side directories:
+
+```bash
+logs/
+derivatives/freesurfer/
+derivatives/mous_pipeline/
+derivatives/fmriprep/
+derivatives/coreg/
+```
+
+It also verifies that:
+- `configs/cohort_15subjects_fmri.yaml` exists and points `source.subjects_dir` at `derivatives/freesurfer`,
+- the FreeSurfer license exists at `$FS_LICENSE` or `/data/freesurfer/license.txt`,
+- `sbatch`, `mous-pipeline`, and the `freesurfer/7.4.1` module are visible where possible,
+- all subject T1w images exist when `--check-data` is passed.
+
+Optional submission helpers:
+
+```bash
+bash scripts/analysis_00_hpc_setup.sh --submit-recon
+bash scripts/analysis_00_hpc_setup.sh --check-freesurfer
+bash scripts/analysis_00_hpc_setup.sh --submit-cohort
+```
+
+Use `--dry-run` with any of those flags to preview filesystem/submission actions.
+
+---
+
 ## Step 1 — Run FreeSurfer recon-all (per subject, ~6–8h each)
 
-**Script to write:** `scripts/analysis_02_freesurfer_recon.sh`
+**Script added:** `scripts/analysis_02_freesurfer_recon.sh`
 
 SLURM array job, one task per subject (array=0-12 matching the cohort list).
 Each task runs:
@@ -113,14 +152,13 @@ source:
   trans: "derivatives/coreg/sub-{subject}-trans.fif"
 ```
 
-Runner.py would need a small update to expand `{subject}` in the trans path.
+The runner now expands `{subject}` and `{subject_bids}` in the trans path.
 
 ---
 
 ## Step 4 — Rerun the Full Cohort with M5
 
-Remove `--skip m5` from the pipeline run command in
-`scripts/analysis_01_cohort_fetch_and_run.sh`:
+`scripts/analysis_01_cohort_fetch_and_run.sh` now runs m5 by default:
 
 ```bash
 # Change:
@@ -130,7 +168,7 @@ mous-pipeline run --config "${CONFIG}" --subject "${SID}" --skip m5
 mous-pipeline run --config "${CONFIG}" --subject "${SID}"
 ```
 
-Also update `--require-skip-m5` → remove it from the `verify-run` call.
+The `verify-run` call now uses `--require-m5`.
 
 Resubmit: `sbatch scripts/analysis_01_cohort_fetch_and_run.sh`
 
@@ -144,7 +182,7 @@ M5 adds ~10–20 min per subject on top of the existing runtime. Raise
 Once all subjects complete:
 
 ```bash
-run-group
+mous-pipeline group --derivatives-root derivatives/mous_pipeline
 ```
 
 With real source-space DCI values, expect:
@@ -197,11 +235,13 @@ The repo itself (`~/MOUS/Sandbox/MOUS/`) is on GitHub at
 
 ## Summary Checklist
 
-- [ ] Submit `analysis_02_freesurfer_recon.sh` (array=0-12, ~6-8h per subject)
+- [x] Add `analysis_00_hpc_setup.sh` for HPC directory setup, checks, and optional submission
+- [x] Add `analysis_02_freesurfer_recon.sh` (array=0-12, ~6-8h per subject)
 - [ ] Verify recon-all outputs: `brain.mgz`, `lh.white`, `rh.white` for all 13 subjects
-- [ ] Set `source.subjects_dir: "derivatives/freesurfer"` in config
-- [ ] Remove `--skip m5` from `analysis_01_cohort_fetch_and_run.sh`
-- [ ] Raise SLURM `--time` to `06:00:00`
+- [x] Set `source.subjects_dir: "derivatives/freesurfer"` in config
+- [x] Remove `--skip m5` from `analysis_01_cohort_fetch_and_run.sh`
+- [x] Raise SLURM `--time` to `06:00:00`
 - [ ] Resubmit cohort job
 - [ ] Run `run-group` for cohort-level inference
-- [ ] (Optional) Run subject-specific coregistration for publication quality
+- [x] Add subject-specific coregistration trans-path expansion for publication-quality runs
+- [ ] (Optional) Generate subject-specific coregistration `.fif` files for publication quality
