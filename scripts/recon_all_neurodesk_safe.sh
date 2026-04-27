@@ -11,11 +11,13 @@ Options:
   --data-root <path>       Root containing sub-*/anat/*_T1w.nii (default: /home/jovyan/mous_data).
   --subjects-dir <path>    FreeSurfer SUBJECTS_DIR output (default: derivatives/freesurfer).
   --openmp <n>             OpenMP threads for recon-all (default: 3).
+  --force-restart          Delete existing subject folder and restart from scratch.
   -h, --help               Show this help.
 
 Notes:
   - Run from repo root.
   - Script always stages input into a no-space path under <subjects-dir>/_inputs.
+  - Use --force-restart to clear a partial/failed previous run.
 EOF
 }
 
@@ -23,6 +25,7 @@ SUBJECT=""
 DATA_ROOT="${DATA_ROOT:-/home/jovyan/mous_data}"
 SUBJECTS_DIR="${SUBJECTS_DIR:-derivatives/freesurfer}"
 OPENMP="${OPENMP:-3}"
+FORCE_RESTART=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +44,10 @@ while [[ $# -gt 0 ]]; do
     --openmp)
       OPENMP="${2:-}"
       shift 2
+      ;;
+    --force-restart)
+      FORCE_RESTART=1
+      shift
       ;;
     -h|--help)
       usage
@@ -85,6 +92,19 @@ fi
 if ! command -v recon-all >/dev/null 2>&1; then
   echo "ERROR: recon-all not found. Open a FreeSurfer app terminal in Neurodesk or load the module manually." >&2
   exit 1
+fi
+
+SUBJECT_DIR="${SUBJECTS_DIR}/${SUBJECT}"
+if [[ -d "${SUBJECT_DIR}" ]]; then
+  if [[ "${FORCE_RESTART}" -eq 1 ]]; then
+    echo "WARNING: Removing existing subject folder: ${SUBJECT_DIR}"
+    rm -rf "${SUBJECT_DIR}"
+  else
+    echo "ERROR: Subject folder already exists: ${SUBJECT_DIR}" >&2
+    echo "       If this is a failed/partial run, rerun with --force-restart to delete it and start fresh." >&2
+    echo "       If you are resuming a partial run, omit --data-root and the -i flag is not needed." >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "${SUBJECTS_DIR}"
