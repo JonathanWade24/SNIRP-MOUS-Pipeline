@@ -4,8 +4,8 @@
 #SBATCH --error=logs/mous_fs_recon_%A_%a.err
 #SBATCH --array=0-12
 #SBATCH --time=12:00:00
-#SBATCH --mem=16G
-#SBATCH --cpus-per-task=4
+#SBATCH --mem=12G
+#SBATCH --cpus-per-task=3
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=jonathan.w202013@gmail.com
 
