@@ -73,6 +73,8 @@ class FmriConfig:
     skip_bids_validation: bool = False
     neurodesk_module: str = "fmriprep"
     fs_license_file: str = ""
+    container_runtime: str = ""
+    container_binds: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -151,6 +153,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         skip_bids_validation=bool(fmri_raw.get("skip_bids_validation", False)),
         neurodesk_module=str(fmri_raw.get("neurodesk_module", "fmriprep")),
         fs_license_file=str(fmri_raw.get("fs_license_file", "")),
+        container_runtime=str(fmri_raw.get("container_runtime", "")),
+        container_binds=[str(p) for p in fmri_raw.get("container_binds", [])],
     )
     wv_raw = raw.get("wave_validation", {})
     wave_validation = WaveValidationConfig(

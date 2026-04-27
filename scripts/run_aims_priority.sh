@@ -7,6 +7,9 @@ Build/Run Aim 1/2/3 SLURM orchestration.
 
 Usage:
   scripts/run_aims_priority.sh --config <config.yaml> [--subjects A2002,A2003] [--fetch-missing] [--dry-run]
+                               [--partition hpcnirc] [--account acct] [--qos qos]
+                               [--time 08:00:00] [--mem 32G] [--cpus-per-task 8]
+                               [--include-m5]
 
 Behavior:
   1) Resolve subjects from config `subjects:` or --subjects override.
@@ -22,6 +25,13 @@ CONFIG=""
 SUBJECTS_OVERRIDE=""
 FETCH_MISSING=0
 DRY_RUN=0
+PARTITION=""
+ACCOUNT=""
+QOS=""
+TIME_LIMIT=""
+MEMORY=""
+CPUS_PER_TASK=""
+INCLUDE_M5=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +49,34 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --partition)
+      PARTITION="${2:-}"
+      shift 2
+      ;;
+    --account)
+      ACCOUNT="${2:-}"
+      shift 2
+      ;;
+    --qos)
+      QOS="${2:-}"
+      shift 2
+      ;;
+    --time)
+      TIME_LIMIT="${2:-}"
+      shift 2
+      ;;
+    --mem)
+      MEMORY="${2:-}"
+      shift 2
+      ;;
+    --cpus-per-task)
+      CPUS_PER_TASK="${2:-}"
+      shift 2
+      ;;
+    --include-m5)
+      INCLUDE_M5=1
       shift
       ;;
     -h|--help)
@@ -148,24 +186,49 @@ python "$REPO_ROOT/scripts/aim1_audit.py" --config "$CONFIG_ABS" --subject "$FIR
 fi
 
 SLURM_DIR="$DERIV_ROOT/slurm"
-mkdir -p "$SLURM_DIR"
-SUBJECTS_FILE="$SLURM_DIR/fmriprep_subjects_$(date +%Y%m%d_%H%M%S).txt"
-printf "%s\n" "${SUBJECTS[@]}" > "$SUBJECTS_FILE"
 ARRAY_MAX=$(( ${#SUBJECTS[@]} - 1 ))
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  SUBJECTS_FILE="$SLURM_DIR/fmriprep_subjects_dryrun.txt"
+else
+  mkdir -p "$SLURM_DIR"
+  SUBJECTS_FILE="$SLURM_DIR/fmriprep_subjects_$(date +%Y%m%d_%H%M%S).txt"
+  printf "%s\n" "${SUBJECTS[@]}" > "$SUBJECTS_FILE"
+fi
 
 echo "[slurm] submitting fMRIPrep array: 0-$ARRAY_MAX"
 SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
 SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
 SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
+SBATCH_EXTRA=()
+if [[ -n "$PARTITION" ]]; then
+  SBATCH_EXTRA+=(--partition "$PARTITION")
+fi
+if [[ -n "$ACCOUNT" ]]; then
+  SBATCH_EXTRA+=(--account "$ACCOUNT")
+fi
+if [[ -n "$QOS" ]]; then
+  SBATCH_EXTRA+=(--qos "$QOS")
+fi
+if [[ -n "$TIME_LIMIT" ]]; then
+  SBATCH_EXTRA+=(--time "$TIME_LIMIT")
+fi
+if [[ -n "$MEMORY" ]]; then
+  SBATCH_EXTRA+=(--mem "$MEMORY")
+fi
+if [[ -n "$CPUS_PER_TASK" ]]; then
+  SBATCH_EXTRA+=(--cpus-per-task "$CPUS_PER_TASK")
+fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "[dry-run][slurm] sbatch --job-name mous_fmriprep --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR $REPO_ROOT/scripts/run_fmriprep_subject.sh --config $CONFIG_ABS --subjects-file $SUBJECTS_FILE"
+  EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
+  echo "[dry-run][slurm] sbatch --job-name mous_fmriprep --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR${EXTRA_STR} $REPO_ROOT/scripts/run_fmriprep_subject.sh --config $CONFIG_ABS --subjects-file $SUBJECTS_FILE"
 else
   sbatch \
     --job-name "mous_fmriprep" \
     --array "0-$ARRAY_MAX" \
     --output "$SBATCH_OUTPUT" \
     --error "$SBATCH_ERROR" \
+    "${SBATCH_EXTRA[@]}" \
     "$REPO_ROOT/scripts/run_fmriprep_subject.sh" \
     --config "$CONFIG_ABS" \
     --subjects-file "$SUBJECTS_FILE" | tee "$SBATCH_LOG"
@@ -173,11 +236,15 @@ fi
 
 for sub in "${SUBJECTS[@]}"; do
   echo "[meg] Running MEG pipeline for sub-$sub (Aim1/Aim3 path)"
+  MEG_SKIP="m5,m10,m11"
+  if [[ "$INCLUDE_M5" -eq 1 ]]; then
+    MEG_SKIP="m10,m11"
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run][meg] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip m5,m10,m11"
+    echo "[dry-run][meg] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP"
     continue
   fi
-  mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip m5,m10,m11
+  mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP"
 done
 
 echo "[group] Running group aggregation"

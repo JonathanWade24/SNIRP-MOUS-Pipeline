@@ -52,6 +52,18 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   exit 1
 fi
 
+if [[ -n "${MOUS_VENV:-}" ]]; then
+  # Optional venv activation for batch jobs launched from a clean shell.
+  # shellcheck disable=SC1090
+  source "${MOUS_VENV}/bin/activate"
+fi
+
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "python3/python is required but was not found on PATH." >&2
+  exit 1
+fi
+
 LINE_NO=$((SLURM_ARRAY_TASK_ID + 1))
 SUBJECT="$(sed -n "${LINE_NO}p" "$SUBJECTS_FILE" | tr -d '[:space:]')"
 
@@ -60,8 +72,9 @@ if [[ -z "$SUBJECT" ]]; then
   exit 1
 fi
 
-echo "[fmriprep-array] subject=$SUBJECT config=$CONFIG"
-python - "$CONFIG" "$SUBJECT" <<'PY'
+echo "[fmriprep-array] host=$(hostname) job_id=${SLURM_JOB_ID:-na} task_id=${SLURM_ARRAY_TASK_ID:-na}"
+echo "[fmriprep-array] python=$PYTHON_BIN config=$CONFIG subject=$SUBJECT"
+"$PYTHON_BIN" - "$CONFIG" "$SUBJECT" <<'PY'
 from pathlib import Path
 import sys
 

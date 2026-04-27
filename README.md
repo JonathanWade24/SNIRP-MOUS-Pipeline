@@ -219,7 +219,8 @@ For cluster-oriented orchestration, use:
 scripts/run_aims_priority.sh \
   --config configs/pilot_A2003_fmri.yaml \
   --subjects A2003,A2004 \
-  --fetch-missing
+  --fetch-missing \
+  --partition hpcnirc
 ```
 
 What it does:
@@ -235,6 +236,15 @@ Preview all commands without executing:
 ```bash
 scripts/run_aims_priority.sh --config configs/pilot_A2003_fmri.yaml --subjects A2003 --fetch-missing --dry-run
 ```
+
+Palmetto-specific wrapper and setup docs:
+
+```bash
+bash scripts/palmetto_setup.sh
+scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account YOUR_ACCOUNT --dry-run
+```
+
+See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.
 
 ## Testing
 

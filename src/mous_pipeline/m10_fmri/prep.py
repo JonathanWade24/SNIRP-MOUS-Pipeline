@@ -11,6 +11,30 @@ from pathlib import Path
 from typing import Callable
 
 
+def _resolve_container_runtime(cfg) -> str:
+    """Pick container runtime, preferring explicit config then PATH discovery."""
+    configured = str(getattr(cfg.fmri, "container_runtime", "")).strip()
+    if configured:
+        return configured
+    if shutil.which("apptainer"):
+        return "apptainer"
+    if shutil.which("singularity"):
+        return "singularity"
+    raise FileNotFoundError(
+        "No container runtime found. Install apptainer/singularity, "
+        "or set fmri.container_runtime in your config."
+    )
+
+
+def _container_bind_args(cfg) -> list[str]:
+    """Build runtime-specific bind arguments from fmri.container_binds."""
+    binds = [str(item).strip() for item in getattr(cfg.fmri, "container_binds", []) if str(item).strip()]
+    bind_args: list[str] = []
+    for bind in binds:
+        bind_args += ["-B", bind]
+    return bind_args
+
+
 def _resolve_output_dir(path_value: str, bids_root: Path, project_root: Path | None = None) -> Path:
     """Resolve *path_value* to an absolute path.
 
@@ -118,7 +142,9 @@ def _fmriprep_cmd(subject: str, bids_root: Path, out_dir: Path, work_dir: Path, 
         container = Path(container_path).expanduser()
         if not container.exists():
             raise FileNotFoundError(f"fMRIPrep container not found: {container}")
-        return ["singularity", "exec", str(container), "fmriprep"] + fmriprep_args
+        runtime = _resolve_container_runtime(cfg)
+        bind_args = _container_bind_args(cfg)
+        return [runtime, "exec"] + bind_args + [str(container), "fmriprep"] + fmriprep_args
 
     # No container — use binary on PATH (works after `ml fmriprep` in Neurodesk).
     if not shutil.which("fmriprep"):
@@ -191,7 +217,7 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[
 
     Execution modes (checked in order):
     1. skip_fmriprep=true  — return output dir immediately (preprocessed data assumed present).
-    2. fmri.fmriprep_container set — run via ``singularity exec <container> fmriprep``.
+    2. fmri.fmriprep_container set — run via ``apptainer/singularity exec <container> fmriprep``.
     3. fmriprep on PATH — run directly (e.g. after ``ml fmriprep`` in Neurodesk).
 
     If fmri.neurodesk_module is set, ``ml <module>`` is sourced before running so the
@@ -237,7 +263,9 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[
             container = Path(container_path).expanduser()
             if not container.exists():
                 raise FileNotFoundError(f"fMRIPrep container not found: {container}")
-            cmd = ["singularity", "exec", str(container), "fmriprep"] + fmriprep_args
+            runtime = _resolve_container_runtime(cfg)
+            bind_args = _container_bind_args(cfg)
+            cmd = [runtime, "exec"] + bind_args + [str(container), "fmriprep"] + fmriprep_args
             _run_cmd_streaming(cmd, log_callback=log_callback)
         elif neurodesk_module:
             quoted_args = " ".join(shlex.quote(arg) for arg in fmriprep_args)
