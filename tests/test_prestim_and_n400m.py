@@ -36,3 +36,20 @@ def test_prestim_beta_and_n400m_shapes(repo_root):
     n400m = n400m_amplitude(epochs, "TEST", cfg, meta)
     assert prestim.shape == (len(epochs),)
     assert n400m.shape == (len(epochs),)
+
+
+def test_trial_meta_must_match_epoch_count(repo_root):
+    epochs = _fake_epochs()
+    cfg = PipelineConfig(data_root=repo_root, derivatives_root=repo_root / "derivatives" / "test_tmp")
+    meta = pd.DataFrame(
+        {
+            "trial_id": np.arange(len(epochs) + 1),
+            "condition": ["ZINNEN"] * (len(epochs) // 2 + 1) + ["WOORDEN"] * (len(epochs) // 2),
+            "block_id": [0] * (len(epochs) + 1),
+            "pos_in_block": np.arange(len(epochs) + 1),
+        }
+    )
+    with pytest.raises(ValueError, match="trial_meta length does not match epoch count"):
+        prestim_beta_power(epochs, "TEST", cfg, meta)
+    with pytest.raises(ValueError, match="trial_meta length does not match epoch count"):
+        n400m_amplitude(epochs, "TEST", cfg, meta)
