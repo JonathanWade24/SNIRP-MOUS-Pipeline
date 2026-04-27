@@ -278,6 +278,23 @@ scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account
 
 See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.
 
+Neurodesk single-subject FreeSurfer helper (safe with spaces in source paths):
+
+```bash
+chmod +x scripts/recon_all_neurodesk_safe.sh
+scripts/recon_all_neurodesk_safe.sh --subject A2027
+```
+
+Optional overrides:
+
+```bash
+scripts/recon_all_neurodesk_safe.sh \
+  --subject A2027 \
+  --data-root "/home/jovyan/MOUS/Pipeline WIP/mous_data" \
+  --subjects-dir derivatives/freesurfer \
+  --openmp 3
+```
+
 ## Testing
 
 The `tests/` directory contains pytest-based tests covering stages, CLI commands, and edge cases:
@@ -312,6 +329,9 @@ Tests use fixtures in `tests/conftest.py` for sample data and configs.
 
 **Watch command shows "Waiting for run_state.json"**
 : Start a `run` in another terminal first. The `watch` command polls the live state file written during pipeline execution.
+
+**FreeSurfer fails with `mri_convert: extra argument`**
+: The input path usually contains spaces. Use `scripts/recon_all_neurodesk_safe.sh` (or the updated SLURM scripts in `scripts/`), which stage T1w into a no-space path before calling `recon-all`.
 
 ## Contributing
 

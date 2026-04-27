@@ -90,8 +90,13 @@ if [[ ! -f "$T1_PATH" ]]; then
 fi
 
 mkdir -p "$SUBJECTS_DIR"
+SAFE_INPUT_ROOT="${MOUS_FREESURFER_SAFE_INPUT_ROOT:-$SUBJECTS_DIR/_inputs}"
+SAFE_INPUT_DIR="${SAFE_INPUT_ROOT}/${SUBJECT}/anat"
+SAFE_T1_PATH="${SAFE_INPUT_DIR}/${SUBJECT}_T1w.nii"
+mkdir -p "$SAFE_INPUT_DIR"
+cp -f "$T1_PATH" "$SAFE_T1_PATH"
 echo "[recon-all] host=$(hostname) job_id=${SLURM_JOB_ID:-na} task_id=${SLURM_ARRAY_TASK_ID:-na}"
-echo "[recon-all] subject=$SUBJECT t1=$T1_PATH subjects_dir=$SUBJECTS_DIR"
+echo "[recon-all] subject=$SUBJECT t1=$T1_PATH staged_t1=$SAFE_T1_PATH subjects_dir=$SUBJECTS_DIR"
 
 if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
   APPTAINER_BIN="$(command -v apptainer || command -v singularity || true)"
@@ -101,13 +106,13 @@ if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
   fi
   "$APPTAINER_BIN" exec \
     -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
-    -B "$(dirname "$T1_PATH"):$(dirname "$T1_PATH")" \
+    -B "$SAFE_INPUT_DIR:$SAFE_INPUT_DIR" \
     "${MOUS_FREESURFER_CONTAINER}" \
-    recon-all -s "$SUBJECT" -i "$T1_PATH" -sd "$SUBJECTS_DIR" -all
+    recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all
 else
   if ! command -v recon-all >/dev/null 2>&1; then
     echo "recon-all not found. Load MOUS_FREESURFER_MODULE or set MOUS_FREESURFER_CONTAINER." >&2
     exit 1
   fi
-  recon-all -s "$SUBJECT" -i "$T1_PATH" -sd "$SUBJECTS_DIR" -all
+  recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all
 fi

@@ -64,10 +64,16 @@ if [[ ! -f "${T1W}" ]]; then
 fi
 
 mkdir -p "${SUBJECTS_DIR}"
+SAFE_INPUT_ROOT="${FREESURFER_SAFE_INPUT_ROOT:-${SUBJECTS_DIR}/_inputs}"
+SAFE_INPUT_DIR="${SAFE_INPUT_ROOT}/sub-${SID}/anat"
+SAFE_T1W="${SAFE_INPUT_DIR}/sub-${SID}_T1w.nii"
+mkdir -p "${SAFE_INPUT_DIR}"
+cp -f "${T1W}" "${SAFE_T1W}"
+echo "[config] SAFE_T1W=${SAFE_T1W}"
 
 recon-all \
   -s "sub-${SID}" \
-  -i "${T1W}" \
+  -i "${SAFE_T1W}" \
   -sd "${SUBJECTS_DIR}" \
   -all \
   -parallel \
