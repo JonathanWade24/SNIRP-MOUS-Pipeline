@@ -108,6 +108,24 @@ mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m6
 
 `--include-fmri` / `--include-waves-validation` **add** `m10,m11` or `m12` to an explicit `--only` list. If you omit `--only`, the runner already selects all stages, so those flags are unnecessary.
 
+### Full-run verification (with m5)
+
+Use this protocol after FreeSurfer recon-all outputs are available under
+`source.subjects_dir`:
+
+```bash
+mous-pipeline run --config <cfg> --subject <id> --dry-run
+mous-pipeline run --config <cfg> --subject <id> --force
+mous-pipeline watch --config <cfg> --subject <id> --verbose
+mous-pipeline verify-run --config <cfg> --subject <id> --require-m5 --strict-mode
+```
+
+Expected acceptance checks:
+- run manifest `metrics.run_status` is `done` or `completed_with_skips`,
+- `metrics.skipped_stages` does not include `m5`,
+- `metrics.source_dci_zinnen` or `metrics.m5_n_stcs` is present,
+- strict verification has no `m10_error` or `m11_error`.
+
 ### Full-run verification (skip m5)
 
 Use this protocol before Neurodesk pull/runs when source reconstruction (`m5`) is deferred:
@@ -214,6 +232,20 @@ mous-pipeline group --derivatives-root derivatives/mous_pipeline --test lme
 ## SLURM automation (Aim 1/2/3)
 
 For cluster-oriented orchestration, use:
+
+```bash
+scripts/analysis_00_hpc_setup.sh --check-data
+sbatch scripts/analysis_02_freesurfer_recon.sh
+scripts/analysis_00_hpc_setup.sh --check-freesurfer
+sbatch scripts/analysis_01_cohort_fetch_and_run.sh
+```
+
+`analysis_00_hpc_setup.sh` creates the expected `logs/` and `derivatives/`
+subdirectories, checks the FreeSurfer license and cohort T1w inputs, and can
+optionally submit the FreeSurfer or full-cohort SLURM jobs with
+`--submit-recon` / `--submit-cohort`.
+
+For Aim-priority automation without the full M5 FreeSurfer workflow, use:
 
 ```bash
 scripts/run_aims_priority.sh \
