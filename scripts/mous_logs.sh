@@ -77,8 +77,7 @@ _pick_from_list() {
 
 _job_summary() {
   local jobid="$1"
-  local jobname task_count mtime
-  # Derive job name from the first available log for this job id
+  local jobname task_count err_count mtime note
   local first_log
   first_log=$(ls -t "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | head -1) || true
   if [[ -z "$first_log" ]]; then
@@ -86,10 +85,15 @@ _job_summary() {
   fi
   jobname=$(basename "$first_log" .out | sed "s/_${jobid}_[0-9]*$//")
   task_count=$(ls "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | wc -l | tr -d ' ')
+  err_count=$(grep -rl "Traceback\|^ERROR\|FAILED" \
+    "${LOGS_DIR}"/*_"${jobid}"_*.err 2>/dev/null | wc -l | tr -d ' ')
   mtime=$(date -r "$first_log" "+%Y-%m-%d %H:%M" 2>/dev/null \
           || stat -c "%y" "$first_log" | cut -d. -f1)
-  printf "  job %-8s  %-26s  %2d task log(s)   %s\n" \
-    "$jobid" "$jobname" "$task_count" "$mtime"
+  note=""
+  (( err_count > 0 ))  && note=" [${err_count} ERR]"
+  (( task_count == 1 )) && note+=" [single-task]"
+  printf "  job %-8s  %-26s  %2d tasks%s   %s\n" \
+    "$jobid" "$jobname" "$task_count" "$note" "$mtime"
 }
 
 # ── Discover jobs ─────────────────────────────────────────────────────────────
@@ -99,7 +103,7 @@ mapfile -t ALL_JOBS < <(
   | xargs -I{} basename {} .out \
   | grep -oP '_\K[0-9]+(?=_[0-9]+$)' \
   | awk '!seen[$0]++' \
-  | head -3
+  | head -10
 )
 
 if [[ ${#ALL_JOBS[@]} -eq 0 ]]; then
