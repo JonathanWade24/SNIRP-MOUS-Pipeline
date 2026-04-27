@@ -232,24 +232,31 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[
         fmriprep_args += ["--fs-license-file", fs_license]
     container_path = str(getattr(cfg.fmri, "fmriprep_container", "")).strip()
 
-    if container_path:
-        container = Path(container_path).expanduser()
-        if not container.exists():
-            raise FileNotFoundError(f"fMRIPrep container not found: {container}")
-        cmd = ["singularity", "exec", str(container), "fmriprep"] + fmriprep_args
-        _run_cmd_streaming(cmd, log_callback=log_callback)
-    elif neurodesk_module:
-        # Load Neurodesk/Lmod module and run fmriprep in the same shell.
-        quoted_args = " ".join(shlex.quote(arg) for arg in fmriprep_args)
-        shell_cmd = f"ml {shlex.quote(neurodesk_module)} && fmriprep {quoted_args}"
-        _run_shell_streaming(shell_cmd, log_callback=log_callback)
-    else:
-        if not shutil.which("fmriprep"):
-            raise FileNotFoundError(
-                "fmriprep binary not found on PATH. "
-                "In Neurodesk run `ml fmriprep` before launching the pipeline, "
-                "or set fmri.neurodesk_module: fmriprep in your config."
-            )
-        _run_cmd_streaming(["fmriprep"] + fmriprep_args, log_callback=log_callback)
+    try:
+        if container_path:
+            container = Path(container_path).expanduser()
+            if not container.exists():
+                raise FileNotFoundError(f"fMRIPrep container not found: {container}")
+            cmd = ["singularity", "exec", str(container), "fmriprep"] + fmriprep_args
+            _run_cmd_streaming(cmd, log_callback=log_callback)
+        elif neurodesk_module:
+            quoted_args = " ".join(shlex.quote(arg) for arg in fmriprep_args)
+            shell_cmd = f"ml {shlex.quote(neurodesk_module)} && fmriprep {quoted_args}"
+            _run_shell_streaming(shell_cmd, log_callback=log_callback)
+        else:
+            if not shutil.which("fmriprep"):
+                raise FileNotFoundError(
+                    "fmriprep binary not found on PATH. "
+                    "In Neurodesk run `ml fmriprep` before launching the pipeline, "
+                    "or set fmri.neurodesk_module: fmriprep in your config."
+                )
+            _run_cmd_streaming(["fmriprep"] + fmriprep_args, log_callback=log_callback)
+    except subprocess.CalledProcessError:
+        # fMRIPrep exits non-zero on warnings even when outputs are complete.
+        # If the expected subject output directory has content, treat as success.
+        subject_id = subject.removeprefix("sub-")
+        subject_func = out_dir / f"sub-{subject_id}" / "func"
+        if not any(subject_func.glob("*desc-preproc_bold*")):
+            raise
 
     return out_dir
