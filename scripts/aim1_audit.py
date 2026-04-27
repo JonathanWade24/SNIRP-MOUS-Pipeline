@@ -96,7 +96,13 @@ def run_audit(config_path: Path, subject_raw: str) -> int:
     raw = apply_notch_and_resample(raw, cfg)
     raw, _ica = fit_and_apply(raw, cfg)
     raw = apply_band(raw, 13, 30)
-    epochs = make_epochs(raw, trials, cfg)
+    epochs_out = make_epochs(raw, trials, cfg)
+    # Backward/forward compatibility: make_epochs may return epochs only
+    # or (epochs, trial_meta_aligned).
+    if isinstance(epochs_out, tuple):
+        epochs = epochs_out[0]
+    else:
+        epochs = epochs_out
 
     # Alignment check: event samples generated from onset should match epoch events.
     n_cmp = min(5, len(trials), len(epochs.events))
