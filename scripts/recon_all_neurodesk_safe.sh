@@ -69,7 +69,21 @@ if [[ ! -f "${T1W}" ]]; then
 fi
 
 if ! command -v recon-all >/dev/null 2>&1; then
-  echo "ERROR: recon-all not found on PATH" >&2
+  if command -v module >/dev/null 2>&1; then
+    module load freesurfer/7.4.1
+  elif [[ -f /opt/freesurfer-7.4.1/SetUpFreeSurfer.sh ]]; then
+    export FREESURFER_HOME=/opt/freesurfer-7.4.1
+    # shellcheck source=/dev/null
+    source "$FREESURFER_HOME/SetUpFreeSurfer.sh"
+  elif [[ -f /usr/local/freesurfer/7.4.1-1/SetUpFreeSurfer.sh ]]; then
+    export FREESURFER_HOME=/usr/local/freesurfer/7.4.1-1
+    # shellcheck source=/dev/null
+    source "$FREESURFER_HOME/SetUpFreeSurfer.sh"
+  fi
+fi
+
+if ! command -v recon-all >/dev/null 2>&1; then
+  echo "ERROR: recon-all not found. Open a FreeSurfer app terminal in Neurodesk or load the module manually." >&2
   exit 1
 fi
 
