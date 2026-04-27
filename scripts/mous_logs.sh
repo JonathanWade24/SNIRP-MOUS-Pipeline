@@ -3,19 +3,54 @@
 #
 # Usage:
 #   bash scripts/mous_logs.sh           # show last 3 runs, pick one, pick subject
-#   source scripts/mous_logs.sh         # same but keeps you in current shell
 #   bash scripts/mous_logs.sh <jobid>   # jump straight to a specific job ID
+#
+# Subjects are read from configs/cohort_15subjects_fmri.yaml (no hardcoding).
+# Task-index→subject mapping is derived from the log filenames themselves, so
+# partial-array retry jobs (e.g. --array=7) display correctly.
 
 set -euo pipefail
 
-LOGS_DIR="${LOGS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/logs}"
-SUBJECTS=(
-  A2002 A2003 A2004 A2005 A2006
-  A2007 A2008 A2009 A2010 A2013
-  A2014 A2015 A2027
-)
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOGS_DIR="${LOGS_DIR:-${REPO_ROOT}/logs}"
+CONFIG="${MOUS_CONFIG:-${REPO_ROOT}/configs/cohort_15subjects_fmri.yaml}"
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── Read cohort subjects from YAML (no hardcoded list) ───────────────────────
+# Extracts lines like `  - "A2002"` or `  - A2002` from the subjects block.
+_read_subjects_from_config() {
+  local in_subjects=0
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^subjects: ]]; then
+      in_subjects=1; continue
+    fi
+    if (( in_subjects )); then
+      # Stop at next top-level key
+      [[ "$line" =~ ^[a-zA-Z] ]] && break
+      if [[ "$line" =~ ^[[:space:]]*-[[:space:]]+(\"?)([A-Za-z0-9_-]+)(\"?) ]]; then
+        echo "${BASH_REMATCH[2]}"
+      fi
+    fi
+  done < "$1"
+}
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Config not found: $CONFIG" >&2
+  echo "Set MOUS_CONFIG=/path/to/cohort.yaml to override." >&2
+  exit 1
+fi
+
+mapfile -t SUBJECTS < <(_read_subjects_from_config "$CONFIG")
+if [[ ${#SUBJECTS[@]} -eq 0 ]]; then
+  echo "No subjects found in $CONFIG" >&2; exit 1
+fi
+
+# Build a subject→canonical-index map (position in config list).
+declare -A SUBJECT_IDX
+for i in "${!SUBJECTS[@]}"; do
+  SUBJECT_IDX["${SUBJECTS[$i]}"]="$i"
+done
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 _pick_from_list() {
   local prompt="$1"; shift
@@ -41,34 +76,24 @@ _pick_from_list() {
 }
 
 _job_summary() {
-  # Print one-line summary for a job: name, id, task count, date of first log
   local jobid="$1"
-  local first_log
-  first_log=$(ls -t "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | tail -1) || true
   local jobname task_count mtime
-  jobname=$(ls "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | head -1 \
-            | xargs -I{} basename {} .out \
-            | sed "s/_${jobid}_[0-9]*$//") 2>/dev/null || jobname="unknown"
-  task_count=$(ls "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | wc -l | tr -d ' ')
-  if [[ -n "$first_log" ]]; then
-    mtime=$(date -r "$first_log" "+%Y-%m-%d %H:%M" 2>/dev/null || stat -c "%y" "$first_log" | cut -d. -f1)
-  else
-    mtime="(no logs)"
+  # Derive job name from the first available log for this job id
+  local first_log
+  first_log=$(ls -t "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | head -1) || true
+  if [[ -z "$first_log" ]]; then
+    printf "  job %-8s  (no logs found)\n" "$jobid"; return
   fi
-  printf "  job %-8s  %-22s  %2d tasks   %s\n" "$jobid" "$jobname" "$task_count" "$mtime"
+  jobname=$(basename "$first_log" .out | sed "s/_${jobid}_[0-9]*$//")
+  task_count=$(ls "${LOGS_DIR}"/*_"${jobid}"_*.out 2>/dev/null | wc -l | tr -d ' ')
+  mtime=$(date -r "$first_log" "+%Y-%m-%d %H:%M" 2>/dev/null \
+          || stat -c "%y" "$first_log" | cut -d. -f1)
+  printf "  job %-8s  %-26s  %2d task log(s)   %s\n" \
+    "$jobid" "$jobname" "$task_count" "$mtime"
 }
 
-_task_index_for_subject() {
-  local sid="$1"
-  for i in "${!SUBJECTS[@]}"; do
-    [[ "${SUBJECTS[$i]}" == "$sid" ]] && echo "$i" && return
-  done
-  echo ""
-}
+# ── Discover jobs ─────────────────────────────────────────────────────────────
 
-# ── main ─────────────────────────────────────────────────────────────────────
-
-# Collect unique job IDs from logs dir, sorted newest-first (by mtime of any log file)
 mapfile -t ALL_JOBS < <(
   ls -t "${LOGS_DIR}"/*.out 2>/dev/null \
   | xargs -I{} basename {} .out \
@@ -78,129 +103,128 @@ mapfile -t ALL_JOBS < <(
 )
 
 if [[ ${#ALL_JOBS[@]} -eq 0 ]]; then
-  echo "No SLURM log files found in ${LOGS_DIR}" >&2
-  exit 1
+  echo "No SLURM log files found in ${LOGS_DIR}" >&2; exit 1
 fi
 
-# If jobid supplied on command line, use it directly; else pick interactively
+# ── Select job ────────────────────────────────────────────────────────────────
+
 if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
   SELECTED_JOB="$1"
 else
   echo ""
-  echo "Last ${#ALL_JOBS[@]} run(s):"
+  echo "Last ${#ALL_JOBS[@]} run(s) (subjects from: $(basename "$CONFIG")):"
   for jid in "${ALL_JOBS[@]}"; do
     _job_summary "$jid"
   done
-
   PICK=""
   if ! _pick_from_list "Select a run:" "${ALL_JOBS[@]}"; then
-    echo "Aborted."
-    exit 0
+    echo "Aborted."; exit 0
   fi
   SELECTED_JOB="$PICK"
 fi
 
-echo ""
-echo "Job ${SELECTED_JOB} — available subject logs:"
+# ── Build subject list from actual log files for this job ─────────────────────
+# Enumerate every task index that has a log, resolve subject id from config,
+# fall back to "task-N" for indices outside the config list (e.g. extra retries).
 
-# Build list of subjects that have a .out log for this job
-AVAIL_SUBJECTS=()
-AVAIL_LABELS=()
-for i in "${!SUBJECTS[@]}"; do
-  sid="${SUBJECTS[$i]}"
-  outfile="${LOGS_DIR}"/*_"${SELECTED_JOB}"_"${i}".out
-  # glob — check if file exists
-  if compgen -G "${LOGS_DIR}/*_${SELECTED_JOB}_${i}.out" >/dev/null 2>&1; then
-    # Peek at last line of .out for quick status
-    last=$(tail -1 ${LOGS_DIR}/*_"${SELECTED_JOB}"_"${i}".out 2>/dev/null || echo "(empty)")
-    # Check if .err has content
-    errsize=0
-    if compgen -G "${LOGS_DIR}/*_${SELECTED_JOB}_${i}.err" >/dev/null 2>&1; then
-      errsize=$(wc -c < ${LOGS_DIR}/*_"${SELECTED_JOB}"_"${i}".err 2>/dev/null || echo 0)
-    fi
-    err_flag=""
-    (( errsize > 0 )) && err_flag=" [ERR]"
-    AVAIL_SUBJECTS+=("$sid")
-    AVAIL_LABELS+=("${sid}${err_flag}  — ${last:0:80}")
+echo ""
+echo "Job ${SELECTED_JOB} — task logs found:"
+
+AVAIL_SUBJECTS=()   # display label
+AVAIL_TASK_IDX=()   # actual task index in the log filename
+
+mapfile -t _RAW_LOGS < <(
+  ls "${LOGS_DIR}"/*_"${SELECTED_JOB}"_*.out 2>/dev/null | sort -V
+)
+
+if [[ ${#_RAW_LOGS[@]} -eq 0 ]]; then
+  echo "  No logs found for job ${SELECTED_JOB}." >&2; exit 1
+fi
+
+for logfile in "${_RAW_LOGS[@]}"; do
+  base=$(basename "$logfile" .out)
+  task_idx=$(echo "$base" | grep -oP '_\K[0-9]+$')
+  # Resolve subject from config by task index; fallback to "task-N"
+  if (( task_idx < ${#SUBJECTS[@]} )); then
+    sid="${SUBJECTS[$task_idx]}"
   else
-    AVAIL_SUBJECTS+=("$sid")
-    AVAIL_LABELS+=("${sid}  (no log yet)")
+    sid="task-${task_idx}"
   fi
+
+  last=$(tail -1 "$logfile" 2>/dev/null || echo "(empty)")
+  errfile="${LOGS_DIR}/${base}.err"
+  err_flag=""
+  if [[ -f "$errfile" ]]; then
+    has_traceback=$(grep -c "Traceback\|^ERROR\|FAILED" "$errfile" 2>/dev/null || true)
+    (( has_traceback > 0 )) && err_flag=" [ERR]"
+  fi
+
+  AVAIL_SUBJECTS+=("${sid}${err_flag}  — ${last:0:80}")
+  AVAIL_TASK_IDX+=("$task_idx")
 done
 
-# Display and pick subject
 echo ""
-for i in "${!AVAIL_LABELS[@]}"; do
-  printf "  [%d] %s\n" "$i" "${AVAIL_LABELS[$i]}"
+for i in "${!AVAIL_SUBJECTS[@]}"; do
+  printf "  [%d] %s\n" "$i" "${AVAIL_SUBJECTS[$i]}"
 done
 echo ""
 
-PICK=""
+# ── Select subject ────────────────────────────────────────────────────────────
+
+SELECTED_TASK_IDX=""
 while true; do
-  read -rp "Select subject (number), or 'a' for all .out, or q to quit: " choice
+  read -rp "Select subject (number), 'a' for all .out, or q to quit: " choice
   [[ "$choice" == "q" ]] && echo "Aborted." && exit 0
   if [[ "$choice" == "a" ]]; then
-    SELECTED_SUBJECT="__ALL__"
-    break
+    SELECTED_TASK_IDX="__ALL__"; break
   fi
-  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice < ${#AVAIL_SUBJECTS[@]} )); then
-    SELECTED_SUBJECT="${AVAIL_SUBJECTS[$choice]}"
-    SELECTED_IDX="$choice"
+  if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice < ${#AVAIL_TASK_IDX[@]} )); then
+    SELECTED_TASK_IDX="${AVAIL_TASK_IDX[$choice]}"
+    SELECTED_LABEL="${AVAIL_SUBJECTS[$choice]}"
     break
   fi
   echo "  Invalid choice."
 done
 
-# ── display log ───────────────────────────────────────────────────────────────
+# ── Display log ───────────────────────────────────────────────────────────────
 
 PAGER="${PAGER:-less}"
 
-if [[ "$SELECTED_SUBJECT" == "__ALL__" ]]; then
-  # Concatenate all .out files for this job
-  all_outs=( $(compgen -G "${LOGS_DIR}/*_${SELECTED_JOB}_*.out" | sort -V) )
-  if [[ ${#all_outs[@]} -eq 0 ]]; then
-    echo "No .out files found for job ${SELECTED_JOB}."
-    exit 1
-  fi
-  echo ""
-  echo "Showing all ${#all_outs[@]} .out files for job ${SELECTED_JOB} ..."
-  echo ""
-  { for f in "${all_outs[@]}"; do
+if [[ "$SELECTED_TASK_IDX" == "__ALL__" ]]; then
+  {
+    for logfile in "${_RAW_LOGS[@]}"; do
       echo "══════════════════════════════════════════════════════"
-      echo " $(basename "$f")"
+      echo " $(basename "$logfile")"
       echo "══════════════════════════════════════════════════════"
-      cat "$f"
+      cat "$logfile"
       echo ""
     done
   } | ${PAGER}
 else
-  OUT_GLOB="${LOGS_DIR}/*_${SELECTED_JOB}_${SELECTED_IDX}.out"
-  ERR_GLOB="${LOGS_DIR}/*_${SELECTED_JOB}_${SELECTED_IDX}.err"
-
+  base_prefix="${LOGS_DIR}/*_${SELECTED_JOB}_${SELECTED_TASK_IDX}"
   echo ""
-  echo "Subject ${SELECTED_SUBJECT} — task index ${SELECTED_IDX}"
+  echo "Task ${SELECTED_TASK_IDX}: ${SELECTED_LABEL%%  —*}"
   echo ""
 
-  # Offer .out or .err
-  OPTIONS=(".out (stdout)" ".err (stderr)" "both (side-by-side in less)")
+  OPTIONS=(".out (stdout)" ".err (stderr)" "both (stdout then stderr)")
   PICK=""
   if ! _pick_from_list "Which log?" "${OPTIONS[@]}"; then
-    echo "Aborted."
-    exit 0
+    echo "Aborted."; exit 0
   fi
 
   case "$PICK" in
     ".out (stdout)")
-      compgen -G "$OUT_GLOB" >/dev/null 2>&1 || { echo "No .out found."; exit 1; }
-      ${PAGER} ${OUT_GLOB}
+      compgen -G "${base_prefix}.out" >/dev/null || { echo "No .out found."; exit 1; }
+      ${PAGER} ${base_prefix}.out
       ;;
     ".err (stderr)")
-      compgen -G "$ERR_GLOB" >/dev/null 2>&1 || { echo "No .err found."; exit 1; }
-      ${PAGER} ${ERR_GLOB}
+      compgen -G "${base_prefix}.err" >/dev/null || { echo "No .err found."; exit 1; }
+      ${PAGER} ${base_prefix}.err
       ;;
-    "both (side-by-side in less)")
-      { echo "=== STDOUT ==="; cat ${OUT_GLOB} 2>/dev/null || echo "(none)"
-        echo ""; echo "=== STDERR ==="; cat ${ERR_GLOB} 2>/dev/null || echo "(none)"
+    "both (stdout then stderr)")
+      {
+        echo "=== STDOUT ==="; cat ${base_prefix}.out 2>/dev/null || echo "(none)"
+        echo ""; echo "=== STDERR ==="; cat ${base_prefix}.err 2>/dev/null || echo "(none)"
       } | ${PAGER}
       ;;
   esac
