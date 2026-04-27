@@ -7,7 +7,7 @@
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 #SBATCH --mail-type=END,FAIL
-#SBATCH --mail-user=
+#SBATCH --mail-user=jonathan.w202013@gmail.com
 
 # ============================================================
 # analysis_01_cohort_fetch_and_run.sh
