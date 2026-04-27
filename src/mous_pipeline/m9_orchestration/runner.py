@@ -376,6 +376,9 @@ def _run_subject_body(
     result.metrics["n_trials"] = len(trials)
     result.metrics["n_zinnen"] = int((trials["condition"] == "ZINNEN").sum())
     result.metrics["n_woorden"] = int((trials["condition"] == "WOORDEN").sum())
+    # trial_meta is set after make_epochs (which trims to surviving epochs).
+    # Initialised here so cache-hit paths that skip make_epochs can restore it
+    # from the stored trial_id array in the npz.
     trial_meta = make_events_metadata(trials)
 
     # ── Per-stage output file paths ───────────────────────────────────────────
@@ -401,12 +404,18 @@ def _run_subject_body(
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
-    _m4trial_cache: tuple[np.ndarray, np.ndarray] | None = None
+    # Cache stores (prestim_beta, n400m, trial_ids_after_rejection).
+    # trial_ids let us restore the post-rejection trial_meta slice without
+    # re-running make_epochs, keeping trial_meta consistent regardless of path.
+    _m4trial_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
     if not force and _m4t_prestim.exists() and _m4t_n400m.exists():
-        _pb = np.load(_m4t_prestim)["prestim_beta"]
-        _na = np.load(_m4t_n400m)["n400m"]
-        if len(_pb) == len(trial_meta) and len(_na) == len(trial_meta):
-            _m4trial_cache = (_pb, _na)
+        _pb_npz = np.load(_m4t_prestim)
+        _na_npz = np.load(_m4t_n400m)
+        _pb = _pb_npz["prestim_beta"]
+        _na = _na_npz["n400m"]
+        _cached_ids = _pb_npz.get("trial_id", None)
+        if len(_pb) == len(_na) and len(_pb) > 0 and _cached_ids is not None:
+            _m4trial_cache = (_pb, _na, _cached_ids)
     _m4trial_hit = _m4trial_cache is not None
     _m6a_hit     = (
         not force
@@ -459,7 +468,7 @@ def _run_subject_body(
     t0 = perf_counter()
     if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
-        epochs = make_epochs(task_raw, trials, cfg)
+        epochs, trial_meta = make_epochs(task_raw, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
     _emit("done", "m3")
     if progress_callback and _stage_selected("m3", only, skip):
@@ -493,7 +502,9 @@ def _run_subject_body(
         if _m4trial_hit:
             result.metrics["m4_trial_cache_hit"] = True
             assert _m4trial_cache is not None
-            prestim_beta, n400m = _m4trial_cache
+            prestim_beta, n400m, _cached_ids = _m4trial_cache
+            # Restore trial_meta to the post-rejection subset recorded in the cache.
+            trial_meta = trial_meta[trial_meta["trial_id"].isin(_cached_ids)].reset_index(drop=True)
         else:
             assert epochs is not None
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta)
@@ -590,7 +601,7 @@ def _run_subject_body(
                     fwd, src = build_forward_model(subject, task_raw, cfg)
                     stcs = compute_inverse(epochs["ZINNEN"], fwd, cfg)
                     labels = mne.read_labels_from_annot(
-                        "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject}",
+                        "fsaverage" if source_cfg.use_fsaverage else f"sub-{subject.removeprefix('sub-')}",
                         parc="aparc",
                         subjects_dir=source_cfg.subjects_dir,
                     )

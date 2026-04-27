@@ -35,6 +35,12 @@ def prestim_beta_power(
         beta_mask = (freqs >= fmin) & (freqs <= fmax)
         power[trial_idx] = float(np.nanmean(psd[:, beta_mask]))
 
+    if len(trial_meta) != len(power):
+        raise ValueError(
+            "trial_meta length does not match epoch count for prestim_beta_power. "
+            "Align metadata to kept epochs (for example, with epochs.selection) before calling."
+        )
+
     out_dir = stage_output_dir(cfg, subject, "m4_features")
     np.savez(
         out_dir / f"{subject}_prestim_beta.npz",
