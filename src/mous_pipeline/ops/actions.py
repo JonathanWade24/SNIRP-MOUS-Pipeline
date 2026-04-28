@@ -174,3 +174,60 @@ def submit_detached_driver(
         ),
         proc,
     )
+
+
+def submit_detached_wrap(
+    wrapped_cmd: list[str],
+    *,
+    job_name: str,
+    kind: str,
+    config_path: str,
+    subjects: list[str],
+    account: str,
+    partition: str,
+    time_limit: str,
+    mem: str,
+    cpus_per_task: str,
+    derivatives_root: str,
+    repo_root: Path | None = None,
+) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
+    root = (repo_root or Path.cwd()).resolve()
+    slurm_dir = Path(derivatives_root).expanduser().resolve() / "slurm"
+    slurm_dir.mkdir(parents=True, exist_ok=True)
+    wrapped = f"cd {shlex.quote(str(root))} && " + " ".join(shlex.quote(part) for part in wrapped_cmd)
+    sbatch_cmd = [
+        "sbatch",
+        "--job-name",
+        job_name,
+        "--partition",
+        partition,
+        "--account",
+        account,
+        "--time",
+        time_limit,
+        "--mem",
+        mem,
+        "--cpus-per-task",
+        cpus_per_task,
+        "--output",
+        str(slurm_dir / f"{job_name}_%j.out"),
+        "--error",
+        str(slurm_dir / f"{job_name}_%j.err"),
+        "--wrap",
+        wrapped,
+    ]
+    proc = run_cmd(sbatch_cmd, cwd=root)
+    job_id = parse_sbatch_job_id((proc.stdout or "") + "\n" + (proc.stderr or ""))
+    if not job_id:
+        return None, proc
+    return (
+        JobRecord(
+            job_id=job_id,
+            job_name=job_name,
+            kind=kind,
+            config_path=config_path,
+            subjects=subjects,
+            status="SUBMITTED",
+        ),
+        proc,
+    )

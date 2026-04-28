@@ -30,6 +30,7 @@ from .actions import (
     discover_subjects,
     run_cmd,
     submit_detached_driver,
+    submit_detached_wrap,
 )
 from .env import run_env_preflight
 from .models import SubjectSet, WorkflowPreset
@@ -730,10 +731,36 @@ class RedownloadScreen(Screen):
         if not subject:
             self.notify("Enter a subject ID", severity="warning")
             return
+        account = self.app.state.defaults.get("account", "").strip()
+        if not account:
+            self.notify("Set default account first (use New Run resources screen)", severity="error")
+            return
         cmd = build_download_cmd(cfg, subject)
-        proc = run_cmd(cmd, cwd=Path.cwd())
+        proc_job, proc = submit_detached_wrap(
+            cmd,
+            job_name="mous_fetch_rdr",
+            kind="rdr_fetch",
+            config_path=cfg,
+            subjects=[subject],
+            account=account,
+            partition=self.app.state.defaults.get("partition", "hpcnirc"),
+            time_limit=self.app.state.defaults.get("fetch_time", "02:00:00"),
+            mem=self.app.state.defaults.get("fetch_mem", "16G"),
+            cpus_per_task=self.app.state.defaults.get("fetch_cpus_per_task", "1"),
+            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            repo_root=Path.cwd(),
+        )
         out = (proc.stdout or "") + (proc.stderr or "")
-        tag = "[bold green]Done[/bold green]" if proc.returncode == 0 else f"[bold red]Failed rc={proc.returncode}[/bold red]"
+        if proc.returncode != 0:
+            self.query_one("#rd-output", Static).update(f"[bold red]Failed rc={proc.returncode}[/bold red]\n" + out[-4000:])
+            return
+        if proc_job:
+            self.app.state.recent_jobs.insert(0, proc_job)
+            self.app.state.recent_jobs = self.app.state.recent_jobs[:40]
+            save_state(self.app.state)
+            tag = f"[bold green]Submitted detached fetch job {proc_job.job_id}[/bold green]"
+        else:
+            tag = "[bold yellow]Submitted (job id not parsed)[/bold yellow]"
         self.query_one("#rd-output", Static).update(f"{tag}\n" + out[-4000:])
 
     @on(Button.Pressed, "#rd-back")
