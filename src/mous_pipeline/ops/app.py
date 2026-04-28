@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 from textual import on
@@ -686,6 +687,12 @@ class LogScreen(Screen):
             yield Input(placeholder="paste path or use Auto-detect", id="log-path-input")
             yield Button("↺ Load",       id="btn-load-log",  variant="default")
             yield Button("Auto-detect",  id="btn-autodetect", variant="default")
+            yield Button("Newest logs",  id="btn-refresh-recent", variant="default")
+
+        yield Label("  Newest logs by modification time", classes="section-title")
+        yield DataTable(id="recent-logs-table")
+        with Horizontal(classes="frow"):
+            yield Button("Load selected recent log", id="btn-load-selected", variant="primary")
 
         yield Static("", id="failure-banner")
         yield RichLog(id="log-output", highlight=True, markup=True, wrap=False)
@@ -696,6 +703,11 @@ class LogScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        table = self.query_one("#recent-logs-table", DataTable)
+        table.add_columns("Type", "Updated", "File")
+        table.cursor_type = "row"
+        self._recent_log_paths: list[Path] = []
+        self._refresh_recent_logs()
         self._autodetect()
 
     def _candidate_dirs(self) -> list[Path]:
@@ -710,6 +722,11 @@ class LogScreen(Screen):
         return candidates
 
     def _autodetect(self) -> None:
+        if self._recent_log_paths:
+            newest = self._recent_log_paths[0]
+            self.query_one("#log-path-input", Input).value = str(newest)
+            self._load_log(newest)
+            return
         for slurm_dir in self._candidate_dirs():
             if not slurm_dir.exists():
                 continue
@@ -720,6 +737,36 @@ class LogScreen(Screen):
                     self._load_log(log)
                     return
         self.notify("No logs auto-detected — paste a path and click Load.", severity="warning")
+
+    def _refresh_recent_logs(self) -> None:
+        rows: list[tuple[str, Path, float]] = []
+        for slurm_dir in self._candidate_dirs():
+            if not slurm_dir.exists():
+                continue
+            for pattern in ("mous_driver_*.out", "mous_driver_*.err", "fmriprep_*.out", "fmriprep_*.err", "*.out", "*.err"):
+                for p in slurm_dir.glob(pattern):
+                    if p.is_file():
+                        rows.append((self._log_kind(p.name), p, p.stat().st_mtime))
+        # De-duplicate across patterns/dirs by absolute path
+        dedup: dict[str, tuple[str, Path, float]] = {}
+        for kind, path, mtime in rows:
+            dedup[str(path.resolve())] = (kind, path, mtime)
+        ordered = sorted(dedup.values(), key=lambda x: x[2], reverse=True)[:25]
+        self._recent_log_paths = [path for _, path, _ in ordered]
+
+        table = self.query_one("#recent-logs-table", DataTable)
+        table.clear()
+        for kind, path, mtime in ordered:
+            ts = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            table.add_row(kind, ts, path.name)
+
+    def _log_kind(self, filename: str) -> str:
+        lower = filename.lower()
+        if "fmriprep" in lower:
+            return "fMRIPrep"
+        if "driver" in lower:
+            return "runner"
+        return "other"
 
     def _load_log(self, path: Path) -> None:
         text = tail_text(path, lines=200)
@@ -750,7 +797,24 @@ class LogScreen(Screen):
     def _on_autodetect(self, _) -> None:
         self._autodetect()
 
+    @on(Button.Pressed, "#btn-refresh-recent")
+    def _on_refresh_recent(self, _) -> None:
+        self._refresh_recent_logs()
+        self.notify("Recent logs refreshed")
+
+    @on(Button.Pressed, "#btn-load-selected")
+    def _on_load_selected(self, _) -> None:
+        table = self.query_one("#recent-logs-table", DataTable)
+        row_idx = table.cursor_row
+        if row_idx is None or row_idx < 0 or row_idx >= len(self._recent_log_paths):
+            self.notify("Select a recent log row first", severity="warning")
+            return
+        path = self._recent_log_paths[row_idx]
+        self.query_one("#log-path-input", Input).value = str(path)
+        self._load_log(path)
+
     def action_refresh_log(self) -> None:
+        self._refresh_recent_logs()
         p = self.query_one("#log-path-input", Input).value.strip()
         if p:
             self._load_log(Path(p))
