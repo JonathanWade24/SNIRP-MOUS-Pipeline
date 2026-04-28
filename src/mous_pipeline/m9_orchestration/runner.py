@@ -43,6 +43,7 @@ from ..m7_stats.permutation import perm_test_dci
 from ..m7_stats.trialwise import lme_block_control, logreg_condition_from_prestim, n400m_condition_t
 from ..m8_reports.quarto_report import render_quarto_suite
 from ..m8_reports.dashboard import render_subject
+from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
 from ..m8_reports.export import export_subject_payload
 from ..m11_coupling.regress import run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
@@ -188,6 +189,12 @@ def _finalize_run(
     manifest["metrics"] = result.metrics
     write_manifest(out_dir / f"sub-{subject}_run_manifest.json", manifest)
     result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
+    try:
+        aim2_group_report = render_aim2_group(cfg.derivatives_root)
+        if aim2_group_report is not None:
+            result.outputs.append(aim2_group_report)
+    except Exception as exc:
+        result.metrics["aim2_group_report_error"] = str(exc)
     state["status"] = result.status
     state["current_stage"] = None
     state["current_stage_description"] = None
@@ -710,6 +717,7 @@ def _run_subject_body(
 
                 verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
                 m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
+                reuse_existing_fmriprep = bool(getattr(cfg, "pipeline", {}).get("m10_reuse_fmriprep", False))
                 fmriprep_out = run_fmriprep(
                     subject,
                     cfg,
@@ -717,6 +725,7 @@ def _run_subject_body(
                     log_callback=(lambda line: _append_live_log(live_log_path, f"[m10:fmriprep] {line}"))
                     if verbose_tools
                     else None,
+                    reuse_existing=reuse_existing_fmriprep,
                 )
                 bold_path = resolve_subject_bold_path(
                     subject,
@@ -800,6 +809,16 @@ def _run_subject_body(
     if _stage_selected("m11", only, skip):
         _emit("start", "m11")
         t0 = perf_counter()
+        if joined_df is None and bool(getattr(cfg, "pipeline", {}).get("m11_allow_cached_joined", False)):
+            m10_out = stage_output_dir(cfg, subject, "m10_fmri")
+            cached_joined = m10_out / f"{subject}_trials_joined.csv"
+            if cached_joined.exists():
+                try:
+                    joined_df = pd.read_csv(cached_joined)
+                    result.metrics["m11_used_cached_joined"] = True
+                    result.metrics["m11_cached_joined_path"] = str(cached_joined)
+                except Exception as exc:
+                    result.metrics["m11_cached_joined_error"] = str(exc)
         if joined_df is not None and not joined_df.empty:
             try:
                 coupling = run_coupling_models(joined_df)
@@ -931,6 +950,17 @@ def _run_subject_body(
             sliding_t=sliding_t,
             sliding_dci_z=sliding_z,
         )
+        joined_csv = stage_output_dir(cfg, subject, "m10_fmri") / f"{subject}_trials_joined.csv"
+        try:
+            aim2_subject_report = render_aim2_subject(
+                subject,
+                cfg,
+                metrics=result.metrics,
+                joined_csv=joined_csv,
+            )
+            result.outputs.append(aim2_subject_report)
+        except Exception as exc:
+            result.metrics["aim2_subject_report_error"] = str(exc)
         result.stage_timings_s["m8"] = perf_counter() - t0
         _emit("done", "m8")
         result.outputs.append(report_path)

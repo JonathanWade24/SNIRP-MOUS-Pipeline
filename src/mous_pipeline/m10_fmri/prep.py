@@ -115,6 +115,22 @@ def resolve_subject_bold_path(subject: str, cfg, *, bids_root: Path, fmriprep_ou
     return None
 
 
+def _has_preprocessed_bold(subject: str, fmriprep_out_dir: Path) -> bool:
+    sub = subject.removeprefix("sub-")
+    func_dir = fmriprep_out_dir / f"sub-{sub}" / "func"
+    if not func_dir.exists():
+        return False
+    patterns = (
+        f"sub-{sub}_task-auditory*_desc-preproc_bold.nii.gz",
+        f"sub-{sub}_task-auditory*_desc-preproc_bold.nii",
+        f"sub-{sub}_task-language*_desc-preproc_bold.nii.gz",
+        f"sub-{sub}_task-language*_desc-preproc_bold.nii",
+        f"sub-{sub}_task-*_desc-preproc_bold.nii.gz",
+        f"sub-{sub}_task-*_desc-preproc_bold.nii",
+    )
+    return any(func_dir.glob(patt) for patt in patterns)
+
+
 def validate_tr_from_sidecar(sidecar_json: Path, cfg_tr: float, *, atol: float = 1e-3) -> float:
     payload = json.loads(sidecar_json.read_text())
     tr = float(payload.get("RepetitionTime", cfg_tr))
@@ -212,7 +228,14 @@ def _run_shell_streaming(shell_cmd: str, *, log_callback: Callable[[str], None] 
         raise subprocess.CalledProcessError(code, shell_cmd)
 
 
-def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[str], None] | None = None) -> Path:
+def run_fmriprep(
+    subject: str,
+    cfg,
+    *,
+    bids_root: Path,
+    log_callback: Callable[[str], None] | None = None,
+    reuse_existing: bool = False,
+) -> Path:
     """Run fMRIPrep for a subject, with Neurodesk module and container support.
 
     Execution modes (checked in order):
@@ -230,6 +253,13 @@ def run_fmriprep(subject: str, cfg, *, bids_root: Path, log_callback: Callable[[
     _ensure_bids_dataset_description(bids_root)
     if cfg.fmri.skip_fmriprep:
         out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir
+    if reuse_existing and _has_preprocessed_bold(subject, out_dir):
+        if log_callback:
+            log_callback(
+                f"reuse_existing=true and existing preprocessed BOLD detected for {subject}; "
+                "skipping fMRIPrep execution."
+            )
         return out_dir
 
     out_dir.mkdir(parents=True, exist_ok=True)

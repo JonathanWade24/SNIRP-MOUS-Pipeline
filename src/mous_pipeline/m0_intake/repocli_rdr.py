@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import re
 from pathlib import Path
 
 
@@ -25,3 +26,15 @@ def repocli_available() -> bool:
 
 def execute_repocli_command(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+
+def parse_repocli_ls_subjects(output: str) -> list[str]:
+    """Extract unique subject IDs from `repocli ls` output."""
+    matches = re.findall(r"sub-([A-Za-z0-9_-]+)", output or "")
+    return sorted(set(matches))
+
+
+def build_repocli_ls_command(collection_path: str) -> list[str]:
+    """Build `repocli ls <collection_path>` command."""
+    base = collection_path.strip().strip("/")
+    return ["repocli", "ls", base]

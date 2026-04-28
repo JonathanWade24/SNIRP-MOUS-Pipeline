@@ -12,23 +12,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-TYPE_MAP = {
-    "refmag":      "MEGREFMAG",
-    "refgrad":     "MEGREFGRADAXIAL",
-    "meggrad":     "MEGGRADAXIAL",
-    "trigger":     "TRIG",
-    "clock":       "SYSCLOCK",
-    "eeg":         "EEG",
-    "adc":         "ADC",
-    "headloc":     "MISC",
-    "headloc_gof": "MISC",
-    "reserved":    "OTHER",
-    "unknown":     "OTHER",
-}
+from mous_pipeline.m0_intake.bids_convert import normalize_channel_type
 
 
 def normalise_file(path: Path) -> tuple[bool, list[str]]:
-    """Return (changed, unrecognised_types). Writes in-place if changed."""
+    """Return (changed, non_canonical_types). Writes in-place if changed."""
     lines = path.read_text().splitlines(keepends=True)
     if not lines:
         return False, []
@@ -39,31 +27,24 @@ def normalise_file(path: Path) -> tuple[bool, list[str]]:
     type_col = header.index("type")
 
     changed = False
-    unrecognised: list[str] = []
+    non_canonical: list[str] = []
     out_lines = [lines[0]]
 
     for line in lines[1:]:
         parts = line.rstrip("\n").split("\t")
         if len(parts) > type_col:
             original = parts[type_col]
-            mapped = TYPE_MAP.get(original)
-            if mapped is not None:
+            mapped = normalize_channel_type(original)
+            if mapped != original:
                 parts[type_col] = mapped
                 changed = True
-            elif original not in {
-                "MEGMAG", "MEGGRADAXIAL", "MEGGRADPLANAR",
-                "MEGREFMAG", "MEGREFGRADAXIAL", "MEGREFGRADPLANAR", "MEGOTHER",
-                "EEG", "ECG", "EMG", "EOG", "VEOG", "HEOG",
-                "TRIG", "AUDIO", "SYSCLOCK", "ADC", "DAC", "HLU",
-                "MISC", "OTHER",
-            }:
-                unrecognised.append(original)
+                non_canonical.append(original)
         out_lines.append("\t".join(parts) + "\n")
 
     if changed:
         path.write_text("".join(out_lines))
 
-    return changed, sorted(set(unrecognised))
+    return changed, sorted(set(non_canonical))
 
 
 def main(bids_root: Path) -> None:
@@ -74,10 +55,10 @@ def main(bids_root: Path) -> None:
 
     n_changed = 0
     n_ok = 0
-    all_unrecognised: dict[str, list[str]] = {}
+    all_non_canonical: dict[str, list[str]] = {}
 
     for tsv in tsv_files:
-        changed, unrecognised = normalise_file(tsv)
+        changed, non_canonical = normalise_file(tsv)
         rel = tsv.relative_to(bids_root)
         if changed:
             print(f"  fixed  {rel}")
@@ -85,13 +66,13 @@ def main(bids_root: Path) -> None:
         else:
             print(f"  ok     {rel}")
             n_ok += 1
-        if unrecognised:
-            all_unrecognised[str(rel)] = unrecognised
+        if non_canonical:
+            all_non_canonical[str(rel)] = non_canonical
 
     print(f"\nSummary: {n_changed} fixed, {n_ok} already compliant")
-    if all_unrecognised:
-        print("\nUnrecognised types (mapped to OTHER by default — review manually):")
-        for f, types in all_unrecognised.items():
+    if all_non_canonical:
+        print("\nNon-canonical original types mapped to BIDS-safe labels:")
+        for f, types in all_non_canonical.items():
             print(f"  {f}: {types}")
 
 

@@ -32,6 +32,10 @@ from .m9_orchestration.parallelization_plan import (
     recommend_subject_parallelism,
 )
 from .m9_orchestration.runner import run_subject
+from .ops.actions import build_recon_submit_cmd, build_submit_cmd, execute_submit_cmd, run_cmd
+from .ops.models import WorkflowPreset
+from .ops.monitor import classify_failure, squeue_jobs, tail_text
+from .ops.state import load_state, save_state
 from .stage_dependencies import STAGE_ORDER, parallel_execution_fronts
 
 
@@ -363,6 +367,16 @@ def main() -> None:
     run_parser.add_argument("--include-fmri", action="store_true", help="Include m10/m11 stages")
     run_parser.add_argument("--include-waves-validation", action="store_true", help="Include m12 stage")
     run_parser.add_argument(
+        "--reuse-fmriprep",
+        action="store_true",
+        help="When m10 is selected, reuse existing fMRIPrep derivatives instead of rerunning fMRIPrep.",
+    )
+    run_parser.add_argument(
+        "--allow-m11-from-cached-joined",
+        action="store_true",
+        help="Allow m11 to load an existing m10 joined table when m10 does not produce one in this run.",
+    )
+    run_parser.add_argument(
         "--memory-profile",
         action="store_true",
         help="Log RSS at stage boundaries and poll for peak RSS (Linux: /proc/self/status; see memory_rss_summary in manifest)",
@@ -492,6 +506,33 @@ def main() -> None:
         help="Optional public host URL (e.g. https://snirp24.neurodesk.org). "
         "When omitted, the CLI auto-detects host from JupyterHub env vars.",
     )
+    ops_parser = sub.add_parser("ops", help="SSH-first operations interface")
+    ops_sub = ops_parser.add_subparsers(dest="ops_cmd")
+    ops_sub.add_parser("ui", help="Launch full-screen TUI")
+    ops_run = ops_sub.add_parser("run", help="Non-interactive ops runner")
+    ops_run.add_argument("--preset", required=True)
+    ops_run.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
+    ops_run.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
+    ops_run.add_argument("--account", default="")
+    ops_run.add_argument("--partition", default="hpcnirc")
+    ops_run.add_argument("--time", default="12:00:00")
+    ops_run.add_argument("--mem", default="256G")
+    ops_run.add_argument("--cpus-per-task", default="8")
+    ops_run.add_argument("--execute", action="store_true")
+    ops_status = ops_sub.add_parser("status", help="Show persisted recent jobs")
+    ops_status.add_argument("--limit", type=int, default=20)
+    ops_monitor = ops_sub.add_parser("monitor", help="Poll queue/accounting and classify log snippets")
+    ops_monitor.add_argument("--job-id", default="")
+    ops_monitor.add_argument("--log-file", default="")
+    ops_recon = ops_sub.add_parser("prep-m5", help="Submit recon-all array job to build source subjects_dir")
+    ops_recon.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
+    ops_recon.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
+    ops_recon.add_argument("--account", default="")
+    ops_recon.add_argument("--partition", default="hpcnirc")
+    ops_recon.add_argument("--time", default="12:00:00")
+    ops_recon.add_argument("--mem", default="16G")
+    ops_recon.add_argument("--cpus-per-task", default="4")
+    ops_recon.add_argument("--execute", action="store_true")
 
     args = parser.parse_args()
 
@@ -508,6 +549,10 @@ def main() -> None:
             only = only | {"m10", "m11"}
         if args.include_waves_validation and only is not None:
             only = only | {"m12"}
+        if args.reuse_fmriprep:
+            cfg.pipeline["m10_reuse_fmriprep"] = True
+        if args.allow_m11_from_cached_joined:
+            cfg.pipeline["m11_allow_cached_joined"] = True
         selected = [s for s in STAGE_ORDER if (not only or s in only) and (not skip or s not in skip)]
         try:
             result = run_subject(
@@ -821,6 +866,123 @@ def main() -> None:
         print("")
         print(f"Tip: stop old instances with `lsof -ti :{args.port} | xargs -r kill -9`.")
         subprocess.run(cmd, check=False)
+    elif args.cmd == "ops":
+        if args.ops_cmd in {None, "ui"}:
+            try:
+                from .ops import run_ops_app
+            except ImportError:
+                print(
+                    "Textual UI dependency missing.\n"
+                    "Install with: python -m pip install textual\n"
+                    "Then rerun: mous-pipeline ops ui",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            run_ops_app()
+        elif args.ops_cmd == "status":
+            st = load_state()
+            for row in st.recent_jobs[: max(1, args.limit)]:
+                print(
+                    f"{row.submitted_at}  {row.job_id:>10}  {row.job_name:<14}  "
+                    f"{row.status:<10}  subjects={','.join(row.subjects) or '-'}"
+                )
+        elif args.ops_cmd == "run":
+            st = load_state()
+            preset = st.workflow_presets.get(args.preset)
+            if preset is None:
+                # allow quick ad-hoc run presets from CLI
+                preset = WorkflowPreset(name=args.preset, description="ad-hoc", mode="submit")
+            subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
+            if not subjects:
+                print("No subjects specified.", file=sys.stderr)
+                sys.exit(2)
+            cmd = build_submit_cmd(
+                preset,
+                config=args.config,
+                subjects=subjects,
+                account=args.account,
+                partition=args.partition,
+                time_limit=args.time,
+                mem=args.mem,
+                cpus_per_task=args.cpus_per_task,
+            )
+            print("Command:")
+            print(" ".join(shlex.quote(c) for c in cmd))
+            if not args.execute:
+                print("Preview only. Add --execute to run.")
+                return
+            job, proc = execute_submit_cmd(
+                cmd,
+                config_path=args.config,
+                subjects=subjects,
+                kind=f"preset:{preset.name}",
+                job_name="mous_driver",
+            )
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode)
+            if job is not None:
+                st.recent_jobs.insert(0, job)
+                st.recent_jobs = st.recent_jobs[:40]
+                print(f"Tracked job {job.job_id} in ops state.")
+            save_state(st)
+        elif args.ops_cmd == "monitor":
+            queued = squeue_jobs()
+            if args.job_id:
+                queued = [j for j in queued if j.job_id == args.job_id]
+            if queued:
+                print("squeue:")
+                for j in queued:
+                    print(f"{j.job_id:>10}  {j.name:<25}  {j.state:<10}  elapsed={j.elapsed}")
+            else:
+                print("No matching active jobs in squeue.")
+            if args.log_file:
+                text = tail_text(Path(args.log_file), lines=120)
+                print(f"\nlog tail: {args.log_file}")
+                print(text)
+                print(f"\nclassification: {classify_failure(text)}")
+        elif args.ops_cmd == "prep-m5":
+            subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
+            if not subjects:
+                print("No subjects specified.", file=sys.stderr)
+                sys.exit(2)
+            cmd = build_recon_submit_cmd(
+                config=args.config,
+                subjects=subjects,
+                account=args.account,
+                partition=args.partition,
+                time_limit=args.time,
+                mem=args.mem,
+                cpus_per_task=args.cpus_per_task,
+                dry_run=not args.execute,
+            )
+            print("Command:")
+            print(" ".join(shlex.quote(c) for c in cmd))
+            if not args.execute:
+                print("Preview only. Add --execute to run.")
+                return
+            st = load_state()
+            job, proc = execute_submit_cmd(
+                cmd,
+                config_path=args.config,
+                subjects=subjects,
+                kind="prep_m5",
+                job_name="mous_recon",
+            )
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode)
+            if job is not None:
+                st.recent_jobs.insert(0, job)
+                st.recent_jobs = st.recent_jobs[:40]
+                print(f"Tracked job {job.job_id} in ops state.")
+                save_state(st)
 
 
 if __name__ == "__main__":

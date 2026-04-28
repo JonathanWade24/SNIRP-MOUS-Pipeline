@@ -59,7 +59,16 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
 fi
 
 if [[ -n "${MOUS_FREESURFER_MODULE:-}" ]]; then
-  module load "$MOUS_FREESURFER_MODULE"
+  # Some Palmetto environments gate FreeSurfer behind a parent module
+  # (e.g. `ml neurocommand` before `ml freesurfer/8.2.0`).
+  if command -v module >/dev/null 2>&1; then
+    # Try direct load first.
+    if ! module load "$MOUS_FREESURFER_MODULE" >/dev/null 2>&1; then
+      # Retry with neurocommand pre-load when present.
+      module load neurocommand >/dev/null 2>&1 || true
+      module load "$MOUS_FREESURFER_MODULE"
+    fi
+  fi
 fi
 if [[ -n "${MOUS_FREESURFER_LICENSE:-}" ]]; then
   export FS_LICENSE="$MOUS_FREESURFER_LICENSE"
@@ -97,6 +106,10 @@ mkdir -p "$SAFE_INPUT_DIR"
 cp -f "$T1_PATH" "$SAFE_T1_PATH"
 echo "[recon-all] host=$(hostname) job_id=${SLURM_JOB_ID:-na} task_id=${SLURM_ARRAY_TASK_ID:-na}"
 echo "[recon-all] subject=$SUBJECT t1=$T1_PATH staged_t1=$SAFE_T1_PATH subjects_dir=$SUBJECTS_DIR"
+OPENMP_THREADS="${MOUS_FREESURFER_OPENMP:-${SLURM_CPUS_PER_TASK:-1}}"
+export OMP_NUM_THREADS="$OPENMP_THREADS"
+export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS="$OPENMP_THREADS"
+echo "[recon-all] openmp_threads=$OPENMP_THREADS omp_num_threads=$OMP_NUM_THREADS"
 
 if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
   APPTAINER_BIN="$(command -v apptainer || command -v singularity || true)"
@@ -108,11 +121,12 @@ if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
     -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
     -B "$SAFE_INPUT_DIR:$SAFE_INPUT_DIR" \
     "${MOUS_FREESURFER_CONTAINER}" \
-    recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all
+    recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
 else
   if ! command -v recon-all >/dev/null 2>&1; then
-    echo "recon-all not found. Load MOUS_FREESURFER_MODULE or set MOUS_FREESURFER_CONTAINER." >&2
+    echo "recon-all not found. On Palmetto this may require: module load neurocommand && module load freesurfer/<version>." >&2
+    echo "Set MOUS_FREESURFER_MODULE to your concrete module (e.g. freesurfer/8.2.0), or set MOUS_FREESURFER_CONTAINER." >&2
     exit 1
   fi
-  recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all
+  recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
 fi

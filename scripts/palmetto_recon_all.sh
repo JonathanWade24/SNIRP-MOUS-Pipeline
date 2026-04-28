@@ -13,13 +13,14 @@ Options:
   --partition <name>       (default: hpcnirc)
   --account <account>
   --qos <qos>
-  --time <HH:MM:SS>        (default: 12:00:00)
-  --mem <value>            (default: 16G)
-  --cpus-per-task <n>      (default: 4)
+  --time <HH:MM:SS>        (default: 24:00:00)
+  --mem <value>            (default: 64G)
+  --cpus-per-task <n>      (default: 8)
   --dry-run
 
 Environment:
-  MOUS_FREESURFER_MODULE    Optional module name (e.g. freesurfer/7.4.1).
+  MOUS_FREESURFER_MODULE    Optional module name (e.g. freesurfer/8.2.0).
+                           If direct load fails, script retries after loading neurocommand.
   MOUS_FREESURFER_CONTAINER Optional apptainer/singularity image for recon-all.
   MOUS_FREESURFER_LICENSE   Optional FreeSurfer license path.
 EOF
@@ -31,9 +32,9 @@ DRY_RUN=0
 PARTITION="${MOUS_PARTITION:-hpcnirc}"
 ACCOUNT="${MOUS_ACCOUNT:-}"
 QOS="${MOUS_QOS:-}"
-TIME_LIMIT="${MOUS_RECON_TIME:-12:00:00}"
-MEMORY="${MOUS_RECON_MEM:-16G}"
-CPUS_PER_TASK="${MOUS_RECON_CPUS_PER_TASK:-4}"
+TIME_LIMIT="${MOUS_RECON_TIME:-24:00:00}"
+MEMORY="${MOUS_RECON_MEM:-64G}"
+CPUS_PER_TASK="${MOUS_RECON_CPUS_PER_TASK:-8}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

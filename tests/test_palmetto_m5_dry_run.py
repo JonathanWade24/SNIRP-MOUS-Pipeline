@@ -70,6 +70,19 @@ def test_palmetto_submit_include_m5_changes_meg_skip(tmp_path: Path):
         check=True,
     )
     assert "--skip m5,m10,m11" in default_proc.stdout
+    # Clarity labels should reflect workflow tracks (not Aim-number names).
+    assert "[dry-run][fmri] note: fMRI preprocessing runs as detached array jobs" in default_proc.stdout
+    assert "[dry-run][meg] " not in default_proc.stdout
+    assert "[dry-run][meg-group] mous-pipeline group" in default_proc.stdout
+    assert "[dry-run][meg-group] python" in default_proc.stdout
+
+    # Keep execution order stable while labels change.
+    out = default_proc.stdout
+    i_audit = out.index("[meg-trial]")
+    i_fmri = out.index("[fmri] submitting fMRI preprocessing array")
+    i_subject = out.index("[meg-subject]")
+    i_group = out.index("[meg-group] Running MEG group aggregation")
+    assert i_audit < i_fmri < i_subject < i_group
 
     include_proc = subprocess.run(
         [
@@ -113,5 +126,8 @@ def test_palmetto_recon_all_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
     )
 
     assert "--partition hpcnirc" in proc.stdout
+    assert "--time 24:00:00" in proc.stdout
+    assert "--mem 64G" in proc.stdout
+    assert "--cpus-per-task 8" in proc.stdout
     assert "--array 0-0" in proc.stdout
     assert "run_recon_all_subject.sh" in proc.stdout
