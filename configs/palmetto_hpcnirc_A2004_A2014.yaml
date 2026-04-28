@@ -41,9 +41,10 @@ features:
 
 source:
   subjects_dir: "/scratch/jonathanwade/mous_derivatives/freesurfer"
-  use_fsaverage: true
+  use_fsaverage: false
   beamformer: "lcmv"
   spacing: "oct6"
+  # Keep fsaverage for template-space transform, or set a subject-specific trans path template.
   trans: "fsaverage"
   conductivity: [0.3]
   reg: 0.05

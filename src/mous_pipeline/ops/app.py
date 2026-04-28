@@ -23,6 +23,8 @@ from textual.widgets import (
 )
 
 from .actions import (
+    build_bem_submit_cmd,
+    build_recon_submit_cmd,
     compute_undownloaded_subjects,
     discover_remote_subjects,
     build_bids_convert_cmd,
@@ -274,6 +276,7 @@ class DashboardScreen(Screen):
     BINDINGS = [
         Binding("n", "new_run",   "New Run"),
         Binding("d", "redownload", "Re-download"),
+        Binding("p", "prep_source", "Prep m5/BEM"),
         Binding("j", "run_results", "Runs"),
         Binding("l", "view_logs", "Logs"),
         Binding("r", "refresh",   "Refresh"),
@@ -291,6 +294,7 @@ class DashboardScreen(Screen):
 
         with Horizontal(id="dash-actions"):
             yield Button("▶  New Run",     id="btn-new-run",  variant="success")
+            yield Button("🧠 Prep m5/BEM", id="btn-prep-source", variant="primary")
             yield Button("⤓  Re-download", id="btn-redownload", variant="warning")
             yield Button("🗂  Run Results", id="btn-runs", variant="default")
             yield Button("📋  View Logs",   id="btn-logs",     variant="default")
@@ -375,6 +379,7 @@ class DashboardScreen(Screen):
             t.add_row(j.submitted_at[:16], j.job_id, j.job_name, subs, status_str)
 
     def action_new_run(self)  -> None: self.app.push_screen(SubjectsScreen())
+    def action_prep_source(self) -> None: self.app.push_screen(PrepSourceScreen())
     def action_redownload(self) -> None: self.app.push_screen(RedownloadScreen())
     def action_run_results(self) -> None: self.app.push_screen(RunResultsScreen())
     def action_view_logs(self)-> None: self.app.push_screen(LogScreen())
@@ -394,6 +399,10 @@ class DashboardScreen(Screen):
     @on(Button.Pressed, "#btn-redownload")
     def _on_redownload(self, _) -> None:
         self.action_redownload()
+
+    @on(Button.Pressed, "#btn-prep-source")
+    def _on_prep_source(self, _) -> None:
+        self.action_prep_source()
 
     @on(Button.Pressed, "#btn-runs")
     def _on_runs(self, _) -> None:
@@ -846,6 +855,190 @@ class RedownloadScreen(Screen):
         self.app.pop_screen()
 
 
+class PrepSourceScreen(Screen):
+    BINDINGS = [Binding("escape", "action_back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        d = self.app.state.defaults
+        yield Header(show_clock=True)
+        yield Static("  Source Prep  ›  Recon-all + BEM", classes="wizard-header")
+        with Horizontal(classes="frow"):
+            yield Label("Config:", classes="flabel")
+            yield Input(value=self.app.state.last_config, id="prep-config-input")
+        with Horizontal(classes="frow"):
+            yield Label("Subjects:", classes="flabel")
+            yield Input(placeholder="A2002,A2003", id="prep-subjects-input")
+        with Horizontal(classes="frow"):
+            yield Label("Account:", classes="flabel")
+            yield Input(value=d.get("account", ""), id="prep-account-input")
+            yield Label("Partition:", classes="flabel")
+            yield Input(value=d.get("partition", "hpcnirc"), id="prep-partition-input")
+        with Horizontal(classes="frow"):
+            yield Label("Recon:", classes="flabel")
+            yield Input(value=d.get("prep_recon_time", "12:00:00"), id="prep-recon-time-input")
+            yield Input(value=d.get("prep_recon_mem", "16G"), id="prep-recon-mem-input")
+            yield Input(value=d.get("prep_recon_cpus", "4"), id="prep-recon-cpus-input")
+        with Horizontal(classes="frow"):
+            yield Label("BEM:", classes="flabel")
+            yield Input(value=d.get("prep_bem_time", "04:00:00"), id="prep-bem-time-input")
+            yield Input(value=d.get("prep_bem_mem", "16G"), id="prep-bem-mem-input")
+            yield Input(value=d.get("prep_bem_cpus", "2"), id="prep-bem-cpus-input")
+        with Horizontal(classes="frow"):
+            yield Button("Preview recon", id="prep-preview-recon", variant="default")
+            yield Button("Preview BEM", id="prep-preview-bem", variant="default")
+            yield Button("Submit recon", id="prep-submit-recon", variant="warning")
+            yield Button("Submit BEM", id="prep-submit-bem", variant="success")
+        yield Static("", id="prep-output")
+        with Horizontal(classes="nav-bar"):
+            yield Button("← Back", id="prep-back", variant="default")
+        yield Footer()
+
+    def _subjects(self) -> list[str]:
+        raw = self.query_one("#prep-subjects-input", Input).value
+        return [s.strip().removeprefix("sub-") for s in raw.split(",") if s.strip()]
+
+    def _save_defaults(self) -> None:
+        self.app.state.defaults["account"] = self.query_one("#prep-account-input", Input).value.strip()
+        self.app.state.defaults["partition"] = self.query_one("#prep-partition-input", Input).value.strip()
+        self.app.state.defaults["prep_recon_time"] = self.query_one("#prep-recon-time-input", Input).value.strip()
+        self.app.state.defaults["prep_recon_mem"] = self.query_one("#prep-recon-mem-input", Input).value.strip()
+        self.app.state.defaults["prep_recon_cpus"] = self.query_one("#prep-recon-cpus-input", Input).value.strip()
+        self.app.state.defaults["prep_bem_time"] = self.query_one("#prep-bem-time-input", Input).value.strip()
+        self.app.state.defaults["prep_bem_mem"] = self.query_one("#prep-bem-mem-input", Input).value.strip()
+        self.app.state.defaults["prep_bem_cpus"] = self.query_one("#prep-bem-cpus-input", Input).value.strip()
+        save_state(self.app.state)
+
+    @on(Button.Pressed, "#prep-preview-recon")
+    def _preview_recon(self, _) -> None:
+        subjects = self._subjects()
+        if not subjects:
+            self.notify("Enter at least one subject", severity="warning")
+            return
+        cmd = build_recon_submit_cmd(
+            config=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=self.query_one("#prep-account-input", Input).value.strip(),
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-recon-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-recon-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-recon-cpus-input", Input).value.strip(),
+            dry_run=True,
+        )
+        self.query_one("#prep-output", Static).update("[bold]Recon preview:[/bold]\n" + " ".join(cmd))
+
+    @on(Button.Pressed, "#prep-preview-bem")
+    def _preview_bem(self, _) -> None:
+        subjects = self._subjects()
+        if not subjects:
+            self.notify("Enter at least one subject", severity="warning")
+            return
+        cmd = build_bem_submit_cmd(
+            config=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=self.query_one("#prep-account-input", Input).value.strip(),
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-bem-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-bem-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-bem-cpus-input", Input).value.strip(),
+            dry_run=True,
+        )
+        self.query_one("#prep-output", Static).update("[bold]BEM preview:[/bold]\n" + " ".join(cmd))
+
+    @on(Button.Pressed, "#prep-submit-recon")
+    def _submit_recon(self, _) -> None:
+        subjects = self._subjects()
+        if not subjects:
+            self.notify("Enter at least one subject", severity="warning")
+            return
+        account = self.query_one("#prep-account-input", Input).value.strip()
+        if not account:
+            self.notify("Account is required before submitting", severity="error")
+            return
+        self._save_defaults()
+        cmd = build_recon_submit_cmd(
+            config=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=account,
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-recon-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-recon-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-recon-cpus-input", Input).value.strip(),
+            dry_run=False,
+        )
+        job, proc = submit_detached_wrap(
+            cmd,
+            job_name="mous_recon",
+            kind="prep_m5",
+            config_path=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=account,
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-recon-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-recon-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-recon-cpus-input", Input).value.strip(),
+            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            repo_root=Path.cwd(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode != 0:
+            self.query_one("#prep-output", Static).update(f"[bold red]Submit failed rc={proc.returncode}[/bold red]\n" + out[-4000:])
+            return
+        if job:
+            self.app.state.recent_jobs.insert(0, job)
+            self.app.state.recent_jobs = self.app.state.recent_jobs[:40]
+            save_state(self.app.state)
+        self.query_one("#prep-output", Static).update("[bold green]Recon submitted[/bold green]\n" + out[-4000:])
+
+    @on(Button.Pressed, "#prep-submit-bem")
+    def _submit_bem(self, _) -> None:
+        subjects = self._subjects()
+        if not subjects:
+            self.notify("Enter at least one subject", severity="warning")
+            return
+        account = self.query_one("#prep-account-input", Input).value.strip()
+        if not account:
+            self.notify("Account is required before submitting", severity="error")
+            return
+        self._save_defaults()
+        cmd = build_bem_submit_cmd(
+            config=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=account,
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-bem-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-bem-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-bem-cpus-input", Input).value.strip(),
+            dry_run=False,
+        )
+        job, proc = submit_detached_wrap(
+            cmd,
+            job_name="mous_bem",
+            kind="prep_bem",
+            config_path=self.query_one("#prep-config-input", Input).value.strip(),
+            subjects=subjects,
+            account=account,
+            partition=self.query_one("#prep-partition-input", Input).value.strip(),
+            time_limit=self.query_one("#prep-bem-time-input", Input).value.strip(),
+            mem=self.query_one("#prep-bem-mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#prep-bem-cpus-input", Input).value.strip(),
+            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            repo_root=Path.cwd(),
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode != 0:
+            self.query_one("#prep-output", Static).update(f"[bold red]Submit failed rc={proc.returncode}[/bold red]\n" + out[-4000:])
+            return
+        if job:
+            self.app.state.recent_jobs.insert(0, job)
+            self.app.state.recent_jobs = self.app.state.recent_jobs[:40]
+            save_state(self.app.state)
+        self.query_one("#prep-output", Static).update("[bold green]BEM submitted[/bold green]\n" + out[-4000:])
+
+    @on(Button.Pressed, "#prep-back")
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
 class RunResultsScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back"), Binding("r", "refresh_rows", "Refresh")]
 
@@ -885,6 +1078,8 @@ class RunResultsScreen(Screen):
             "fmri_stages": "fMRI Stages",
             "fmri_stages_submit": "fMRI Stages",
             "rdr_fetch": "Download Job",
+            "prep_m5": "Recon Prep",
+            "prep_bem": "BEM Prep",
             "preset:bids_convert_validate": "BIDS Job",
         }
         return mapping.get(kind, kind)
