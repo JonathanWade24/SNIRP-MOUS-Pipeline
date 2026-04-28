@@ -56,7 +56,7 @@ fmri:
   tr: 2.0
   atlas: "glasser"
   roi: "L_TE1a"
-  fmriprep_container: "/project/jonathanwade/containers/fmriprep.sif"
+  fmriprep_container: "/scratch/jonathanwade/containers/fmriprep.sif"
   fmriprep_output: "/scratch/jonathanwade/mous_derivatives/fmriprep"
   skip_fmriprep: false
   skip_bids_validation: false

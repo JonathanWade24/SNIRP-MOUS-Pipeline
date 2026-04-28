@@ -53,7 +53,7 @@ fmri:
   atlas: "glasser"
   roi: "L_TE1a"
   # Point to your apptainer/singularity image on Palmetto.
-  fmriprep_container: "/project/jonathanwade/containers/fmriprep.sif"
+  fmriprep_container: "/scratch/jonathanwade/containers/fmriprep.sif"
   # Keep output/work/license paths on mounted, writable filesystems.
   fmriprep_output: "/scratch/jonathanwade/mous_derivatives/fmriprep"
   skip_fmriprep: false
