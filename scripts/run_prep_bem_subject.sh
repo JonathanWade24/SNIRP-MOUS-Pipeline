@@ -98,14 +98,16 @@ if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
   fi
   echo "[bem] running mri_watershed inside container=$MOUS_FREESURFER_CONTAINER"
   # Run mri_watershed directly; fMRIPrep container has FreeSurfer at /opt/freesurfer.
+  # Syntax: mri_watershed [opts] -surf <prefix> <invol> <outvol>
   "$APPTAINER_BIN" exec \
     -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
     --env "FREESURFER_HOME=/opt/freesurfer" \
     --env "SUBJECTS_DIR=$SUBJECTS_DIR" \
     "${MOUS_FREESURFER_CONTAINER}" \
     bash -c "
+      export FREESURFER_HOME=/opt/freesurfer
       export PATH=\"/opt/freesurfer/bin:\$PATH\"
-      mri_watershed -useSRAS -surf '${WS_DIR}/' '${T1_MGZ}'
+      mri_watershed -useSRAS -surf '${WS_DIR}/${SUBJECT}_' '${T1_MGZ}' '${WS_DIR}/ws.mgz'
     "
   # Rename watershed outputs to MNE-expected BEM surface names.
   python - <<PY
@@ -137,7 +139,7 @@ else
     exit 1
   fi
   echo "[bem] running mri_watershed from host PATH"
-  mri_watershed -useSRAS -surf "${WS_DIR}/" "${T1_MGZ}"
+  mri_watershed -useSRAS -surf "${WS_DIR}/${SUBJECT}_" "${T1_MGZ}" "${WS_DIR}/ws.mgz"
   python - <<PY
 from pathlib import Path
 import shutil
