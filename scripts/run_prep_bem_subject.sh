@@ -80,26 +80,87 @@ fi
 echo "[bem] host=$(hostname) job_id=${SLURM_JOB_ID:-na} task_id=${SLURM_ARRAY_TASK_ID:-na}"
 echo "[bem] subject=$SUBJECT subjects_dir=$SUBJECTS_DIR"
 
+BEM_DIR="$SUBJECTS_DIR/$SUBJECT/bem"
+WS_DIR="$BEM_DIR/watershed"
+T1_MGZ="$SUBJECTS_DIR/$SUBJECT/mri/T1.mgz"
+mkdir -p "$WS_DIR"
+
+if [[ ! -f "$T1_MGZ" ]]; then
+  echo "[bem] ERROR: T1.mgz not found at $T1_MGZ — has recon-all finished for $SUBJECT?" >&2
+  exit 1
+fi
+
 if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
   APPTAINER_BIN="$(command -v apptainer || command -v singularity || true)"
   if [[ -z "$APPTAINER_BIN" ]]; then
     echo "apptainer/singularity not found for containerized BEM prep." >&2
     exit 1
   fi
+  echo "[bem] running mri_watershed inside container=$MOUS_FREESURFER_CONTAINER"
+  # Run mri_watershed directly; fMRIPrep container has FreeSurfer at /opt/freesurfer.
   "$APPTAINER_BIN" exec \
     -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
+    --env "FREESURFER_HOME=/opt/freesurfer" \
+    --env "SUBJECTS_DIR=$SUBJECTS_DIR" \
     "${MOUS_FREESURFER_CONTAINER}" \
-    mne watershed_bem --overwrite --subject "$SUBJECT" --subjects-dir "$SUBJECTS_DIR"
+    bash -c "
+      export PATH=\"/opt/freesurfer/bin:\$PATH\"
+      mri_watershed -useSRAS -surf '${WS_DIR}/' '${T1_MGZ}'
+    "
+  # Rename watershed outputs to MNE-expected BEM surface names.
+  python - <<PY
+from pathlib import Path
+import shutil
+
+subj = "${SUBJECT}"
+ws = Path("${WS_DIR}")
+bem = Path("${BEM_DIR}")
+mapping = [
+    (f"{subj}_inner_skull_surface", "inner_skull.surf"),
+    (f"{subj}_outer_skull_surface", "outer_skull.surf"),
+    (f"{subj}_outer_skin_surface",  "outer_skin.surf"),
+]
+for src_name, dst_name in mapping:
+    src = ws / src_name
+    dst = bem / dst_name
+    if src.exists():
+        shutil.copy2(src, dst)
+        print(f"[bem] renamed {src_name} -> {dst_name}")
+    else:
+        print(f"[bem] WARNING: expected watershed output not found: {src}")
+PY
 else
-  if ! command -v mne >/dev/null 2>&1; then
-    echo "mne CLI not found. Activate env with mne-python or set MOUS_FREESURFER_CONTAINER." >&2
+  # No container: rely on module-loaded FreeSurfer + venv mne.
+  if ! command -v mri_watershed >/dev/null 2>&1; then
+    echo "[bem] ERROR: mri_watershed not found and MOUS_FREESURFER_CONTAINER is not set." >&2
+    echo "  Fix: set MOUS_FREESURFER_CONTAINER to your fMRIPrep/FreeSurfer .sif path, or load a FreeSurfer module." >&2
     exit 1
   fi
-  mne watershed_bem --overwrite --subject "$SUBJECT" --subjects-dir "$SUBJECTS_DIR"
+  echo "[bem] running mri_watershed from host PATH"
+  mri_watershed -useSRAS -surf "${WS_DIR}/" "${T1_MGZ}"
+  python - <<PY
+from pathlib import Path
+import shutil
+
+subj = "${SUBJECT}"
+ws = Path("${WS_DIR}")
+bem = Path("${BEM_DIR}")
+mapping = [
+    (f"{subj}_inner_skull_surface", "inner_skull.surf"),
+    (f"{subj}_outer_skull_surface", "outer_skull.surf"),
+    (f"{subj}_outer_skin_surface",  "outer_skin.surf"),
+]
+for src_name, dst_name in mapping:
+    src = ws / src_name
+    dst = bem / dst_name
+    if src.exists():
+        shutil.copy2(src, dst)
+        print(f"[bem] renamed {src_name} -> {dst_name}")
+PY
 fi
 
 if [[ ! -f "$INNER" ]]; then
-  echo "BEM prep completed but inner_skull.surf is still missing for $SUBJECT" >&2
+  echo "[bem] ERROR: inner_skull.surf still missing after BEM prep for $SUBJECT" >&2
   exit 1
 fi
 echo "[bem] done subject=$SUBJECT"

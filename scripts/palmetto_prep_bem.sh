@@ -74,10 +74,15 @@ subjects = override if override else [str(s).removeprefix("sub-") for s in cfg.s
 subjects = [s for s in subjects if s]
 if not subjects:
     raise SystemExit("No subjects resolved. Provide --subjects or set config subjects:.")
+fmriprep_container = ""
+fmri = getattr(cfg, "fmri", None)
+if fmri:
+    fmriprep_container = str(getattr(fmri, "fmriprep_container", "") or "")
 payload = {
     "subjects": subjects,
     "derivatives_root": str(cfg.derivatives_root.expanduser().resolve()),
     "subjects_dir": str(Path(cfg.source.subjects_dir).expanduser().resolve()) if getattr(cfg.source, "subjects_dir", "") else "",
+    "fmriprep_container": fmriprep_container,
 }
 print(json.dumps(payload))
 PY
@@ -104,6 +109,19 @@ PY
 )"
 if [[ -z "$FS_SUBJECTS_DIR" ]]; then
   FS_SUBJECTS_DIR="$DERIV_ROOT/freesurfer"
+fi
+
+# Auto-detect FreeSurfer container from config when env var not already set.
+if [[ -z "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
+  _CFG_CONTAINER="$(python - <<'PY' "$RESOLVED_JSON"
+import json,sys
+print(json.loads(sys.argv[1]).get("fmriprep_container",""))
+PY
+)"
+  if [[ -n "$_CFG_CONTAINER" && -f "$_CFG_CONTAINER" ]]; then
+    export MOUS_FREESURFER_CONTAINER="$_CFG_CONTAINER"
+    echo "[plan] auto-detected freesurfer_container=$MOUS_FREESURFER_CONTAINER"
+  fi
 fi
 
 SLURM_DIR="$DERIV_ROOT/slurm"
