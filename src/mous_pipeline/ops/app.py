@@ -342,9 +342,17 @@ class DashboardScreen(Screen):
         self.notify("Refreshed")
     def action_quit_app(self) -> None: self.app.exit()
 
-    @on(Button.Pressed, "#btn-new-run") def _on_new(self, _)    -> None: self.action_new_run()
-    @on(Button.Pressed, "#btn-logs")    def _on_logs(self, _)   -> None: self.action_view_logs()
-    @on(Button.Pressed, "#btn-refresh") def _on_refresh(self, _)-> None: self.action_refresh()
+    @on(Button.Pressed, "#btn-new-run")
+    def _on_new(self, _) -> None:
+        self.action_new_run()
+
+    @on(Button.Pressed, "#btn-logs")
+    def _on_logs(self, _) -> None:
+        self.action_view_logs()
+
+    @on(Button.Pressed, "#btn-refresh")
+    def _on_refresh(self, _) -> None:
+        self.action_refresh()
 
 
 # ── Step 1: Subjects ──────────────────────────────────────────────────────────
@@ -411,9 +419,17 @@ class SubjectsScreen(Screen):
         if not subjects:
             self.notify("No subjects found — check config/data-root paths.", severity="warning")
 
-    @on(Button.Pressed, "#btn-load")      def _on_load(self, _)     -> None: self._load_subjects()
-    @on(Button.Pressed, "#btn-all")       def _on_all(self, _)      -> None: self.query_one("#subject-list", SelectionList).select_all()
-    @on(Button.Pressed, "#btn-none")      def _on_none(self, _)     -> None: self.query_one("#subject-list", SelectionList).deselect_all()
+    @on(Button.Pressed, "#btn-load")
+    def _on_load(self, _) -> None:
+        self._load_subjects()
+
+    @on(Button.Pressed, "#btn-all")
+    def _on_all(self, _) -> None:
+        self.query_one("#subject-list", SelectionList).select_all()
+
+    @on(Button.Pressed, "#btn-none")
+    def _on_none(self, _) -> None:
+        self.query_one("#subject-list", SelectionList).deselect_all()
 
     @on(Button.Pressed, "#btn-load-set")
     def _on_load_set(self, _) -> None:
