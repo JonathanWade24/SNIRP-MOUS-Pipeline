@@ -133,6 +133,62 @@ def test_palmetto_recon_all_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
     assert "run_recon_all_subject.sh" in proc.stdout
 
 
+def test_palmetto_prep_bem_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
+    data_root = tmp_path / "data"
+    derivatives_root = tmp_path / "derivatives"
+    cfg = tmp_path / "cfg.yaml"
+    _write_minimal_config(cfg, data_root=data_root, derivatives_root=derivatives_root)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_mous_pipeline(fake_bin)
+    env = _base_env(fake_bin)
+
+    proc = subprocess.run(
+        ["bash", "scripts/palmetto_prep_bem.sh", "--config", str(cfg), "--dry-run"],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "--partition hpcnirc" in proc.stdout
+    assert "--time 04:00:00" in proc.stdout
+    assert "--mem 16G" in proc.stdout
+    assert "--cpus-per-task 2" in proc.stdout
+    assert "--array 0-0" in proc.stdout
+    assert "run_prep_bem_subject.sh" in proc.stdout
+
+
+def test_run_prep_bem_subject_skips_when_surfaces_exist(tmp_path: Path):
+    subjects_file = tmp_path / "subjects.txt"
+    subjects_file.write_text("A2002\n")
+    subjects_dir = tmp_path / "freesurfer"
+    bem_dir = subjects_dir / "sub-A2002" / "bem"
+    bem_dir.mkdir(parents=True)
+    (bem_dir / "inner_skull.surf").write_text("ok")
+    (bem_dir / "outer_skull.surf").write_text("ok")
+    (bem_dir / "outer_skin.surf").write_text("ok")
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "scripts/run_prep_bem_subject.sh",
+            "--subjects-file",
+            str(subjects_file),
+            "--subjects-dir",
+            str(subjects_dir),
+        ],
+        cwd=PROJECT_ROOT,
+        env={**os.environ, "SLURM_ARRAY_TASK_ID": "0"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "[bem] skip subject=sub-A2002" in proc.stdout
+
+
 def test_run_aims_priority_dry_run_prints_dependent_fmri_stages_submit(tmp_path: Path):
     data_root = tmp_path / "data"
     derivatives_root = tmp_path / "derivatives"

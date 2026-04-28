@@ -32,7 +32,13 @@ from .m9_orchestration.parallelization_plan import (
     recommend_subject_parallelism,
 )
 from .m9_orchestration.runner import run_subject
-from .ops.actions import build_recon_submit_cmd, build_submit_cmd, execute_submit_cmd, run_cmd
+from .ops.actions import (
+    build_bem_submit_cmd,
+    build_recon_submit_cmd,
+    build_submit_cmd,
+    execute_submit_cmd,
+    run_cmd,
+)
 from .ops.models import WorkflowPreset
 from .ops.monitor import classify_failure, squeue_jobs, tail_text
 from .ops.state import load_state, save_state
@@ -543,7 +549,21 @@ def main() -> None:
     ops_recon.add_argument("--time", default="12:00:00")
     ops_recon.add_argument("--mem", default="16G")
     ops_recon.add_argument("--cpus-per-task", default="4")
+    ops_recon.add_argument("--with-bem", action="store_true", help="Chain BEM prep after recon-all succeeds")
+    ops_recon.add_argument("--bem-time", default="04:00:00")
+    ops_recon.add_argument("--bem-mem", default="16G")
+    ops_recon.add_argument("--bem-cpus-per-task", default="2")
     ops_recon.add_argument("--execute", action="store_true")
+    ops_bem = ops_sub.add_parser("prep-bem", help="Submit BEM generation array job (inner/outer skull/skin surfaces)")
+    ops_bem.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
+    ops_bem.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
+    ops_bem.add_argument("--account", default="")
+    ops_bem.add_argument("--partition", default="hpcnirc")
+    ops_bem.add_argument("--time", default="04:00:00")
+    ops_bem.add_argument("--mem", default="16G")
+    ops_bem.add_argument("--cpus-per-task", default="2")
+    ops_bem.add_argument("--dependency", default="", help="Optional sbatch dependency (e.g. afterok:12345)")
+    ops_bem.add_argument("--execute", action="store_true")
 
     args = parser.parse_args()
 
@@ -1004,8 +1024,23 @@ def main() -> None:
                 cpus_per_task=args.cpus_per_task,
                 dry_run=not args.execute,
             )
+            bem_cmd: list[str] | None = None
+            if args.with_bem:
+                bem_cmd = build_bem_submit_cmd(
+                    config=args.config,
+                    subjects=subjects,
+                    account=args.account,
+                    partition=args.partition,
+                    time_limit=args.bem_time,
+                    mem=args.bem_mem,
+                    cpus_per_task=args.bem_cpus_per_task,
+                    dry_run=not args.execute,
+                )
             print("Command:")
             print(" ".join(shlex.quote(c) for c in cmd))
+            if bem_cmd:
+                print("Follow-up command (BEM prep):")
+                print(" ".join(shlex.quote(c) for c in bem_cmd))
             if not args.execute:
                 print("Preview only. Add --execute to run.")
                 return
@@ -1016,6 +1051,77 @@ def main() -> None:
                 subjects=subjects,
                 kind="prep_m5",
                 job_name="mous_recon",
+            )
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode)
+            if job is not None:
+                st.recent_jobs.insert(0, job)
+                st.recent_jobs = st.recent_jobs[:40]
+                print(f"Tracked job {job.job_id} in ops state.")
+                save_state(st)
+            if args.with_bem:
+                dep = f"afterok:{job.job_id}" if job is not None else ""
+                bem_cmd_exec = build_bem_submit_cmd(
+                    config=args.config,
+                    subjects=subjects,
+                    account=args.account,
+                    partition=args.partition,
+                    time_limit=args.bem_time,
+                    mem=args.bem_mem,
+                    cpus_per_task=args.bem_cpus_per_task,
+                    dependency=dep,
+                    dry_run=False,
+                )
+                bem_job, bem_proc = execute_submit_cmd(
+                    bem_cmd_exec,
+                    config_path=args.config,
+                    subjects=subjects,
+                    kind="prep_bem",
+                    job_name="mous_bem",
+                )
+                if bem_proc.stdout:
+                    print(bem_proc.stdout)
+                if bem_proc.stderr:
+                    print(bem_proc.stderr, file=sys.stderr)
+                if bem_proc.returncode != 0:
+                    sys.exit(bem_proc.returncode)
+                if bem_job is not None:
+                    st.recent_jobs.insert(0, bem_job)
+                    st.recent_jobs = st.recent_jobs[:40]
+                    print(f"Tracked BEM job {bem_job.job_id} in ops state.")
+                    save_state(st)
+        elif args.ops_cmd == "prep-bem":
+            subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
+            if not subjects:
+                print("No subjects specified.", file=sys.stderr)
+                sys.exit(2)
+            cmd = build_bem_submit_cmd(
+                config=args.config,
+                subjects=subjects,
+                account=args.account,
+                partition=args.partition,
+                time_limit=args.time,
+                mem=args.mem,
+                cpus_per_task=args.cpus_per_task,
+                dependency=args.dependency,
+                dry_run=not args.execute,
+            )
+            print("Command:")
+            print(" ".join(shlex.quote(c) for c in cmd))
+            if not args.execute:
+                print("Preview only. Add --execute to run.")
+                return
+            st = load_state()
+            job, proc = execute_submit_cmd(
+                cmd,
+                config_path=args.config,
+                subjects=subjects,
+                kind="prep_bem",
+                job_name="mous_bem",
             )
             if proc.stdout:
                 print(proc.stdout)

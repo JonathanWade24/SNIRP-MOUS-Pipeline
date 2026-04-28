@@ -129,6 +129,42 @@ def build_recon_submit_cmd(
     return cmd
 
 
+def build_bem_submit_cmd(
+    *,
+    config: str,
+    subjects: list[str],
+    account: str,
+    partition: str,
+    time_limit: str,
+    mem: str,
+    cpus_per_task: str,
+    dependency: str = "",
+    dry_run: bool = False,
+) -> list[str]:
+    cmd = [
+        "scripts/palmetto_prep_bem.sh",
+        "--config",
+        config,
+        "--subjects",
+        ",".join(subjects),
+        "--partition",
+        partition,
+        "--account",
+        account,
+        "--time",
+        time_limit,
+        "--mem",
+        mem,
+        "--cpus-per-task",
+        cpus_per_task,
+    ]
+    if dependency:
+        cmd.extend(["--dependency", dependency])
+    if dry_run:
+        cmd.append("--dry-run")
+    return cmd
+
+
 def run_cmd(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=False, text=True, capture_output=True, cwd=str(cwd) if cwd else None)
 
