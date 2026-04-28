@@ -27,8 +27,8 @@ from .actions import (
     build_download_cmd,
     build_submit_cmd,
     discover_subjects,
-    execute_submit_cmd,
     run_cmd,
+    submit_detached_driver,
 )
 from .env import run_env_preflight
 from .models import SubjectSet, WorkflowPreset
@@ -552,7 +552,10 @@ class ResourcesScreen(Screen):
             id="run-summary",
         )
 
-        yield Static("[dim]← click Preview or Dry Run to generate command[/dim]", id="cmd-preview")
+        yield Static(
+            "[dim]Submit launches a detached SLURM driver job (safe for SSH disconnects).[/dim]",
+            id="cmd-preview",
+        )
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",       id="btn-back",    variant="default")
@@ -632,13 +635,20 @@ class ResourcesScreen(Screen):
         self._save_defaults(r)
         cmd = self._build()
         self.query_one("#cmd-preview", Static).update(
-            "[bold]Submitting:[/bold]\n" + " ".join(cmd) + "\n\n[dim]Running…[/dim]"
+            "[bold]Submitting detached driver:[/bold]\n" + " ".join(cmd) + "\n\n[dim]Submitting via sbatch --wrap…[/dim]"
         )
-        job, proc = execute_submit_cmd(
+        job, proc = submit_detached_driver(
             cmd,
             config_path=self.app.wizard_config,
             subjects=self.app.wizard_subjects,
-            kind=f"preset:{self.app.wizard_preset_name}",
+            account=r["account"],
+            partition=r["partition"],
+            time_limit=r["time_limit"],
+            mem=r["mem"],
+            cpus_per_task=r["cpus_per_task"],
+            venv_path=self.app.state.defaults.get("venv_path", "~/.venvs/mous-palmetto"),
+            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:

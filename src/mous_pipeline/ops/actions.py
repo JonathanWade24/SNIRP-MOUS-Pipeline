@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -107,6 +108,66 @@ def execute_submit_cmd(
             job_id=job_id,
             job_name="mous_fmriprep",
             kind=kind,
+            config_path=config_path,
+            subjects=subjects,
+            status="SUBMITTED",
+        ),
+        proc,
+    )
+
+
+def submit_detached_driver(
+    submit_cmd: list[str],
+    *,
+    config_path: str,
+    subjects: list[str],
+    account: str,
+    partition: str,
+    time_limit: str,
+    mem: str,
+    cpus_per_task: str,
+    venv_path: str,
+    derivatives_root: str,
+    repo_root: Path | None = None,
+) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
+    root = (repo_root or Path.cwd()).resolve()
+    slurm_dir = Path(derivatives_root).expanduser().resolve() / "slurm"
+    slurm_dir.mkdir(parents=True, exist_ok=True)
+    wrapped = (
+        f"cd {shlex.quote(str(root))} && "
+        f"source {shlex.quote(str(Path(venv_path).expanduser() / 'bin/activate'))} && "
+        + " ".join(shlex.quote(part) for part in submit_cmd)
+    )
+    sbatch_cmd = [
+        "sbatch",
+        "--job-name",
+        "mous_driver",
+        "--partition",
+        partition,
+        "--account",
+        account,
+        "--time",
+        time_limit,
+        "--mem",
+        mem,
+        "--cpus-per-task",
+        cpus_per_task,
+        "--output",
+        str(slurm_dir / "mous_driver_%j.out"),
+        "--error",
+        str(slurm_dir / "mous_driver_%j.err"),
+        "--wrap",
+        wrapped,
+    ]
+    proc = run_cmd(sbatch_cmd, cwd=root)
+    job_id = parse_sbatch_job_id((proc.stdout or "") + "\n" + (proc.stderr or ""))
+    if not job_id:
+        return None, proc
+    return (
+        JobRecord(
+            job_id=job_id,
+            job_name="mous_driver",
+            kind="detached_driver",
             config_path=config_path,
             subjects=subjects,
             status="SUBMITTED",
