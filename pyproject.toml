@@ -60,6 +60,9 @@ fmri = [
   "nibabel>=5",
   "templateflow>=24",
 ]
+ops = [
+  "textual>=0.80",
+]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -29,6 +29,7 @@ Optional extras:
 pip install -e ".[gui]"     # Streamlit UI
 pip install -e ".[bids]"    # MNE-BIDS-Pipeline backend for preprocessing
 pip install -e ".[fmri]"    # Aim 2 fMRI / nilearn stack
+pip install -e ".[ops]"     # SSH-first Textual operations UI
 ```
 
 ## Expected data structure
@@ -277,6 +278,16 @@ scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account
 ```
 
 See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.
+
+SSH-first operations interface:
+
+```bash
+mous-pipeline ops ui
+mous-pipeline ops run --preset full_submit --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT
+mous-pipeline ops status
+```
+
+See `docs/ssh_ops_tui.md` for full TUI + non-interactive workflow details.
 
 Neurodesk single-subject FreeSurfer helper (safe with spaces in source paths):
 
