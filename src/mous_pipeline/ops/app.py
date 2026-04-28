@@ -227,10 +227,33 @@ PRESET_DESCRIPTIONS: dict[str, str] = {
     "download_only":          "Download subject data from RDR only. No processing.",
     "bids_convert_validate":  "Run BIDS conversion + mne_bids validation. Good first step before submit.",
     "dry_run_submit":         "Preview palmetto_submit.sh commands without running anything. Safe to use anytime.",
-    "full_submit":            "Submit the full pipeline via palmetto_submit.sh. Skips m5 (recon-all).",
-    "m5_enabled_submit":      "Full pipeline including m5 (recon-all). Requires FreeSurfer outputs in subjects_dir.",
-    "fmriprep_only_submit":   "Submit fMRIPrep-focused run for selected subjects.",
+    "full_submit":            "Multimodal driver: MEG trial metrics + MEG group summaries; submits fMRI preprocessing array; skips anatomical source models (m5).",
+    "m5_enabled_submit":      "Multimodal driver including anatomical source models (m5) before subject MEG outputs; also submits fMRI preprocessing array.",
+    "fmriprep_only_submit":   "Submit fMRI preprocessing track for selected subjects.",
 }
+
+PRESET_LABELS: dict[str, str] = {
+    "download_only": "Download Only",
+    "bids_convert_validate": "BIDS Convert + Validate",
+    "dry_run_submit": "Dry Run (No Submit)",
+    "full_submit": "Multimodal Driver (MEG + fMRI preprocess)",
+    "m5_enabled_submit": "Multimodal Driver + Anatomical Source Models (m5)",
+    "fmriprep_only_submit": "fMRI Preprocessing Only",
+}
+
+
+def _preset_what_runs(name: str) -> str:
+    if name == "download_only":
+        return "Runs: RDR download only."
+    if name == "bids_convert_validate":
+        return "Runs: BIDS convert + validate only."
+    if name == "dry_run_submit":
+        return "Runs: command preview only; no jobs submitted."
+    if name == "fmriprep_only_submit":
+        return "Runs: fMRI preprocessing track. This submits detached fMRIPrep array jobs."
+    if name == "m5_enabled_submit":
+        return "Runs: Anatomical Source Models (m5), subject-level MEG outputs, MEG group summaries, and detached fMRI preprocessing."
+    return "Runs: subject-level MEG outputs, MEG group summaries, and detached fMRI preprocessing."
 
 FAILURE_HINTS: dict[str, str] = {
     "oom":         "[bold red]OUT OF MEMORY[/bold red]  →  Increase --mem (try 512G or 1T)",
@@ -503,11 +526,15 @@ class PresetScreen(Screen):
             yield Label("Preset:", classes="flabel")
             names = sorted(self.app.state.workflow_presets.keys())
             cur   = self.app.wizard_preset_name if self.app.wizard_preset_name in names else names[0]
-            yield Select([(n, n) for n in names], value=cur, id="preset-select")
+            yield Select([(PRESET_LABELS.get(n, n), n) for n in names], value=cur, id="preset-select")
 
         yield Static(
             PRESET_DESCRIPTIONS.get(self.app.wizard_preset_name, ""),
             id="preset-desc",
+        )
+        yield Static(
+            "[dim]" + _preset_what_runs(self.app.wizard_preset_name) + "[/dim]",
+            id="preset-what-runs",
         )
 
         yield Label("  Subjects selected for this run:", classes="section-title")
@@ -532,6 +559,7 @@ class PresetScreen(Screen):
         preset = self.app.state.workflow_presets.get(name)
         desc = PRESET_DESCRIPTIONS.get(name, preset.description if preset else "")
         self.query_one("#preset-desc", Static).update(desc)
+        self.query_one("#preset-what-runs", Static).update("[dim]" + _preset_what_runs(name) + "[/dim]")
 
     @on(Button.Pressed, "#btn-back")
     def action_back(self) -> None: self.app.pop_screen()
@@ -571,13 +599,14 @@ class ResourcesScreen(Screen):
             yield Input(value=d.get("cpus_per_task", "8"), id="cpus-input")
 
         yield Static(
-            f"[dim]Preset:[/dim] [bold]{self.app.wizard_preset_name}[/bold]  "
+            f"[dim]Preset:[/dim] [bold]{PRESET_LABELS.get(self.app.wizard_preset_name, self.app.wizard_preset_name)}[/bold]  "
             f"[dim]Subjects:[/dim] [bold]{', '.join('sub-' + s for s in self.app.wizard_subjects)}[/bold]",
             id="run-summary",
         )
 
         yield Static(
-            "[dim]Submit launches a detached SLURM driver job (safe for SSH disconnects).[/dim]",
+            "[dim]Submit launches a detached Multimodal Driver job (safe for SSH disconnects). "
+            "fMRI preprocessing may continue in separate mous_fmriprep array jobs after the driver exits.[/dim]",
             id="cmd-preview",
         )
 
@@ -795,7 +824,18 @@ class RunResultsScreen(Screen):
         table.clear()
         for j in self.app.state.recent_jobs[:40]:
             subs = ",".join(j.subjects[:3]) or "-"
-            table.add_row(j.submitted_at[:16], j.job_id, j.kind, subs, j.status)
+            kind = self._display_run_kind(j.kind)
+            table.add_row(j.submitted_at[:16], j.job_id, kind, subs, j.status)
+
+    def _display_run_kind(self, kind: str) -> str:
+        mapping = {
+            "detached_driver": "Driver Job",
+            "driver": "Driver Job",
+            "palmetto_submit": "fMRI Array Submit",
+            "rdr_fetch": "Download Job",
+            "preset:bids_convert_validate": "BIDS Job",
+        }
+        return mapping.get(kind, kind)
 
     def action_refresh_rows(self) -> None:
         self._refresh_rows()
@@ -835,9 +875,11 @@ class RunResultsScreen(Screen):
             return
         derivatives_root = self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
         lines = [
-            f"[bold]Job:[/bold] {job.job_id}  [bold]Kind:[/bold] {job.kind}",
+            f"[bold]Job:[/bold] {job.job_id}  [bold]Type:[/bold] {self._display_run_kind(job.kind)}",
             f"[bold]Subjects:[/bold] {', '.join(job.subjects) if job.subjects else '-'}",
         ]
+        if job.kind in {"driver", "detached_driver"}:
+            lines.append("[dim]Note: driver jobs can complete before detached fMRI array jobs complete.[/dim]")
         for subject in job.subjects:
             manifest = _latest_manifest_for_subject(derivatives_root, subject)
             subject_root = Path(derivatives_root).expanduser() / f"sub-{subject}"
@@ -951,9 +993,13 @@ class LogScreen(Screen):
     def _log_kind(self, filename: str) -> str:
         lower = filename.lower()
         if "fmriprep" in lower:
-            return "fMRIPrep"
+            return "fMRI Preprocessing"
         if "driver" in lower:
-            return "runner"
+            return "Driver"
+        if "fetch" in lower or "mous_fetch_rdr" in lower:
+            return "Download"
+        if "bids" in lower:
+            return "BIDS"
         return "other"
 
     def _load_log(self, path: Path) -> None:

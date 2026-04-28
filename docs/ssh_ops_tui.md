@@ -1,6 +1,8 @@
 # SSH-First Ops TUI
 
 `mous-pipeline ops` provides a single-terminal operations interface for Palmetto workflows.
+The UI treats `mous_driver` as an orchestrator that can launch independent tracks
+(MEG outputs, optional m5 source models, and fMRI preprocessing).
 
 ## Install
 
@@ -14,11 +16,23 @@ pip install -e ".[ops]"
 mous-pipeline ops ui
 ```
 
-Tabs:
-- `Env`: startup checks for `python3`, `sbatch`, `sacct`, optional container/runtime tools, and venv activation hints.
-- `Subjects`: load subjects from config/filesystem, multi-select, save/load named subject sets.
-- `Workflows`: choose built-in preset (download-only, BIDS convert+validate, dry-run submit, full submit, m5-enabled, fMRIPrep-only), preview commands, run commands, save manual presets.
-- `Monitor`: poll SLURM state and classify recent failures from log tails.
+Screens:
+- `Dashboard`: active jobs + tracked runs.
+- `New Run`: subject selection, workflow selection, and resource submission.
+- `Run Results`: quick links to driver/fMRIPrep logs and manifest paths.
+- `Log Viewer`: newest logs grouped by Driver/fMRI/Download/BIDS.
+
+Built-in workflow presets:
+- `Download Only`: fetch from RDR; no processing.
+- `BIDS Convert + Validate`: normalize and validate data only.
+- `Dry Run (No Submit)`: preview submit commands.
+- `Multimodal Driver (MEG + fMRI preprocess)`: runs subject/group MEG outputs and submits detached fMRI preprocessing array jobs.
+- `Multimodal Driver + Anatomical Source Models (m5)`: same as above, with source-model generation.
+- `fMRI Preprocessing Only`: submits only the detached fMRIPrep array path.
+
+Why this matters:
+- The driver job can finish before `mous_fmriprep_*` jobs finish. This is expected behavior.
+- Monitor both `mous_driver_*` and `fmriprep_*` logs for full completion.
 
 ## Non-interactive mode
 

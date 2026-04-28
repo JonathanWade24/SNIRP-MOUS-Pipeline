@@ -230,7 +230,7 @@ mous-pipeline group --derivatives-root derivatives/mous_pipeline
 mous-pipeline group --derivatives-root derivatives/mous_pipeline --test lme
 ```
 
-## SLURM automation (Aim 1/2/3)
+## SLURM automation (Workflow tracks)
 
 For cluster-oriented orchestration, use:
 
@@ -246,7 +246,7 @@ subdirectories, checks the FreeSurfer license and cohort T1w inputs, and can
 optionally submit the FreeSurfer or full-cohort SLURM jobs with
 `--submit-recon` / `--submit-cohort`.
 
-For Aim-priority automation without the full M5 FreeSurfer workflow, use:
+For prioritized automation across workflow tracks without mandatory m5 FreeSurfer work, use:
 
 ```bash
 scripts/run_aims_priority.sh \
@@ -259,10 +259,14 @@ scripts/run_aims_priority.sh \
 What it does:
 - resolves subjects from config `subjects:` or `--subjects` override,
 - optionally fetches missing subjects via `mous-pipeline fetch-rdr --execute`,
-- runs a post-merge Aim 1 regression/QC audit on the first subject,
-- submits fMRIPrep as an `sbatch --array` job,
-- runs per-subject MEG stages for Aim 1/Aim 3 (`--skip m5,m10,m11`),
-- runs group aggregation and writes Aim 3 null summary artifacts.
+- runs a post-merge MEG trial-metrics regression/QC audit on the first subject,
+- submits fMRI preprocessing as detached `sbatch --array` jobs,
+- runs per-subject MEG stages (`--skip m5,m10,m11` by default),
+- runs MEG group aggregation and writes group summary/null artifacts.
+
+Why this can look surprising:
+- `mous_driver` is an orchestrator, so it can exit before detached `mous_fmriprep` array jobs finish.
+- Treat `mous_driver_*` and `fmriprep_*` logs as separate tracks when monitoring completion.
 
 Preview all commands without executing:
 

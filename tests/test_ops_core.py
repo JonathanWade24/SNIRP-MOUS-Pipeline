@@ -9,7 +9,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from mous_pipeline.ops.actions import build_submit_cmd, parse_sbatch_job_id
 from mous_pipeline.ops.models import OpsState, WorkflowPreset
 from mous_pipeline.ops.monitor import classify_failure
-from mous_pipeline.ops.state import load_state, save_state
+from mous_pipeline.ops.state import default_presets, load_state, save_state
 
 
 def test_state_persistence_round_trip(tmp_path: Path) -> None:
@@ -52,3 +52,22 @@ def test_build_submit_cmd_for_m5_preset() -> None:
 def test_parse_sbatch_job_id_and_failure_classification() -> None:
     assert parse_sbatch_job_id("Submitted batch job 123456") == "123456"
     assert classify_failure("slurmstepd: error: Detected 1 oom-kill event") == "oom"
+
+
+def test_default_presets_keep_command_keys_compatible() -> None:
+    presets = default_presets()
+    # Keep historical keys stable for CLI/state compatibility.
+    assert {"full_submit", "m5_enabled_submit", "fmriprep_only_submit"} <= set(presets)
+
+    cmd = build_submit_cmd(
+        presets["full_submit"],
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="256G",
+        cpus_per_task="8",
+    )
+    assert "--include-m5" not in cmd
+    assert "--dry-run" not in cmd

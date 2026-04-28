@@ -178,7 +178,7 @@ for sub in "${SUBJECTS[@]}"; do
 done
 
 FIRST_SUBJECT="${SUBJECTS[0]}"
-echo "[audit] Running Aim1 regression/QC audit for sub-$FIRST_SUBJECT"
+echo "[meg-trial] Running MEG trial-metrics regression/QC audit for sub-$FIRST_SUBJECT"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run][audit] python $REPO_ROOT/scripts/aim1_audit.py --config $CONFIG_ABS --subject $FIRST_SUBJECT"
 else
@@ -195,7 +195,7 @@ else
   printf "%s\n" "${SUBJECTS[@]}" > "$SUBJECTS_FILE"
 fi
 
-echo "[slurm] submitting fMRIPrep array: 0-$ARRAY_MAX"
+echo "[fmri] submitting fMRI preprocessing array: 0-$ARRAY_MAX"
 SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
 SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
 SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
@@ -222,8 +222,9 @@ fi
 if [[ "$DRY_RUN" -eq 1 ]]; then
   EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
   echo "[dry-run][slurm] sbatch --job-name mous_fmriprep --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR${EXTRA_STR} $REPO_ROOT/scripts/run_fmriprep_subject.sh --config $CONFIG_ABS --subjects-file $SUBJECTS_FILE"
+  echo "[dry-run][fmri] note: fMRI preprocessing runs as detached array jobs and may finish after the driver exits."
 else
-  sbatch \
+  SBATCH_REPLY="$(sbatch \
     --job-name "mous_fmriprep" \
     --array "0-$ARRAY_MAX" \
     --output "$SBATCH_OUTPUT" \
@@ -231,35 +232,41 @@ else
     "${SBATCH_EXTRA[@]}" \
     "$REPO_ROOT/scripts/run_fmriprep_subject.sh" \
     --config "$CONFIG_ABS" \
-    --subjects-file "$SUBJECTS_FILE" | tee "$SBATCH_LOG"
+    --subjects-file "$SUBJECTS_FILE")"
+  printf "%s\n" "$SBATCH_REPLY" | tee "$SBATCH_LOG"
+  FMRIPREP_JOB_ID="$(awk '/Submitted batch job/{print $4}' <<< "$SBATCH_REPLY" | tail -n1)"
+  if [[ -n "$FMRIPREP_JOB_ID" ]]; then
+    echo "[fmri] submitted detached array job id: $FMRIPREP_JOB_ID"
+  fi
+  echo "[fmri] note: fMRI preprocessing may continue after mous_driver exits."
 fi
 
 for sub in "${SUBJECTS[@]}"; do
-  echo "[meg] Running MEG pipeline for sub-$sub (Aim1/Aim3 path)"
+  echo "[meg-subject] Running subject MEG outputs for sub-$sub"
   MEG_SKIP="m5,m10,m11"
   if [[ "$INCLUDE_M5" -eq 1 ]]; then
     MEG_SKIP="m10,m11"
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run][meg] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP"
+    echo "[dry-run][meg-subject] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP"
     continue
   fi
   mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP"
 done
 
-echo "[group] Running group aggregation"
+echo "[meg-group] Running MEG group aggregation"
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "[dry-run][group] mous-pipeline group --derivatives-root $DERIV_ROOT"
-  echo "[dry-run][aim3] python $REPO_ROOT/scripts/aim3_null_summary.py --derivatives-root $DERIV_ROOT --out-md $REPO_ROOT/reports/aim3_null_summary.md --out-json $REPO_ROOT/reports/aim3_null_summary.json"
+  echo "[dry-run][meg-group] mous-pipeline group --derivatives-root $DERIV_ROOT"
+  echo "[dry-run][meg-group] python $REPO_ROOT/scripts/aim3_null_summary.py --derivatives-root $DERIV_ROOT --out-md $REPO_ROOT/reports/aim3_null_summary.md --out-json $REPO_ROOT/reports/aim3_null_summary.json"
   echo "[done] Dry run complete."
   exit 0
 fi
 mous-pipeline group --derivatives-root "$DERIV_ROOT"
 
-echo "[aim3] Writing null summary artifacts"
+echo "[meg-group] Writing group summary/null artifacts"
 python "$REPO_ROOT/scripts/aim3_null_summary.py" \
   --derivatives-root "$DERIV_ROOT" \
   --out-md "$REPO_ROOT/reports/aim3_null_summary.md" \
   --out-json "$REPO_ROOT/reports/aim3_null_summary.json"
 
-echo "[done] Priority order complete: Aim1 audit -> fMRIPrep launch -> MEG/group -> Aim3 null summary."
+echo "[done] Priority order complete: MEG trial audit -> fMRI preprocessing submit -> MEG subject/group outputs."

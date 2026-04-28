@@ -120,9 +120,17 @@ scripts/palmetto_submit.sh \
 
 ## 7) Logs and monitoring
 
+- Driver logs: `<derivatives_root>/slurm/mous_driver_%j.out` and `.err`
 - fMRIPrep array logs: `<derivatives_root>/slurm/fmriprep_%A_%a.out`
 - Submission logs: `<derivatives_root>/slurm/fmriprep_submit_*.log`
 - Queue status: `squeue -u $USER`
+
+### Why can `mous_driver` finish before fMRIPrep?
+
+`mous_driver` is an orchestrator job. It submits fMRI preprocessing as detached
+`mous_fmriprep` array jobs and then continues MEG subject/group work. Because
+those are separate SLURM jobs, the driver can complete while fMRI jobs are
+still running.
 
 To include m5 after recon-all is ready:
 
