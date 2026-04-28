@@ -118,7 +118,7 @@ import json,sys
 print(json.loads(sys.argv[1]).get("fmriprep_container",""))
 PY
 )"
-  if [[ -n "$_CFG_CONTAINER" && -f "$_CFG_CONTAINER" ]]; then
+  if [[ -n "$_CFG_CONTAINER" ]]; then
     export MOUS_FREESURFER_CONTAINER="$_CFG_CONTAINER"
     echo "[plan] auto-detected freesurfer_container=$MOUS_FREESURFER_CONTAINER"
   fi
