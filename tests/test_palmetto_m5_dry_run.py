@@ -126,5 +126,8 @@ def test_palmetto_recon_all_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
     )
 
     assert "--partition hpcnirc" in proc.stdout
+    assert "--time 24:00:00" in proc.stdout
+    assert "--mem 64G" in proc.stdout
+    assert "--cpus-per-task 8" in proc.stdout
     assert "--array 0-0" in proc.stdout
     assert "run_recon_all_subject.sh" in proc.stdout
