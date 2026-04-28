@@ -214,6 +214,14 @@ def _greeting_text(active: list, tracked: list) -> tuple[str, str]:
     )
 
 
+def _latest_manifest_for_subject(derivatives_root: str, subject: str) -> Path | None:
+    base = Path(derivatives_root).expanduser() / f"sub-{subject}" / "m9_orchestration"
+    if not base.exists():
+        return None
+    manifests = sorted(base.glob("*_run_manifest.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return manifests[0] if manifests else None
+
+
 PRESET_DESCRIPTIONS: dict[str, str] = {
     "download_only":          "Download subject data from RDR only. No processing.",
     "bids_convert_validate":  "Run BIDS conversion + mne_bids validation. Good first step before submit.",
@@ -239,6 +247,8 @@ FAILURE_HINTS: dict[str, str] = {
 class DashboardScreen(Screen):
     BINDINGS = [
         Binding("n", "new_run",   "New Run"),
+        Binding("d", "redownload", "Re-download"),
+        Binding("j", "run_results", "Runs"),
         Binding("l", "view_logs", "Logs"),
         Binding("r", "refresh",   "Refresh"),
         Binding("q", "quit_app",  "Quit"),
@@ -255,6 +265,8 @@ class DashboardScreen(Screen):
 
         with Horizontal(id="dash-actions"):
             yield Button("▶  New Run",     id="btn-new-run",  variant="success")
+            yield Button("⤓  Re-download", id="btn-redownload", variant="warning")
+            yield Button("🗂  Run Results", id="btn-runs", variant="default")
             yield Button("📋  View Logs",   id="btn-logs",     variant="default")
             yield Button("⟳  Refresh",     id="btn-refresh",  variant="default")
 
@@ -337,6 +349,8 @@ class DashboardScreen(Screen):
             t.add_row(j.submitted_at[:16], j.job_id, j.job_name, subs, status_str)
 
     def action_new_run(self)  -> None: self.app.push_screen(SubjectsScreen())
+    def action_redownload(self) -> None: self.app.push_screen(RedownloadScreen())
+    def action_run_results(self) -> None: self.app.push_screen(RunResultsScreen())
     def action_view_logs(self)-> None: self.app.push_screen(LogScreen())
     def action_refresh(self)  -> None:
         self._refresh_all()
@@ -350,6 +364,14 @@ class DashboardScreen(Screen):
     @on(Button.Pressed, "#btn-logs")
     def _on_logs(self, _) -> None:
         self.action_view_logs()
+
+    @on(Button.Pressed, "#btn-redownload")
+    def _on_redownload(self, _) -> None:
+        self.action_redownload()
+
+    @on(Button.Pressed, "#btn-runs")
+    def _on_runs(self, _) -> None:
+        self.action_run_results()
 
     @on(Button.Pressed, "#btn-refresh")
     def _on_refresh(self, _) -> None:
@@ -670,6 +692,135 @@ class ResourcesScreen(Screen):
         )
 
 
+class RedownloadScreen(Screen):
+    BINDINGS = [Binding("escape", "action_back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("  Re-download Subject  ›  RDR Fetch", classes="wizard-header")
+        with Horizontal(classes="frow"):
+            yield Label("Config:", classes="flabel")
+            yield Input(value=self.app.state.last_config, id="rd-config-input")
+        with Horizontal(classes="frow"):
+            yield Label("Subject:", classes="flabel")
+            yield Input(placeholder="A2003", id="rd-subject-input")
+            yield Button("Preview", id="rd-preview", variant="default")
+            yield Button("Execute re-download", id="rd-exec", variant="warning")
+        yield Static("", id="rd-output")
+        with Horizontal(classes="nav-bar"):
+            yield Button("← Back", id="rd-back", variant="default")
+        yield Footer()
+
+    @on(Button.Pressed, "#rd-preview")
+    def _preview(self, _) -> None:
+        cfg = self.query_one("#rd-config-input", Input).value.strip()
+        subject = self.query_one("#rd-subject-input", Input).value.strip().removeprefix("sub-")
+        if not subject:
+            self.notify("Enter a subject ID", severity="warning")
+            return
+        cmd = build_download_cmd(cfg, subject)
+        self.query_one("#rd-output", Static).update("[bold]Will run:[/bold]\n" + " ".join(cmd))
+
+    @on(Button.Pressed, "#rd-exec")
+    def _execute(self, _) -> None:
+        cfg = self.query_one("#rd-config-input", Input).value.strip()
+        subject = self.query_one("#rd-subject-input", Input).value.strip().removeprefix("sub-")
+        if not subject:
+            self.notify("Enter a subject ID", severity="warning")
+            return
+        cmd = build_download_cmd(cfg, subject)
+        proc = run_cmd(cmd, cwd=Path.cwd())
+        out = (proc.stdout or "") + (proc.stderr or "")
+        tag = "[bold green]Done[/bold green]" if proc.returncode == 0 else f"[bold red]Failed rc={proc.returncode}[/bold red]"
+        self.query_one("#rd-output", Static).update(f"{tag}\n" + out[-4000:])
+
+    @on(Button.Pressed, "#rd-back")
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
+class RunResultsScreen(Screen):
+    BINDINGS = [Binding("escape", "action_back", "Back"), Binding("r", "refresh_rows", "Refresh")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("  Run Browser  ›  Logs + Results", classes="wizard-header")
+        yield DataTable(id="runs-table")
+        with Horizontal(classes="frow"):
+            yield Button("Open driver log", id="runs-driver-log", variant="default")
+            yield Button("Open fMRIPrep log", id="runs-fmri-log", variant="default")
+            yield Button("Show results paths", id="runs-results", variant="primary")
+        yield Static("", id="runs-output")
+        with Horizontal(classes="nav-bar"):
+            yield Button("← Back", id="runs-back", variant="default")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#runs-table", DataTable)
+        table.add_columns("Submitted", "JobID", "Kind", "Subjects", "Status")
+        table.cursor_type = "row"
+        self._refresh_rows()
+
+    def _refresh_rows(self) -> None:
+        table = self.query_one("#runs-table", DataTable)
+        table.clear()
+        for j in self.app.state.recent_jobs[:40]:
+            subs = ",".join(j.subjects[:3]) or "-"
+            table.add_row(j.submitted_at[:16], j.job_id, j.kind, subs, j.status)
+
+    def action_refresh_rows(self) -> None:
+        self._refresh_rows()
+
+    def _selected_job(self):
+        table = self.query_one("#runs-table", DataTable)
+        idx = table.cursor_row
+        if idx is None or idx < 0 or idx >= len(self.app.state.recent_jobs[:40]):
+            return None
+        return self.app.state.recent_jobs[idx]
+
+    @on(Button.Pressed, "#runs-driver-log")
+    def _open_driver_log(self, _) -> None:
+        job = self._selected_job()
+        if not job:
+            self.notify("Select a run row first", severity="warning")
+            return
+        slurm_dir = Path(self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")).expanduser() / "slurm"
+        path = slurm_dir / f"mous_driver_{job.job_id}.err"
+        self.app.push_screen(LogScreen(initial_log_path=path))
+
+    @on(Button.Pressed, "#runs-fmri-log")
+    def _open_fmri_log(self, _) -> None:
+        job = self._selected_job()
+        if not job:
+            self.notify("Select a run row first", severity="warning")
+            return
+        slurm_dir = Path(self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")).expanduser() / "slurm"
+        path = slurm_dir / f"fmriprep_{job.job_id}_0.err"
+        self.app.push_screen(LogScreen(initial_log_path=path))
+
+    @on(Button.Pressed, "#runs-results")
+    def _show_results(self, _) -> None:
+        job = self._selected_job()
+        if not job:
+            self.notify("Select a run row first", severity="warning")
+            return
+        derivatives_root = self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+        lines = [
+            f"[bold]Job:[/bold] {job.job_id}  [bold]Kind:[/bold] {job.kind}",
+            f"[bold]Subjects:[/bold] {', '.join(job.subjects) if job.subjects else '-'}",
+        ]
+        for subject in job.subjects:
+            manifest = _latest_manifest_for_subject(derivatives_root, subject)
+            subject_root = Path(derivatives_root).expanduser() / f"sub-{subject}"
+            lines.append(f"sub-{subject}: {subject_root}")
+            lines.append(f"manifest: {manifest if manifest else '(not found)'}")
+        self.query_one("#runs-output", Static).update("\n".join(lines))
+
+    @on(Button.Pressed, "#runs-back")
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+
 # ── Log Viewer ────────────────────────────────────────────────────────────────
 
 class LogScreen(Screen):
@@ -677,6 +828,10 @@ class LogScreen(Screen):
         Binding("escape", "action_back", "Back"),
         Binding("r", "refresh_log",      "Refresh"),
     ]
+
+    def __init__(self, initial_log_path: Path | None = None) -> None:
+        super().__init__()
+        self._initial_log_path = initial_log_path
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -708,7 +863,11 @@ class LogScreen(Screen):
         table.cursor_type = "row"
         self._recent_log_paths: list[Path] = []
         self._refresh_recent_logs()
-        self._autodetect()
+        if self._initial_log_path:
+            self.query_one("#log-path-input", Input).value = str(self._initial_log_path)
+            self._load_log(self._initial_log_path)
+        else:
+            self._autodetect()
 
     def _candidate_dirs(self) -> list[Path]:
         deriv = self.app.state.defaults.get("derivatives_root", "")
