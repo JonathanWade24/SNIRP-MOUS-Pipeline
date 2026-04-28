@@ -73,3 +73,7 @@ wave_validation:
   n_trials: 60
   snr: 1.0
   random_state: 42
+
+pipeline:
+  m10_reuse_fmriprep: true
+  m11_allow_cached_joined: true
