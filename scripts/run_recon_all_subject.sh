@@ -117,16 +117,30 @@ if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
     echo "apptainer/singularity not found for containerized recon-all." >&2
     exit 1
   fi
-  "$APPTAINER_BIN" exec \
-    -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
-    -B "$SAFE_INPUT_DIR:$SAFE_INPUT_DIR" \
-    "${MOUS_FREESURFER_CONTAINER}" \
-    recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  if [[ -d "$SUBJECTS_DIR/$SUBJECT" ]]; then
+    echo "[recon-all] existing subject directory detected; resuming without -i"
+    "$APPTAINER_BIN" exec \
+      -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
+      -B "$SAFE_INPUT_DIR:$SAFE_INPUT_DIR" \
+      "${MOUS_FREESURFER_CONTAINER}" \
+      recon-all -s "$SUBJECT" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  else
+    "$APPTAINER_BIN" exec \
+      -B "$SUBJECTS_DIR:$SUBJECTS_DIR" \
+      -B "$SAFE_INPUT_DIR:$SAFE_INPUT_DIR" \
+      "${MOUS_FREESURFER_CONTAINER}" \
+      recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  fi
 else
   if ! command -v recon-all >/dev/null 2>&1; then
     echo "recon-all not found. On Palmetto this may require: module load neurocommand && module load freesurfer/<version>." >&2
     echo "Set MOUS_FREESURFER_MODULE to your concrete module (e.g. freesurfer/8.2.0), or set MOUS_FREESURFER_CONTAINER." >&2
     exit 1
   fi
-  recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  if [[ -d "$SUBJECTS_DIR/$SUBJECT" ]]; then
+    echo "[recon-all] existing subject directory detected; resuming without -i"
+    recon-all -s "$SUBJECT" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  else
+    recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all -openmp "$OPENMP_THREADS"
+  fi
 fi
