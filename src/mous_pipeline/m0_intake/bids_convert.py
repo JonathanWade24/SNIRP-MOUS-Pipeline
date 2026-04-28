@@ -52,6 +52,15 @@ _ALLOWED_CHANNEL_TYPES = {
 }
 
 
+def normalize_channel_type(channel_type: str) -> str:
+    """Return a BIDS-compliant channel type label."""
+    original = str(channel_type or "").strip()
+    mapped = _CHANNEL_TYPE_MAP.get(original.lower(), original.upper())
+    if mapped not in _ALLOWED_CHANNEL_TYPES:
+        return "MISC"
+    return mapped
+
+
 def _normalize_channels_tsv(channels_tsv: Path) -> bool:
     """Normalize channels.tsv types to BIDS-friendly uppercase values."""
     if not channels_tsv.exists():
@@ -66,9 +75,7 @@ def _normalize_channels_tsv(channels_tsv: Path) -> bool:
     changed = False
     for row in rows:
         original = str(row.get("type", "")).strip()
-        mapped = _CHANNEL_TYPE_MAP.get(original.lower(), original.upper())
-        if mapped not in _ALLOWED_CHANNEL_TYPES:
-            mapped = "MISC"
+        mapped = normalize_channel_type(original)
         if mapped != original:
             row["type"] = mapped
             changed = True
@@ -83,20 +90,26 @@ def _normalize_channels_tsv(channels_tsv: Path) -> bool:
 
 def _ensure_dataset_level_files(root: Path) -> None:
     desc = root / "dataset_description.json"
-    if not desc.exists():
-        desc.write_text(
-            json.dumps(
-                {
-                    "Name": "MOUS dataset",
-                    "BIDSVersion": "1.8.0",
-                    "DatasetType": "raw",
-                    "Authors": ["MOUS team"],
-                },
-                indent=2,
-            )
-        )
+    expected = {
+        "Name": "MOUS dataset",
+        "BIDSVersion": "1.8.0",
+        "DatasetType": "raw",
+        "Authors": ["MOUS team"],
+    }
+    payload: dict[str, object] = {}
+    if desc.exists():
+        try:
+            payload = json.loads(desc.read_text())
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+    for k, v in expected.items():
+        if k not in payload or payload[k] in ("", None, []):
+            payload[k] = v
+    desc.write_text(json.dumps(payload, indent=2))
     readme = root / "README"
-    if not readme.exists():
+    if not readme.exists() or not readme.read_text().strip():
         readme.write_text("MOUS BIDS dataset for MEG/fMRI pipeline processing.\n")
 
 

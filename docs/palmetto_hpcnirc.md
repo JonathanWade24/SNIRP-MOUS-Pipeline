@@ -69,7 +69,43 @@ scripts/palmetto_submit.sh \
 
 The wrapper defaults to `--partition hpcnirc`.
 
-## 5) Submit on `hpcnirc`
+## 5) BIDS compliance gate (pilot A2002/A2003)
+
+Use this checklist before enabling strict fMRIPrep validation:
+
+1. Convert/normalize in place for pilot subjects:
+
+```bash
+mous-pipeline bids-convert --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
+mous-pipeline bids-convert --config configs/palmetto_hpcnirc_fmri.yaml --subject A2003
+python scripts/normalize_channels_tsv.py /scratch/jonathanwade/mous_data
+```
+
+2. Run repo validator:
+
+```bash
+mous-pipeline bids-validate --root /scratch/jonathanwade/mous_data --subject A2002 --verbose
+mous-pipeline bids-validate --root /scratch/jonathanwade/mous_data --subject A2003 --verbose
+```
+
+3. Optional strict Node validator (inside an environment where `bids-validator` exists):
+
+```bash
+bids-validator /scratch/jonathanwade/mous_data
+```
+
+4. Keep compliance mode enabled:
+   - `fmri.skip_bids_validation: false` in `configs/palmetto_hpcnirc_fmri.yaml`.
+   - Only use `true` as an emergency fallback.
+
+Pilot completion criteria before scaling:
+
+- `bids-convert` succeeds for both `A2002` and `A2003`.
+- `mous-pipeline bids-validate` reports no hard errors for both pilot subjects.
+- `scripts/palmetto_submit.sh --subjects A2002,A2003 --dry-run` emits expected sbatch commands.
+- One real `A2002` run completes with fMRIPrep launched without `--skip_bids_validation` in command output/logs.
+
+## 6) Submit on `hpcnirc`
 
 ```bash
 scripts/palmetto_submit.sh \
@@ -82,7 +118,7 @@ scripts/palmetto_submit.sh \
   --cpus-per-task 8
 ```
 
-## 5) Logs and monitoring
+## 7) Logs and monitoring
 
 - fMRIPrep array logs: `<derivatives_root>/slurm/fmriprep_%A_%a.out`
 - Submission logs: `<derivatives_root>/slurm/fmriprep_submit_*.log`
