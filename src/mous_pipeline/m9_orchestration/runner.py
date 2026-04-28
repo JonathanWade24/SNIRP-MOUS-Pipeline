@@ -138,7 +138,9 @@ def _resolve_path(cfg, subject: str, key: str, fallback: Path) -> Path:
     return cfg.data_root / custom if custom else fallback
 
 
-def _validate_stage_dependencies(selected: list[str]) -> None:
+def _validate_stage_dependencies(selected: list[str], *, assume_upstream_done: bool = False) -> None:
+    if assume_upstream_done:
+        return
     errs = list_missing_stage_dependencies(selected)
     if errs:
         raise ValueError("Invalid stage selection: " + "; ".join(errs))
@@ -220,11 +222,12 @@ def run_subject(
     progress_event_callback: Callable[[str, str], None] | None = None,
     memory_profile: bool = False,
     memory_profile_interval_s: float = 0.5,
+    assume_upstream_done: bool = False,
 ) -> RunResult:
     result = RunResult(subject=subject)
     strict_stage_failures = _strict_stage_failures_enabled(cfg)
     selected = [s for s in STAGE_ORDER if _stage_selected(s, only, skip)]
-    _validate_stage_dependencies(selected)
+    _validate_stage_dependencies(selected, assume_upstream_done=assume_upstream_done)
     result.metrics["selected_stages"] = selected
     result.metrics["strict_stage_failures"] = strict_stage_failures
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")

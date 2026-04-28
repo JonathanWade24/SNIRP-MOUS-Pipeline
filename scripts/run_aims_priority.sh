@@ -220,7 +220,11 @@ if [[ -n "$CPUS_PER_TASK" ]]; then
 fi
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
+  FMRIPREP_JOB_ID="<fmriprep_job_id>"
+  EXTRA_STR=""
+  if (( ${#SBATCH_EXTRA[@]} > 0 )); then
+    EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
+  fi
   echo "[dry-run][slurm] sbatch --job-name mous_fmriprep --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR${EXTRA_STR} $REPO_ROOT/scripts/run_fmriprep_subject.sh --config $CONFIG_ABS --subjects-file $SUBJECTS_FILE"
   echo "[dry-run][fmri] note: fMRI preprocessing runs as detached array jobs and may finish after the driver exits."
 else
@@ -258,6 +262,22 @@ echo "[meg-group] Running MEG group aggregation"
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run][meg-group] mous-pipeline group --derivatives-root $DERIV_ROOT"
   echo "[dry-run][meg-group] python $REPO_ROOT/scripts/aim3_null_summary.py --derivatives-root $DERIV_ROOT --out-md $REPO_ROOT/reports/aim3_null_summary.md --out-json $REPO_ROOT/reports/aim3_null_summary.json"
+  echo "[fmri-stages] submitting dependent m10/m11/m12 + group job"
+  FMRI_STAGES_OUTPUT="$SLURM_DIR/fmri_stages_%A.out"
+  FMRI_STAGES_ERROR="$SLURM_DIR/fmri_stages_%A.err"
+  DEP_STR=""
+  EXTRA_STR=""
+  FMRI_STAGES_DEP=()
+  if [[ -n "${FMRIPREP_JOB_ID:-}" ]]; then
+    FMRI_STAGES_DEP=(--dependency "afterok:${FMRIPREP_JOB_ID}")
+  fi
+  if (( ${#FMRI_STAGES_DEP[@]} > 0 )); then
+    DEP_STR="$(printf ' %q' "${FMRI_STAGES_DEP[@]}")"
+  fi
+  if (( ${#SBATCH_EXTRA[@]} > 0 )); then
+    EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
+  fi
+  echo "[dry-run][slurm] sbatch --job-name mous_fmri_stages --output $FMRI_STAGES_OUTPUT --error $FMRI_STAGES_ERROR${DEP_STR}${EXTRA_STR} $REPO_ROOT/scripts/run_fmri_stages.sh --config $CONFIG_ABS --subjects-file $SUBJECTS_FILE --deriv-root $DERIV_ROOT --dry-run"
   echo "[done] Dry run complete."
   exit 0
 fi
@@ -268,5 +288,29 @@ python "$REPO_ROOT/scripts/aim3_null_summary.py" \
   --derivatives-root "$DERIV_ROOT" \
   --out-md "$REPO_ROOT/reports/aim3_null_summary.md" \
   --out-json "$REPO_ROOT/reports/aim3_null_summary.json"
+
+echo "[fmri-stages] submitting dependent m10/m11/m12 + group job"
+FMRI_STAGES_OUTPUT="$SLURM_DIR/fmri_stages_%A.out"
+FMRI_STAGES_ERROR="$SLURM_DIR/fmri_stages_%A.err"
+FMRI_STAGES_DEP=()
+if [[ -n "${FMRIPREP_JOB_ID:-}" ]]; then
+  FMRI_STAGES_DEP=(--dependency "afterok:${FMRIPREP_JOB_ID}")
+fi
+FMRI_STAGES_REPLY="$(sbatch \
+  --job-name "mous_fmri_stages" \
+  --output "$FMRI_STAGES_OUTPUT" \
+  --error "$FMRI_STAGES_ERROR" \
+  "${FMRI_STAGES_DEP[@]}" \
+  "${SBATCH_EXTRA[@]}" \
+  "$REPO_ROOT/scripts/run_fmri_stages.sh" \
+  --config "$CONFIG_ABS" \
+  --subjects-file "$SUBJECTS_FILE" \
+  --deriv-root "$DERIV_ROOT")"
+FMRI_STAGES_JOB_ID="$(awk '/Submitted batch job/{print $4}' <<< "$FMRI_STAGES_REPLY" | tail -n1)"
+if [[ -n "$FMRI_STAGES_JOB_ID" ]]; then
+  echo "[fmri-stages] submitted job id: $FMRI_STAGES_JOB_ID"
+else
+  echo "[fmri-stages] submission completed; job id not parsed"
+fi
 
 echo "[done] Priority order complete: MEG trial audit -> fMRI preprocessing submit -> MEG subject/group outputs."

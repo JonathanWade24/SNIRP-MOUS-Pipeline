@@ -377,6 +377,11 @@ def main() -> None:
         help="Allow m11 to load an existing m10 joined table when m10 does not produce one in this run.",
     )
     run_parser.add_argument(
+        "--assume-upstream-done",
+        action="store_true",
+        help="Bypass stage dependency validation when selected stages rely on upstream outputs completed externally.",
+    )
+    run_parser.add_argument(
         "--memory-profile",
         action="store_true",
         help="Log RSS at stage boundaries and poll for peak RSS (Linux: /proc/self/status; see memory_rss_summary in manifest)",
@@ -572,6 +577,7 @@ def main() -> None:
                 progress_event_callback=_make_cli_progress_callback(selected),
                 memory_profile=args.memory_profile,
                 memory_profile_interval_s=args.memory_profile_interval,
+                assume_upstream_done=args.assume_upstream_done,
             )
         except Exception as exc:
             state_path = next((p for p in state_candidates if p.exists()), state_candidates[0])
