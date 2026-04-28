@@ -704,6 +704,8 @@ class RedownloadScreen(Screen):
         with Horizontal(classes="frow"):
             yield Label("Subject:", classes="flabel")
             yield Input(placeholder="A2003", id="rd-subject-input")
+        with Horizontal(classes="frow"):
+            yield Label("", classes="flabel")
             yield Button("Preview", id="rd-preview", variant="default")
             yield Button("Execute re-download", id="rd-exec", variant="warning")
         yield Static("", id="rd-output")
