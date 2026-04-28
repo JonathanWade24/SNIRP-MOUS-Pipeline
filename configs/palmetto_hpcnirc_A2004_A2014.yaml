@@ -61,13 +61,13 @@ fmri:
   skip_fmriprep: false
   skip_bids_validation: false
   neurodesk_module: ""
-  fs_license_file: "/project/jonathanwade/licenses/freesurfer/license.txt"
+  fs_license_file: "/scratch/jonathanwade/MOUS/licenses/freesurfer/license.txt"
   container_runtime: ""
   container_binds:
     - "/scratch/jonathanwade:/scratch/jonathanwade"
     - "/project/jonathanwade:/project/jonathanwade"
     - "/scratch/jonathanwade/templateflow:/opt/templateflow"
-    - "/project/jonathanwade/licenses:/project/jonathanwade/licenses"
+    - "/scratch/jonathanwade/MOUS/licenses:/scratch/jonathanwade/MOUS/licenses"
 
 wave_validation:
   enabled: true
