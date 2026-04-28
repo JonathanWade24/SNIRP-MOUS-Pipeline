@@ -529,6 +529,12 @@ def main() -> None:
     ops_monitor = ops_sub.add_parser("monitor", help="Poll queue/accounting and classify log snippets")
     ops_monitor.add_argument("--job-id", default="")
     ops_monitor.add_argument("--log-file", default="")
+    ops_config = ops_sub.add_parser("config", help="List/select ops config files")
+    ops_config_sub = ops_config.add_subparsers(dest="ops_config_cmd")
+    ops_config_sub.add_parser("list", help="List config YAML files under ./configs")
+    ops_config_show = ops_config_sub.add_parser("show", help="Show currently selected ops config")
+    ops_config_use = ops_config_sub.add_parser("use", help="Set default ops config path")
+    ops_config_use.add_argument("--path", required=True, help="Path to config YAML")
     ops_recon = ops_sub.add_parser("prep-m5", help="Submit recon-all array job to build source subjects_dir")
     ops_recon.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
     ops_recon.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
@@ -950,6 +956,39 @@ def main() -> None:
                 print(f"\nlog tail: {args.log_file}")
                 print(text)
                 print(f"\nclassification: {classify_failure(text)}")
+        elif args.ops_cmd == "config":
+            st = load_state()
+            subcmd = args.ops_config_cmd or "show"
+            if subcmd == "list":
+                cfg_dir = Path.cwd() / "configs"
+                if not cfg_dir.exists():
+                    print(f"No configs directory found at {cfg_dir}")
+                    return
+                files = sorted(cfg_dir.glob("*.yaml")) + sorted(cfg_dir.glob("*.yml"))
+                if not files:
+                    print("No config YAML files found in ./configs")
+                    return
+                print("Available configs:")
+                for f in files:
+                    rel = f.relative_to(Path.cwd())
+                    marker = "  *" if str(rel) == st.last_config else "   "
+                    print(f"{marker} {rel}")
+            elif subcmd == "show":
+                print(f"Current ops config: {st.last_config}")
+            elif subcmd == "use":
+                p = Path(args.path).expanduser()
+                if not p.is_absolute():
+                    p = (Path.cwd() / p).resolve()
+                if not p.exists():
+                    print(f"Config not found: {p}", file=sys.stderr)
+                    sys.exit(2)
+                try:
+                    rel = p.relative_to(Path.cwd())
+                    st.last_config = str(rel)
+                except ValueError:
+                    st.last_config = str(p)
+                save_state(st)
+                print(f"Set ops default config to: {st.last_config}")
         elif args.ops_cmd == "prep-m5":
             subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
             if not subjects:
