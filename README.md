@@ -61,6 +61,9 @@ Pipeline behavior toggles can be set under `pipeline`, for example:
 - `m10_force_gc` (default `true`): force cleanup pass after m10.
 
 **Outputs:** Derivatives land under `derivatives_root/<subject>/` organized by stage (e.g. `m4_features/`, `m9_orchestration/`, `m8_reports/`). The HTML report and manifest live in `m8_reports/` and `m9_orchestration/` respectively.
+Aim2-specific HTML reports are generated in m8:
+- Subject: `<derivatives_root>/<subject>/m8_reports/<subject>_aim2_summary.html`
+- Group: `<derivatives_root>/group_aim2_summary.html`
 
 ## Pipeline stages
 
@@ -80,7 +83,7 @@ Stages run in this order (see `src/mous_pipeline/stage_dependencies.py`). Depend
 | **m11** | `m11_coupling` | Optional: coupling models on joined trials |
 | **m12** | `m12_wave_validation` | Optional: simulation / null DCI (`wave_validation.enabled`) |
 | **m7** | `m7_stats` | Permutation, circular stats, trial-wise models |
-| **m8** | `m8_reports` | Exports, figures, Quarto report, dashboard |
+| **m8** | `m8_reports` | Exports, figures, Quarto report, dashboard, Aim2 subject/group HTML summaries |
 | **m9** | `m9_orchestration` | Manifest, run state, live log under subject derivatives |
 
 A full `run` executes every stage in `STAGE_ORDER`. **m10 / m11** need fMRI configuration and data; they may record a skip reason if BOLD or joins are missing. **m12** runs substantive work only when `wave_validation.enabled` is true in config.

@@ -1,5 +1,6 @@
 from mous_pipeline.m9_orchestration.runner import (
     RunResult,
+    _finalize_run,
     _mark_critical_failure,
     _strict_stage_failures_enabled,
 )
@@ -69,3 +70,28 @@ def test_verify_run_manifest_fails_for_missing_invariants():
     errs = _verify_run_manifest(payload, require_skip_m5=True, strict_mode=True)
     assert any("run_status" in e for e in errs)
     assert any("m5" in e for e in errs)
+
+
+def test_finalize_run_writes_group_aim2_report(tmp_path):
+    cfg = PipelineConfig(derivatives_root=tmp_path / "derivatives")
+    out_dir = cfg.derivatives_root / "A2002" / "m9_orchestration"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    state_path = out_dir / "state.json"
+    live_log = out_dir / "live.log"
+    result = RunResult(subject="A2002", metrics={"run_status": "done"}, status="done")
+    state = {"status": "running"}
+
+    finalized = _finalize_run(
+        subject="A2002",
+        cfg=cfg,
+        result=result,
+        out_dir=out_dir,
+        state=state,
+        state_path=state_path,
+        live_log_path=live_log,
+        only=None,
+        skip=None,
+        force=False,
+        config_path=None,
+    )
+    assert any(str(p).endswith("group_aim2_summary.html") for p in finalized.outputs)

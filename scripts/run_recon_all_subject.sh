@@ -59,7 +59,16 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
 fi
 
 if [[ -n "${MOUS_FREESURFER_MODULE:-}" ]]; then
-  module load "$MOUS_FREESURFER_MODULE"
+  # Some Palmetto environments gate FreeSurfer behind a parent module
+  # (e.g. `ml neurocommand` before `ml freesurfer/8.2.0`).
+  if command -v module >/dev/null 2>&1; then
+    # Try direct load first.
+    if ! module load "$MOUS_FREESURFER_MODULE" >/dev/null 2>&1; then
+      # Retry with neurocommand pre-load when present.
+      module load neurocommand >/dev/null 2>&1 || true
+      module load "$MOUS_FREESURFER_MODULE"
+    fi
+  fi
 fi
 if [[ -n "${MOUS_FREESURFER_LICENSE:-}" ]]; then
   export FS_LICENSE="$MOUS_FREESURFER_LICENSE"
@@ -111,7 +120,8 @@ if [[ -n "${MOUS_FREESURFER_CONTAINER:-}" ]]; then
     recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all
 else
   if ! command -v recon-all >/dev/null 2>&1; then
-    echo "recon-all not found. Load MOUS_FREESURFER_MODULE or set MOUS_FREESURFER_CONTAINER." >&2
+    echo "recon-all not found. On Palmetto this may require: module load neurocommand && module load freesurfer/<version>." >&2
+    echo "Set MOUS_FREESURFER_MODULE to your concrete module (e.g. freesurfer/8.2.0), or set MOUS_FREESURFER_CONTAINER." >&2
     exit 1
   fi
   recon-all -s "$SUBJECT" -i "$SAFE_T1_PATH" -sd "$SUBJECTS_DIR" -all

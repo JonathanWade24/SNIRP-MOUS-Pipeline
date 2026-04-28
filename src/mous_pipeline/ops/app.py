@@ -431,6 +431,9 @@ class SubjectsScreen(Screen):
 
         yield SelectionList[str](id="subject-list")
         yield Label("  Undownloaded subjects (available in RDR)", classes="section-title")
+        yield SelectionList[str](id="undownloaded-list")
+        with Horizontal(classes="frow"):
+            yield Button("Add checked undownloaded", id="btn-add-undownloaded", variant="default")
         yield Static("[dim]Press 'Query RDR' to fetch remote availability.[/dim]", id="undownloaded-box")
 
         with Horizontal(classes="frow"):
@@ -475,8 +478,10 @@ class SubjectsScreen(Screen):
 
     def _refresh_undownloaded_box(self) -> None:
         box = self.query_one("#undownloaded-box", Static)
+        ul = self.query_one("#undownloaded-list", SelectionList)
         local = getattr(self, "_local_subjects", [])
         remote = getattr(self, "_remote_subjects", [])
+        ul.clear_options()
         if not remote:
             box.update("[dim]Press 'Query RDR' to fetch remote availability.[/dim]")
             return
@@ -484,7 +489,9 @@ class SubjectsScreen(Screen):
         if not missing:
             box.update("[green]All remote subjects appear downloaded locally.[/green]")
             return
-        box.update("  " + "  ·  ".join(f"sub-{s}" for s in missing))
+        for s in missing:
+            ul.add_option((f"sub-{s}", s, False))
+        box.update(f"[dim]{len(missing)} subject(s) available remotely but not downloaded.[/dim]")
 
     @on(Button.Pressed, "#btn-load")
     def _on_load(self, _) -> None:
@@ -500,6 +507,17 @@ class SubjectsScreen(Screen):
         else:
             self.notify(f"Loaded {len(remote)} remote subjects from RDR")
         self._refresh_undownloaded_box()
+
+    @on(Button.Pressed, "#btn-add-undownloaded")
+    def _on_add_undownloaded(self, _) -> None:
+        checked = set(self.query_one("#undownloaded-list", SelectionList).selected)
+        if not checked:
+            self.notify("Check at least one undownloaded subject first", severity="warning")
+            return
+        current_selected = set(self.query_one("#subject-list", SelectionList).selected)
+        self.app.wizard_subjects = sorted(current_selected | checked)
+        self._load_subjects()
+        self.notify(f"Added {len(checked)} subject(s) into run selection")
 
     @on(Button.Pressed, "#btn-all")
     def _on_all(self, _) -> None:

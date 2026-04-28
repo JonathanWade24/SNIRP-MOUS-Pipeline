@@ -34,6 +34,10 @@ Why this matters:
 - The driver job can finish before `mous_fmriprep_*` jobs finish. This is expected behavior.
 - Monitor both `mous_driver_*` and `fmriprep_*` logs for full completion.
 
+Aim2 report artifacts (written during `m8`):
+- Subject HTML: `<derivatives_root>/<subject>/m8_reports/<subject>_aim2_summary.html`
+- Group HTML: `<derivatives_root>/group_aim2_summary.html`
+
 ## Non-interactive mode
 
 Preview:

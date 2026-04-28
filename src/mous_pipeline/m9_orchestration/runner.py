@@ -43,6 +43,7 @@ from ..m7_stats.permutation import perm_test_dci
 from ..m7_stats.trialwise import lme_block_control, logreg_condition_from_prestim, n400m_condition_t
 from ..m8_reports.quarto_report import render_quarto_suite
 from ..m8_reports.dashboard import render_subject
+from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
 from ..m8_reports.export import export_subject_payload
 from ..m11_coupling.regress import run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
@@ -188,6 +189,12 @@ def _finalize_run(
     manifest["metrics"] = result.metrics
     write_manifest(out_dir / f"sub-{subject}_run_manifest.json", manifest)
     result.outputs.append(out_dir / f"sub-{subject}_run_manifest.json")
+    try:
+        aim2_group_report = render_aim2_group(cfg.derivatives_root)
+        if aim2_group_report is not None:
+            result.outputs.append(aim2_group_report)
+    except Exception as exc:
+        result.metrics["aim2_group_report_error"] = str(exc)
     state["status"] = result.status
     state["current_stage"] = None
     state["current_stage_description"] = None
@@ -943,6 +950,17 @@ def _run_subject_body(
             sliding_t=sliding_t,
             sliding_dci_z=sliding_z,
         )
+        joined_csv = stage_output_dir(cfg, subject, "m10_fmri") / f"{subject}_trials_joined.csv"
+        try:
+            aim2_subject_report = render_aim2_subject(
+                subject,
+                cfg,
+                metrics=result.metrics,
+                joined_csv=joined_csv,
+            )
+            result.outputs.append(aim2_subject_report)
+        except Exception as exc:
+            result.metrics["aim2_subject_report_error"] = str(exc)
         result.stage_timings_s["m8"] = perf_counter() - t0
         _emit("done", "m8")
         result.outputs.append(report_path)

@@ -34,7 +34,10 @@ if [[ -n "${MOUS_APPTAINER_MODULE:-}" ]]; then
   module load "$MOUS_APPTAINER_MODULE"
 fi
 if [[ -n "${MOUS_FREESURFER_MODULE:-}" ]]; then
-  module load "$MOUS_FREESURFER_MODULE"
+  if ! module load "$MOUS_FREESURFER_MODULE" >/dev/null 2>&1; then
+    module load neurocommand >/dev/null 2>&1 || true
+    module load "$MOUS_FREESURFER_MODULE"
+  fi
 fi
 
 PYTHON_BIN="$(command -v python3 || true)"

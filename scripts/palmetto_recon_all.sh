@@ -19,7 +19,8 @@ Options:
   --dry-run
 
 Environment:
-  MOUS_FREESURFER_MODULE    Optional module name (e.g. freesurfer/7.4.1).
+  MOUS_FREESURFER_MODULE    Optional module name (e.g. freesurfer/8.2.0).
+                           If direct load fails, script retries after loading neurocommand.
   MOUS_FREESURFER_CONTAINER Optional apptainer/singularity image for recon-all.
   MOUS_FREESURFER_LICENSE   Optional FreeSurfer license path.
 EOF
