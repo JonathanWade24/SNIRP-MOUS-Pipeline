@@ -55,3 +55,31 @@ def test_run_fmriprep_reraises_nonzero_exit_when_preproc_bold_is_missing(
 
     with pytest.raises(subprocess.CalledProcessError):
         prep.run_fmriprep("sub-01", _cfg(out_dir), bids_root=_bids_root(tmp_path))
+
+
+def test_run_fmriprep_reuse_existing_skips_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out_dir = tmp_path / "fmriprep"
+    subject_func = out_dir / "sub-01" / "func"
+    subject_func.mkdir(parents=True)
+    (subject_func / "sub-01_task-auditory_desc-preproc_bold.nii.gz").touch()
+
+    called = {"value": False}
+
+    def _should_not_run(*args, **kwargs):
+        called["value"] = True
+        raise AssertionError("fMRIPrep execution should be skipped when reuse_existing=True")
+
+    monkeypatch.setattr(prep, "_run_shell_streaming", _should_not_run)
+    monkeypatch.setattr(prep, "_run_cmd_streaming", _should_not_run)
+
+    result = prep.run_fmriprep(
+        "sub-01",
+        _cfg(out_dir),
+        bids_root=_bids_root(tmp_path),
+        reuse_existing=True,
+    )
+
+    assert result == out_dir
+    assert called["value"] is False

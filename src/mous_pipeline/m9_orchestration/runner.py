@@ -710,6 +710,7 @@ def _run_subject_body(
 
                 verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
                 m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
+                reuse_existing_fmriprep = bool(getattr(cfg, "pipeline", {}).get("m10_reuse_fmriprep", False))
                 fmriprep_out = run_fmriprep(
                     subject,
                     cfg,
@@ -717,6 +718,7 @@ def _run_subject_body(
                     log_callback=(lambda line: _append_live_log(live_log_path, f"[m10:fmriprep] {line}"))
                     if verbose_tools
                     else None,
+                    reuse_existing=reuse_existing_fmriprep,
                 )
                 bold_path = resolve_subject_bold_path(
                     subject,
@@ -800,6 +802,16 @@ def _run_subject_body(
     if _stage_selected("m11", only, skip):
         _emit("start", "m11")
         t0 = perf_counter()
+        if joined_df is None and bool(getattr(cfg, "pipeline", {}).get("m11_allow_cached_joined", False)):
+            m10_out = stage_output_dir(cfg, subject, "m10_fmri")
+            cached_joined = m10_out / f"{subject}_trials_joined.csv"
+            if cached_joined.exists():
+                try:
+                    joined_df = pd.read_csv(cached_joined)
+                    result.metrics["m11_used_cached_joined"] = True
+                    result.metrics["m11_cached_joined_path"] = str(cached_joined)
+                except Exception as exc:
+                    result.metrics["m11_cached_joined_error"] = str(exc)
         if joined_df is not None and not joined_df.empty:
             try:
                 coupling = run_coupling_models(joined_df)

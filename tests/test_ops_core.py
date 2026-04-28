@@ -6,7 +6,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from mous_pipeline.ops.actions import build_submit_cmd, parse_sbatch_job_id
+from mous_pipeline.ops.actions import (
+    build_recon_submit_cmd,
+    build_submit_cmd,
+    compute_undownloaded_subjects,
+    parse_sbatch_job_id,
+)
 from mous_pipeline.ops.models import OpsState, WorkflowPreset
 from mous_pipeline.ops.monitor import classify_failure
 from mous_pipeline.ops.state import default_presets, load_state, save_state
@@ -71,3 +76,27 @@ def test_default_presets_keep_command_keys_compatible() -> None:
     )
     assert "--include-m5" not in cmd
     assert "--dry-run" not in cmd
+
+
+def test_build_recon_submit_cmd_preview() -> None:
+    cmd = build_recon_submit_cmd(
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002", "A2003"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="16G",
+        cpus_per_task="4",
+        dry_run=True,
+    )
+    assert cmd[0] == "scripts/palmetto_recon_all.sh"
+    assert "--subjects" in cmd and "A2002,A2003" in cmd
+    assert "--dry-run" in cmd
+
+
+def test_compute_undownloaded_subjects() -> None:
+    missing = compute_undownloaded_subjects(
+        local_subjects=["A2002"],
+        remote_subjects=["A2002", "A2003", "sub-A2004"],
+    )
+    assert missing == ["A2003", "A2004"]

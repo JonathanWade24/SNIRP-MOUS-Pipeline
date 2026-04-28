@@ -5,6 +5,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
+from ..config import load_config
+from ..m0_intake.repocli_rdr import build_repocli_ls_command, parse_repocli_ls_subjects, repocli_available
 from .models import JobRecord, WorkflowPreset
 
 
@@ -21,6 +23,27 @@ def discover_subjects(config_path: str, data_root: str | None = None) -> list[st
             if m.startswith("A") or m.startswith("sub-"):
                 subjects.add(m.removeprefix("sub-"))
     return sorted(subjects)
+
+
+def discover_remote_subjects(config_path: str) -> tuple[list[str], str | None]:
+    """Query RDR via repocli and return available subject IDs."""
+    if not repocli_available():
+        return [], "repocli is not on PATH."
+    cfg = load_config(Path(config_path).expanduser().resolve())
+    collection = str(getattr(cfg.rdr, "collection_path", "")).strip()
+    if not collection:
+        return [], "rdr.collection_path is empty in config."
+    proc = run_cmd(build_repocli_ls_command(collection), cwd=Path.cwd())
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "unknown repocli error"
+        return [], f"Failed to list RDR subjects: {err}"
+    return parse_repocli_ls_subjects(proc.stdout or ""), None
+
+
+def compute_undownloaded_subjects(local_subjects: list[str], remote_subjects: list[str]) -> list[str]:
+    local = {s.removeprefix("sub-") for s in local_subjects}
+    remote = {s.removeprefix("sub-") for s in remote_subjects}
+    return sorted(remote - local)
 
 
 def build_submit_cmd(
@@ -73,6 +96,39 @@ def build_bids_validate_cmd(root: str, subject: str) -> list[str]:
     return ["mous-pipeline", "bids-validate", "--root", root, "--subject", subject, "--verbose"]
 
 
+def build_recon_submit_cmd(
+    *,
+    config: str,
+    subjects: list[str],
+    account: str,
+    partition: str,
+    time_limit: str,
+    mem: str,
+    cpus_per_task: str,
+    dry_run: bool = False,
+) -> list[str]:
+    cmd = [
+        "scripts/palmetto_recon_all.sh",
+        "--config",
+        config,
+        "--subjects",
+        ",".join(subjects),
+        "--partition",
+        partition,
+        "--account",
+        account,
+        "--time",
+        time_limit,
+        "--mem",
+        mem,
+        "--cpus-per-task",
+        cpus_per_task,
+    ]
+    if dry_run:
+        cmd.append("--dry-run")
+    return cmd
+
+
 def run_cmd(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, check=False, text=True, capture_output=True, cwd=str(cwd) if cwd else None)
 
@@ -97,7 +153,12 @@ def submit_sbatch(script_path: str) -> JobRecord:
 
 
 def execute_submit_cmd(
-    cmd: list[str], *, config_path: str, subjects: list[str], kind: str = "palmetto_submit"
+    cmd: list[str],
+    *,
+    config_path: str,
+    subjects: list[str],
+    kind: str = "palmetto_submit",
+    job_name: str = "mous_fmriprep",
 ) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
     proc = run_cmd(cmd, cwd=Path.cwd())
     job_id = parse_sbatch_job_id((proc.stdout or "") + "\n" + (proc.stderr or ""))
@@ -106,7 +167,7 @@ def execute_submit_cmd(
     return (
         JobRecord(
             job_id=job_id,
-            job_name="mous_fmriprep",
+            job_name=job_name,
             kind=kind,
             config_path=config_path,
             subjects=subjects,

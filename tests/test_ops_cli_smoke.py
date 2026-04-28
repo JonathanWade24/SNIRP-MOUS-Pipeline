@@ -23,5 +23,5 @@ def test_ops_help_smoke() -> None:
         check=False,
     )
     assert proc.returncode == 0
-    assert "{ui,run,status,monitor}" in proc.stdout
+    assert "{ui,run,status,monitor,prep-m5}" in proc.stdout
     assert "run" in proc.stdout

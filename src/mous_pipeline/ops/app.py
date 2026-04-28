@@ -23,6 +23,8 @@ from textual.widgets import (
 )
 
 from .actions import (
+    compute_undownloaded_subjects,
+    discover_remote_subjects,
     build_bids_convert_cmd,
     build_bids_validate_cmd,
     build_download_cmd,
@@ -423,10 +425,13 @@ class SubjectsScreen(Screen):
 
         with Horizontal(classes="frow"):
             yield Button("↺ Refresh List", id="btn-load", variant="default")
+            yield Button("☁ Query RDR",    id="btn-query-rdr", variant="default")
             yield Button("✓ All",          id="btn-all",  variant="default")
             yield Button("✗ None",         id="btn-none", variant="default")
 
         yield SelectionList[str](id="subject-list")
+        yield Label("  Undownloaded subjects (available in RDR)", classes="section-title")
+        yield Static("[dim]Press 'Query RDR' to fetch remote availability.[/dim]", id="undownloaded-box")
 
         with Horizontal(classes="frow"):
             yield Label("Saved set:", classes="flabel")
@@ -463,12 +468,38 @@ class SubjectsScreen(Screen):
         prev = set(self.app.wizard_subjects)
         for s in subjects:
             sl.add_option((f"sub-{s}", s, s in prev))
+        self._local_subjects = subjects
         if not subjects:
             self.notify("No subjects found — check config/data-root paths.", severity="warning")
+        self._refresh_undownloaded_box()
+
+    def _refresh_undownloaded_box(self) -> None:
+        box = self.query_one("#undownloaded-box", Static)
+        local = getattr(self, "_local_subjects", [])
+        remote = getattr(self, "_remote_subjects", [])
+        if not remote:
+            box.update("[dim]Press 'Query RDR' to fetch remote availability.[/dim]")
+            return
+        missing = compute_undownloaded_subjects(local, remote)
+        if not missing:
+            box.update("[green]All remote subjects appear downloaded locally.[/green]")
+            return
+        box.update("  " + "  ·  ".join(f"sub-{s}" for s in missing))
 
     @on(Button.Pressed, "#btn-load")
     def _on_load(self, _) -> None:
         self._load_subjects()
+
+    @on(Button.Pressed, "#btn-query-rdr")
+    def _on_query_rdr(self, _) -> None:
+        cfg = self.query_one("#cfg-input", Input).value.strip()
+        remote, err = discover_remote_subjects(cfg)
+        self._remote_subjects = remote
+        if err:
+            self.notify(err, severity="warning")
+        else:
+            self.notify(f"Loaded {len(remote)} remote subjects from RDR")
+        self._refresh_undownloaded_box()
 
     @on(Button.Pressed, "#btn-all")
     def _on_all(self, _) -> None:
