@@ -131,3 +131,37 @@ def test_palmetto_recon_all_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
     assert "--cpus-per-task 8" in proc.stdout
     assert "--array 0-0" in proc.stdout
     assert "run_recon_all_subject.sh" in proc.stdout
+
+
+def test_run_aims_priority_dry_run_prints_dependent_fmri_stages_submit(tmp_path: Path):
+    data_root = tmp_path / "data"
+    derivatives_root = tmp_path / "derivatives"
+    (data_root / "sub-A2002").mkdir(parents=True)
+    cfg = tmp_path / "cfg.yaml"
+    _write_minimal_config(cfg, data_root=data_root, derivatives_root=derivatives_root)
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_mous_pipeline(fake_bin)
+    env = _base_env(fake_bin)
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "scripts/run_aims_priority.sh",
+            "--config",
+            str(cfg),
+            "--subjects",
+            "A2002",
+            "--dry-run",
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "[dry-run][slurm] sbatch --job-name mous_fmri_stages" in proc.stdout
+    assert "--dependency afterok:" in proc.stdout
+    assert "scripts/run_fmri_stages.sh" in proc.stdout

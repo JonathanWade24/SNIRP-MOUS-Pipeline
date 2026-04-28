@@ -881,6 +881,9 @@ class RunResultsScreen(Screen):
             "detached_driver": "Driver Job",
             "driver": "Driver Job",
             "palmetto_submit": "fMRI Array Submit",
+            "mous_fmri_stages": "fMRI Stages",
+            "fmri_stages": "fMRI Stages",
+            "fmri_stages_submit": "fMRI Stages",
             "rdr_fetch": "Download Job",
             "preset:bids_convert_validate": "BIDS Job",
         }
@@ -1041,6 +1044,8 @@ class LogScreen(Screen):
 
     def _log_kind(self, filename: str) -> str:
         lower = filename.lower()
+        if "fmri_stages" in lower:
+            return "fMRI Stages"
         if "fmriprep" in lower:
             return "fMRI Preprocessing"
         if "driver" in lower:
