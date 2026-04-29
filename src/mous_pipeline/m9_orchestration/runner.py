@@ -549,6 +549,13 @@ def _run_subject_body(
     # ── m6a: phase-gradient waves + DCI ───────────────────────────────────────
     # Load from cache whenever it exists (regardless of whether m6a is selected),
     # so that downstream stages (m12) can use prior outputs when running fMRI-only.
+    #
+    # TODO(caching): This is a workaround for the split MEG/fMRI job architecture.
+    # The right long-term fix is a proper stage-level cache/artifact registry that
+    # lets any stage declare its output artifacts and any downstream stage retrieve
+    # them by key — rather than each stage encoding its own cache-hit logic.
+    # Tracked in: https://github.com/JonathanWade24/SNIRP-MOUS-Pipeline/issues
+    # (open an issue titled "Stage artifact registry for cross-job cache sharing")
     _emit("start", "m6a")
     t0 = perf_counter()
     sensor_xy = None
