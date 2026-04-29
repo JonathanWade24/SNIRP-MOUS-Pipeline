@@ -269,7 +269,11 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   EXTRA_STR=""
   FMRI_STAGES_DEP=()
   if [[ -n "${FMRIPREP_JOB_ID:-}" ]]; then
-    FMRI_STAGES_DEP=(--dependency "afterok:${FMRIPREP_JOB_ID}")
+    # Use `afterany` (not `afterok`) and `--kill-on-invalid-dep=no` so a
+    # partially-failed or already-cleared fMRIPrep array does not get the whole
+    # downstream submission rejected. run_fmri_stages.sh tolerates missing
+    # fMRIPrep outputs (--reuse-fmriprep / --allow-m11-from-cached-joined).
+    FMRI_STAGES_DEP=(--dependency "afterany:${FMRIPREP_JOB_ID}" --kill-on-invalid-dep=no)
   fi
   if (( ${#FMRI_STAGES_DEP[@]} > 0 )); then
     DEP_STR="$(printf ' %q' "${FMRI_STAGES_DEP[@]}")"
@@ -294,18 +298,49 @@ FMRI_STAGES_OUTPUT="$SLURM_DIR/fmri_stages_%A.out"
 FMRI_STAGES_ERROR="$SLURM_DIR/fmri_stages_%A.err"
 FMRI_STAGES_DEP=()
 if [[ -n "${FMRIPREP_JOB_ID:-}" ]]; then
-  FMRI_STAGES_DEP=(--dependency "afterok:${FMRIPREP_JOB_ID}")
+  # Tolerate per-subject fMRIPrep failures and stale parent jobs:
+  #   - `afterany` triggers once the parent terminates in any state.
+  #   - `--kill-on-invalid-dep=no` keeps the dependent job held instead of
+  #     having sbatch reject the submission outright when the dep can no
+  #     longer be satisfied.
+  FMRI_STAGES_DEP=(--dependency "afterany:${FMRIPREP_JOB_ID}" --kill-on-invalid-dep=no)
 fi
-FMRI_STAGES_REPLY="$(sbatch \
-  --job-name "mous_fmri_stages" \
-  --output "$FMRI_STAGES_OUTPUT" \
-  --error "$FMRI_STAGES_ERROR" \
-  "${FMRI_STAGES_DEP[@]}" \
-  "${SBATCH_EXTRA[@]}" \
-  "$REPO_ROOT/scripts/run_fmri_stages.sh" \
-  --config "$CONFIG_ABS" \
-  --subjects-file "$SUBJECTS_FILE" \
-  --deriv-root "$DERIV_ROOT")"
+
+submit_fmri_stages() {
+  sbatch \
+    --job-name "mous_fmri_stages" \
+    --output "$FMRI_STAGES_OUTPUT" \
+    --error "$FMRI_STAGES_ERROR" \
+    "$@" \
+    "${SBATCH_EXTRA[@]}" \
+    "$REPO_ROOT/scripts/run_fmri_stages.sh" \
+    --config "$CONFIG_ABS" \
+    --subjects-file "$SUBJECTS_FILE" \
+    --deriv-root "$DERIV_ROOT"
+}
+
+set +e
+FMRI_STAGES_REPLY="$(submit_fmri_stages "${FMRI_STAGES_DEP[@]}" 2>&1)"
+FMRI_STAGES_RC=$?
+set -e
+printf "%s\n" "$FMRI_STAGES_REPLY"
+
+if [[ $FMRI_STAGES_RC -ne 0 ]]; then
+  if (( ${#FMRI_STAGES_DEP[@]} > 0 )) && grep -qiE 'dependency|invalid dep' <<< "$FMRI_STAGES_REPLY"; then
+    echo "[fmri-stages][warn] dependency on fMRIPrep job ${FMRIPREP_JOB_ID:-?} is not satisfiable; retrying without dependency." >&2
+    set +e
+    FMRI_STAGES_REPLY="$(submit_fmri_stages 2>&1)"
+    FMRI_STAGES_RC=$?
+    set -e
+    printf "%s\n" "$FMRI_STAGES_REPLY"
+  fi
+fi
+
+if [[ $FMRI_STAGES_RC -ne 0 ]]; then
+  echo "[fmri-stages][error] sbatch submission failed (rc=$FMRI_STAGES_RC)." >&2
+  exit "$FMRI_STAGES_RC"
+fi
+
 FMRI_STAGES_JOB_ID="$(awk '/Submitted batch job/{print $4}' <<< "$FMRI_STAGES_REPLY" | tail -n1)"
 if [[ -n "$FMRI_STAGES_JOB_ID" ]]; then
   echo "[fmri-stages] submitted job id: $FMRI_STAGES_JOB_ID"

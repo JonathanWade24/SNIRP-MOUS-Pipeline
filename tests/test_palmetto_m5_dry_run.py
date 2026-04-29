@@ -219,7 +219,11 @@ def test_run_aims_priority_dry_run_prints_dependent_fmri_stages_submit(tmp_path:
     )
 
     assert "[dry-run][slurm] sbatch --job-name mous_fmri_stages" in proc.stdout
-    assert "--dependency afterok:" in proc.stdout
+    # Use afterany + --kill-on-invalid-dep=no so a partially-failed or already
+    # cleared fMRIPrep array does not torpedo the dependent submission.
+    assert "--dependency afterany:" in proc.stdout
+    assert "--kill-on-invalid-dep=no" in proc.stdout
+    assert "afterok:" not in proc.stdout
     assert "scripts/run_fmri_stages.sh" in proc.stdout
 
 
