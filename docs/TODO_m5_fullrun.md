@@ -25,7 +25,7 @@ The pipeline code for M5 is fully implemented. The only blocker is FreeSurfer ou
 
 ~/MOUS/Sandbox/MOUS/                  ← Git repo root
   configs/
-    cohort_15subjects_fmri.yaml       ← Main cohort config (edit source.subjects_dir here)
+    palmetto_hpcnirc_A2004_A2014.yaml ← Main cohort config (edit source.subjects_dir here)
   scripts/
     analysis_00_hpc_setup.sh          ← Creates/checks HPC directories and can submit jobs
     analysis_01_cohort_fetch_and_run.sh
@@ -71,7 +71,7 @@ derivatives/coreg/
 ```
 
 It also verifies that:
-- `configs/cohort_15subjects_fmri.yaml` exists and points `source.subjects_dir` at `derivatives/freesurfer`,
+- `configs/palmetto_hpcnirc_A2004_A2014.yaml` exists and points `source.subjects_dir` at `derivatives/freesurfer`,
 - the FreeSurfer license exists at `$FS_LICENSE` or `/data/freesurfer/license.txt`,
 - `sbatch`, `mous-pipeline`, and the `freesurfer/7.4.1` module are visible where possible,
 - all subject T1w images exist when `--check-data` is passed.
@@ -116,7 +116,7 @@ derivatives/freesurfer/sub-AXXX/surf/rh.white
 
 ## Step 2 — Update Config
 
-In `configs/cohort_15subjects_fmri.yaml`, set:
+In `configs/palmetto_hpcnirc_A2004_A2014.yaml`, set:
 
 ```yaml
 source:
@@ -229,7 +229,7 @@ by collaborators running only M5.
 
 The repo itself (`~/MOUS/Sandbox/MOUS/`) is on GitHub at
 `github.com/JonathanWade24/MOUS` — contributors should clone this and point
-`configs/cohort_15subjects_fmri.yaml` at their local data paths.
+`configs/palmetto_hpcnirc_A2004_A2014.yaml` at their local data paths.
 
 ---
 

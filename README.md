@@ -50,10 +50,10 @@ Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 ## Quickstart
 
 ```bash
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
 ```
 
-Example configs live under `configs/` (e.g. `pilot_A2002.yaml`, `pilot_A2003_fmri.yaml`, `default.yaml`). YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, and optional `fmri` / `wave_validation` blocks.
+Canonical configs live under `configs/`: `palmetto_hpcnirc_fmri.yaml` and `palmetto_hpcnirc_A2004_A2014.yaml`. YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, `source`, optional `fmri` / `wave_validation`, and `pipeline`.
 
 Pipeline behavior toggles can be set under `pipeline`, for example:
 - `strict_stage_failures` (default true in CI): hard-fail critical stage errors (`m10`, `m11`),
@@ -92,21 +92,21 @@ A full `run` executes every stage in `STAGE_ORDER`. **m10 / m11** need fMRI conf
 
 ```bash
 # Plan only: print resolved stages without touching data
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --dry-run
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --dry-run
 
 # Recompute even when caches exist
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --force
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --force
 
 # Skip stages (comma-separated)
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --skip m8
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --skip m8
 
 # Run a subset (must include dependencies; see stage_dependencies)
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m2,m3
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --only m1,m2,m3
 
 # If you use --only, add optional blocks explicitly:
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m2,m3,m10,m11 \
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --only m1,m2,m3,m10,m11 \
   --include-fmri
-mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002 --only m1,m6a,m12 \
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --only m1,m6a,m12 \
   --include-waves-validation
 ```
 
@@ -152,8 +152,8 @@ Expected acceptance checks:
 Polls `derivatives/.../m9_orchestration/sub-<id>_run_state.json` written during `run`:
 
 ```bash
-mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002
-mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002 --verbose
+mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
+mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --verbose
 ```
 
 ## CLI commands (overview)
@@ -180,7 +180,7 @@ mous-pipeline watch --config configs/pilot_A2002.yaml --subject A2002 --verbose
 4. Pull a subject:
 
 ```bash
-mous-pipeline fetch-rdr --config configs/pilot_A2002.yaml --subject A2002 --execute
+mous-pipeline fetch-rdr --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --execute
 ```
 
 Override collection path if needed:
@@ -253,7 +253,7 @@ For prioritized automation across workflow tracks without mandatory m5 FreeSurfe
 
 ```bash
 scripts/run_aims_priority.sh \
-  --config configs/pilot_A2003_fmri.yaml \
+  --config configs/palmetto_hpcnirc_fmri.yaml \
   --subjects A2003,A2004 \
   --fetch-missing \
   --partition hpcnirc
@@ -274,7 +274,7 @@ Why this can look surprising:
 Preview all commands without executing:
 
 ```bash
-scripts/run_aims_priority.sh --config configs/pilot_A2003_fmri.yaml --subjects A2003 --fetch-missing --dry-run
+scripts/run_aims_priority.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2003 --fetch-missing --dry-run
 ```
 
 Palmetto-specific wrapper and setup docs:
@@ -282,6 +282,8 @@ Palmetto-specific wrapper and setup docs:
 ```bash
 bash scripts/palmetto_setup.sh
 scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account YOUR_ACCOUNT --dry-run
+scripts/palmetto_recon_all.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
+scripts/palmetto_prep_bem.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
 ```
 
 See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.
@@ -291,6 +293,8 @@ SSH-first operations interface:
 ```bash
 mous-pipeline ops ui
 mous-pipeline ops run --preset full_submit --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT
+mous-pipeline ops prep-m5 --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --with-bem --dry-run
+mous-pipeline ops prep-bem --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
 mous-pipeline ops status
 ```
 
@@ -329,6 +333,9 @@ Tests use fixtures in `tests/conftest.py` for sample data and configs.
 
 **"subjects_dir does not exist"** (m5)
 : Set `source.subjects_dir` in your YAML to a valid FreeSurfer `SUBJECTS_DIR` containing `fsaverage/`. Or skip m5 with `--skip m5`.
+
+**"inner_skull.surf is missing"** (m5)
+: Build BEM surfaces first: `mous-pipeline ops prep-bem --config <cfg> --subjects <id> --execute`, or chain after recon with `mous-pipeline ops prep-m5 --with-bem ... --execute`.
 
 **"No BOLD file found"** (m10)
 : Stage m10 requires fMRI data. Either configure `fmri.bold_path` in your YAML, run fMRIPrep, or skip m10/m11 with `--skip m10,m11`.
