@@ -55,6 +55,42 @@ class _DummyMasker1D:
         return np.ones(3)
 
 
+class _SpyModel:
+    fit_calls: list[dict] = []
+    contrast_calls: list[str] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def fit(self, bold_nii, events=None, confounds=None):
+        _SpyModel.fit_calls.append(
+            {
+                "bold_nii": bold_nii,
+                "events": events.copy() if events is not None else None,
+                "confounds": confounds,
+            }
+        )
+        return self
+
+    def compute_contrast(self, contrast_def, output_type="effect_size"):
+        _SpyModel.contrast_calls.append(str(contrast_def))
+        return "dummy_img"
+
+
+class _SpyMasker:
+    fit_args: list[tuple] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def fit(self, *args, **kwargs):
+        _SpyMasker.fit_args.append(args)
+        return self
+
+    def transform(self, img):
+        return np.ones((1, 1))
+
+
 # ── tests ──────────────────────────────────────────────────────────────────────
 
 def test_trialwise_betas_output_columns(monkeypatch):
@@ -138,3 +174,40 @@ def test_trialwise_betas_accepts_1d_masker_output(monkeypatch):
     out = trialwise_betas("dummy_bold.nii.gz", events, tr=2.0)
     assert list(out.columns) == ["trial_id", "mtg_beta"]
     assert len(out) == 2
+
+
+def test_trialwise_betas_uses_per_trial_lss_fit(monkeypatch):
+    _SpyModel.fit_calls = []
+    _SpyModel.contrast_calls = []
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.FirstLevelModel", _SpyModel)
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.NiftiLabelsMasker", _SpyMasker)
+    monkeypatch.setattr(
+        "mous_pipeline.m10_fmri.glm._atlas_and_label",
+        lambda *a, **k: ("dummy_atlas", ["L_TE1a"], "L_TE1a"),
+    )
+    events = pd.DataFrame({"onset": [0.0, 6.0, 12.0], "duration": [6.0, 6.0, 6.0]})
+
+    out = trialwise_betas("dummy_bold.nii.gz", events, tr=2.0)
+
+    assert len(out) == 3
+    assert len(_SpyModel.fit_calls) == len(events)
+    assert _SpyModel.contrast_calls == ["target_trial", "target_trial", "target_trial"]
+    for idx, fit_call in enumerate(_SpyModel.fit_calls):
+        design = fit_call["events"]
+        assert list(design["trial_type"]) == ["target_trial" if j == idx else "other_trials" for j in range(len(events))]
+
+
+def test_trialwise_betas_masker_fit_uses_bold_image(monkeypatch):
+    _SpyMasker.fit_args = []
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.FirstLevelModel", _DummyModel)
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.NiftiLabelsMasker", _SpyMasker)
+    monkeypatch.setattr(
+        "mous_pipeline.m10_fmri.glm._atlas_and_label",
+        lambda *a, **k: ("dummy_atlas", ["L_TE1a"], "L_TE1a"),
+    )
+    events = pd.DataFrame({"onset": [0.0, 6.0], "duration": [6.0, 6.0]})
+
+    trialwise_betas("dummy_bold.nii.gz", events, tr=2.0)
+
+    assert _SpyMasker.fit_args
+    assert _SpyMasker.fit_args[0] == ("dummy_bold.nii.gz",)
