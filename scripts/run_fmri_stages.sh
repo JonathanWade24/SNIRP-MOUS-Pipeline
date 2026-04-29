@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Run fMRI-dependent stages (m10,m11,m12) per subject, then group aggregation.
+Run fMRI-dependent stages (m8,m10,m11,m12) per subject, then group aggregation.
 
 Usage:
   run_fmri_stages.sh --config <config.yaml> --subjects-file <path> --deriv-root <path> [--dry-run]
@@ -67,7 +67,7 @@ run_subject_cmd() {
     mous-pipeline run
     --config "$CONFIG"
     --subject "$subject"
-    --only "m10,m11,m12"
+    --only "m8,m10,m11,m12"
     --reuse-fmriprep
     --allow-m11-from-cached-joined
     --assume-upstream-done
