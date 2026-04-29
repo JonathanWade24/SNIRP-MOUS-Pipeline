@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from mous_pipeline.ops.actions import (
+    build_bem_submit_cmd,
     build_recon_submit_cmd,
     build_submit_cmd,
     compute_undownloaded_subjects,
@@ -91,6 +92,24 @@ def test_build_recon_submit_cmd_preview() -> None:
     )
     assert cmd[0] == "scripts/palmetto_recon_all.sh"
     assert "--subjects" in cmd and "A2002,A2003" in cmd
+    assert "--dry-run" in cmd
+
+
+def test_build_bem_submit_cmd_preview() -> None:
+    cmd = build_bem_submit_cmd(
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002", "A2003"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="04:00:00",
+        mem="16G",
+        cpus_per_task="2",
+        dependency="afterok:12345",
+        dry_run=True,
+    )
+    assert cmd[0] == "scripts/palmetto_prep_bem.sh"
+    assert "--subjects" in cmd and "A2002,A2003" in cmd
+    assert "--dependency" in cmd and "afterok:12345" in cmd
     assert "--dry-run" in cmd
 
 

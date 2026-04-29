@@ -7,6 +7,15 @@ from pathlib import Path
 import mne
 
 
+def _required_bem_surfaces(subjects_dir: Path, mri_subject: str) -> tuple[Path, Path, Path]:
+    bem_dir = subjects_dir / mri_subject / "bem"
+    return (
+        bem_dir / "inner_skull.surf",
+        bem_dir / "outer_skull.surf",
+        bem_dir / "outer_skin.surf",
+    )
+
+
 def resolve_trans_path(trans: str, subject: str) -> str:
     """Resolve a configured MNE trans value for a subject."""
     if trans == "fsaverage":
@@ -33,6 +42,21 @@ def build_forward_model(subject: str, raw, cfg) -> tuple[mne.Forward, mne.Source
     spacing = str(getattr(source_cfg, "spacing", "oct6"))
     trans = resolve_trans_path(str(getattr(source_cfg, "trans", "fsaverage")), subject)
     conductivity = tuple(getattr(source_cfg, "conductivity", (0.3,)))
+
+    # Guardrail for subject-specific source reconstruction: fail with actionable
+    # guidance instead of surf file errors buried inside MNE internals.
+    if not use_fsaverage:
+        required = _required_bem_surfaces(subjects_dir, mri_subject)
+        missing = [p for p in required if not p.exists()]
+        if missing:
+            missing_names = ", ".join(p.name for p in missing)
+            raise FileNotFoundError(
+                "Missing BEM surfaces for m5 subject "
+                f"{mri_subject}: {missing_names}. "
+                "Run BEM prep first: `mous-pipeline ops prep-bem --config <cfg> "
+                f"--subjects {sid} --execute` "
+                "or chain with recon: `mous-pipeline ops prep-m5 --with-bem ... --execute`."
+            )
 
     src = mne.setup_source_space(
         subject=mri_subject,

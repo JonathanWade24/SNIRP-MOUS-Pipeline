@@ -39,7 +39,7 @@ Set these values for your allocation:
 
 Avoid spaces in all fMRI/source paths (`data_root`, `fmriprep_output`, FreeSurfer output/work paths), otherwise fMRIPrep/FSL/ANTs may fail.
 
-## 3) Optional: run FreeSurfer recon-all for m5
+## 3) Optional: run FreeSurfer recon-all + BEM for m5
 
 If you want m5 source reconstruction, create FreeSurfer outputs first:
 
@@ -56,6 +56,21 @@ Submit by removing `--dry-run`. Expected outputs per subject:
 - `<derivatives_root>/freesurfer/sub-AXXX/mri/brain.mgz`
 - `<derivatives_root>/freesurfer/sub-AXXX/surf/lh.white`
 - `<derivatives_root>/freesurfer/sub-AXXX/surf/rh.white`
+
+Then prepare BEM surfaces:
+
+```bash
+scripts/palmetto_prep_bem.sh \
+  --config configs/palmetto_hpcnirc_fmri.yaml \
+  --subjects A2002,A2003 \
+  --account YOUR_ACCOUNT \
+  --dry-run
+```
+
+Expected BEM outputs per subject:
+- `<derivatives_root>/freesurfer/sub-AXXX/bem/inner_skull.surf`
+- `<derivatives_root>/freesurfer/sub-AXXX/bem/outer_skull.surf`
+- `<derivatives_root>/freesurfer/sub-AXXX/bem/outer_skin.surf`
 
 ## 4) Dry-run before submit
 

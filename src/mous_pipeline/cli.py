@@ -32,7 +32,13 @@ from .m9_orchestration.parallelization_plan import (
     recommend_subject_parallelism,
 )
 from .m9_orchestration.runner import run_subject
-from .ops.actions import build_recon_submit_cmd, build_submit_cmd, execute_submit_cmd, run_cmd
+from .ops.actions import (
+    build_bem_submit_cmd,
+    build_recon_submit_cmd,
+    build_submit_cmd,
+    execute_submit_cmd,
+    run_cmd,
+)
 from .ops.models import WorkflowPreset
 from .ops.monitor import classify_failure, squeue_jobs, tail_text
 from .ops.state import load_state, save_state
@@ -529,6 +535,12 @@ def main() -> None:
     ops_monitor = ops_sub.add_parser("monitor", help="Poll queue/accounting and classify log snippets")
     ops_monitor.add_argument("--job-id", default="")
     ops_monitor.add_argument("--log-file", default="")
+    ops_config = ops_sub.add_parser("config", help="List/select ops config files")
+    ops_config_sub = ops_config.add_subparsers(dest="ops_config_cmd")
+    ops_config_sub.add_parser("list", help="List config YAML files under ./configs")
+    ops_config_show = ops_config_sub.add_parser("show", help="Show currently selected ops config")
+    ops_config_use = ops_config_sub.add_parser("use", help="Set default ops config path")
+    ops_config_use.add_argument("--path", required=True, help="Path to config YAML")
     ops_recon = ops_sub.add_parser("prep-m5", help="Submit recon-all array job to build source subjects_dir")
     ops_recon.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
     ops_recon.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
@@ -537,7 +549,21 @@ def main() -> None:
     ops_recon.add_argument("--time", default="12:00:00")
     ops_recon.add_argument("--mem", default="16G")
     ops_recon.add_argument("--cpus-per-task", default="4")
+    ops_recon.add_argument("--with-bem", action="store_true", help="Chain BEM prep after recon-all succeeds")
+    ops_recon.add_argument("--bem-time", default="04:00:00")
+    ops_recon.add_argument("--bem-mem", default="16G")
+    ops_recon.add_argument("--bem-cpus-per-task", default="2")
     ops_recon.add_argument("--execute", action="store_true")
+    ops_bem = ops_sub.add_parser("prep-bem", help="Submit BEM generation array job (inner/outer skull/skin surfaces)")
+    ops_bem.add_argument("--config", default="configs/palmetto_hpcnirc_fmri.yaml")
+    ops_bem.add_argument("--subjects", required=True, help="Comma-separated subject IDs")
+    ops_bem.add_argument("--account", default="")
+    ops_bem.add_argument("--partition", default="hpcnirc")
+    ops_bem.add_argument("--time", default="04:00:00")
+    ops_bem.add_argument("--mem", default="16G")
+    ops_bem.add_argument("--cpus-per-task", default="2")
+    ops_bem.add_argument("--dependency", default="", help="Optional sbatch dependency (e.g. afterok:12345)")
+    ops_bem.add_argument("--execute", action="store_true")
 
     args = parser.parse_args()
 
@@ -950,6 +976,39 @@ def main() -> None:
                 print(f"\nlog tail: {args.log_file}")
                 print(text)
                 print(f"\nclassification: {classify_failure(text)}")
+        elif args.ops_cmd == "config":
+            st = load_state()
+            subcmd = args.ops_config_cmd or "show"
+            if subcmd == "list":
+                cfg_dir = Path.cwd() / "configs"
+                if not cfg_dir.exists():
+                    print(f"No configs directory found at {cfg_dir}")
+                    return
+                files = sorted(cfg_dir.glob("*.yaml")) + sorted(cfg_dir.glob("*.yml"))
+                if not files:
+                    print("No config YAML files found in ./configs")
+                    return
+                print("Available configs:")
+                for f in files:
+                    rel = f.relative_to(Path.cwd())
+                    marker = "  *" if str(rel) == st.last_config else "   "
+                    print(f"{marker} {rel}")
+            elif subcmd == "show":
+                print(f"Current ops config: {st.last_config}")
+            elif subcmd == "use":
+                p = Path(args.path).expanduser()
+                if not p.is_absolute():
+                    p = (Path.cwd() / p).resolve()
+                if not p.exists():
+                    print(f"Config not found: {p}", file=sys.stderr)
+                    sys.exit(2)
+                try:
+                    rel = p.relative_to(Path.cwd())
+                    st.last_config = str(rel)
+                except ValueError:
+                    st.last_config = str(p)
+                save_state(st)
+                print(f"Set ops default config to: {st.last_config}")
         elif args.ops_cmd == "prep-m5":
             subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
             if not subjects:
@@ -965,8 +1024,23 @@ def main() -> None:
                 cpus_per_task=args.cpus_per_task,
                 dry_run=not args.execute,
             )
+            bem_cmd: list[str] | None = None
+            if args.with_bem:
+                bem_cmd = build_bem_submit_cmd(
+                    config=args.config,
+                    subjects=subjects,
+                    account=args.account,
+                    partition=args.partition,
+                    time_limit=args.bem_time,
+                    mem=args.bem_mem,
+                    cpus_per_task=args.bem_cpus_per_task,
+                    dry_run=not args.execute,
+                )
             print("Command:")
             print(" ".join(shlex.quote(c) for c in cmd))
+            if bem_cmd:
+                print("Follow-up command (BEM prep):")
+                print(" ".join(shlex.quote(c) for c in bem_cmd))
             if not args.execute:
                 print("Preview only. Add --execute to run.")
                 return
@@ -977,6 +1051,77 @@ def main() -> None:
                 subjects=subjects,
                 kind="prep_m5",
                 job_name="mous_recon",
+            )
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+            if proc.returncode != 0:
+                sys.exit(proc.returncode)
+            if job is not None:
+                st.recent_jobs.insert(0, job)
+                st.recent_jobs = st.recent_jobs[:40]
+                print(f"Tracked job {job.job_id} in ops state.")
+                save_state(st)
+            if args.with_bem:
+                dep = f"afterok:{job.job_id}" if job is not None else ""
+                bem_cmd_exec = build_bem_submit_cmd(
+                    config=args.config,
+                    subjects=subjects,
+                    account=args.account,
+                    partition=args.partition,
+                    time_limit=args.bem_time,
+                    mem=args.bem_mem,
+                    cpus_per_task=args.bem_cpus_per_task,
+                    dependency=dep,
+                    dry_run=False,
+                )
+                bem_job, bem_proc = execute_submit_cmd(
+                    bem_cmd_exec,
+                    config_path=args.config,
+                    subjects=subjects,
+                    kind="prep_bem",
+                    job_name="mous_bem",
+                )
+                if bem_proc.stdout:
+                    print(bem_proc.stdout)
+                if bem_proc.stderr:
+                    print(bem_proc.stderr, file=sys.stderr)
+                if bem_proc.returncode != 0:
+                    sys.exit(bem_proc.returncode)
+                if bem_job is not None:
+                    st.recent_jobs.insert(0, bem_job)
+                    st.recent_jobs = st.recent_jobs[:40]
+                    print(f"Tracked BEM job {bem_job.job_id} in ops state.")
+                    save_state(st)
+        elif args.ops_cmd == "prep-bem":
+            subjects = [s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()]
+            if not subjects:
+                print("No subjects specified.", file=sys.stderr)
+                sys.exit(2)
+            cmd = build_bem_submit_cmd(
+                config=args.config,
+                subjects=subjects,
+                account=args.account,
+                partition=args.partition,
+                time_limit=args.time,
+                mem=args.mem,
+                cpus_per_task=args.cpus_per_task,
+                dependency=args.dependency,
+                dry_run=not args.execute,
+            )
+            print("Command:")
+            print(" ".join(shlex.quote(c) for c in cmd))
+            if not args.execute:
+                print("Preview only. Add --execute to run.")
+                return
+            st = load_state()
+            job, proc = execute_submit_cmd(
+                cmd,
+                config_path=args.config,
+                subjects=subjects,
+                kind="prep_bem",
+                job_name="mous_bem",
             )
             if proc.stdout:
                 print(proc.stdout)
