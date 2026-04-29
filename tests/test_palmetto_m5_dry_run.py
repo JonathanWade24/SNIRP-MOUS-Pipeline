@@ -221,3 +221,39 @@ def test_run_aims_priority_dry_run_prints_dependent_fmri_stages_submit(tmp_path:
     assert "[dry-run][slurm] sbatch --job-name mous_fmri_stages" in proc.stdout
     assert "--dependency afterok:" in proc.stdout
     assert "scripts/run_fmri_stages.sh" in proc.stdout
+
+
+def test_run_fmri_stages_dry_run_includes_m8(tmp_path: Path):
+    data_root = tmp_path / "data"
+    derivatives_root = tmp_path / "derivatives"
+    cfg = tmp_path / "cfg.yaml"
+    _write_minimal_config(cfg, data_root=data_root, derivatives_root=derivatives_root)
+    subjects_file = tmp_path / "subjects.txt"
+    subjects_file.write_text("A2002\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_mous_pipeline(fake_bin)
+    env = _base_env(fake_bin)
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "scripts/run_fmri_stages.sh",
+            "--config",
+            str(cfg),
+            "--subjects-file",
+            str(subjects_file),
+            "--deriv-root",
+            str(derivatives_root),
+            "--dry-run",
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert '--only "m8,m10,m11,m12"' not in proc.stdout
+    assert "--only m8,m10,m11,m12" in proc.stdout

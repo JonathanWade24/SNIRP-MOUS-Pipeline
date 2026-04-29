@@ -12,17 +12,17 @@ from nilearn.maskers import NiftiLabelsMasker
 from .roi import _atlas_and_label
 
 
-def _lss_design(events_df: pd.DataFrame) -> pd.DataFrame:
+def _trial_lss_design(events_df: pd.DataFrame, trial_idx: int) -> pd.DataFrame:
+    events = events_df.reset_index(drop=True)
     rows: list[dict] = []
-    for idx, row in events_df.reset_index(drop=True).iterrows():
-        for jdx, row_j in events_df.reset_index(drop=True).iterrows():
-            rows.append(
-                {
-                    "onset": float(row_j["onset"]),
-                    "duration": float(row_j.get("duration", 6.0)),
-                    "trial_type": f"trial_{idx}" if idx == jdx else "other_trials",
-                }
-            )
+    for jdx, row_j in events.iterrows():
+        rows.append(
+            {
+                "onset": float(row_j["onset"]),
+                "duration": float(row_j.get("duration", 6.0)),
+                "trial_type": "target_trial" if trial_idx == jdx else "other_trials",
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -42,15 +42,6 @@ def trialwise_betas(
     large objects + joblib pools before returning so the caller can advance to
     the next stage without blocking on pool cleanup stalls.
     """
-    model = FirstLevelModel(
-        t_r=tr,
-        hrf_model="spm",
-        noise_model="ar1",
-        standardize=False,
-        n_jobs=max(1, int(n_jobs)),
-    )
-    design = _lss_design(events_df)
-    model.fit(bold_nii, events=design, confounds=confounds)
     atlas_maps, labels, roi_name = _atlas_and_label(atlas, roi)
     if roi_name not in labels:
         roi_name = labels[0]
@@ -60,12 +51,25 @@ def trialwise_betas(
     except TypeError:
         # Test stubs may monkeypatch NiftiLabelsMasker with a no-arg constructor.
         masker = NiftiLabelsMasker()
-    masker.fit()
+    try:
+        masker.fit(bold_nii)
+    except TypeError:
+        # Test stubs may monkeypatch fit with no image argument.
+        masker.fit()
 
     mtg_beta: list[float] = []
     try:
         for idx in range(len(events_df)):
-            contrast_img = model.compute_contrast(f"trial_{idx}", output_type="effect_size")
+            model = FirstLevelModel(
+                t_r=tr,
+                hrf_model="spm",
+                noise_model="ar1",
+                standardize=False,
+                n_jobs=max(1, int(n_jobs)),
+            )
+            design = _trial_lss_design(events_df, idx)
+            model.fit(bold_nii, events=design, confounds=confounds)
+            contrast_img = model.compute_contrast("target_trial", output_type="effect_size")
             signal = np.asarray(masker.transform(contrast_img))
             if signal.ndim == 1:
                 if roi_idx >= signal.shape[0]:
@@ -80,9 +84,9 @@ def trialwise_betas(
                     )
                 roi_vals = signal[:, roi_idx]
             mtg_beta.append(float(np.mean(roi_vals)))
-            del contrast_img, signal
+            del contrast_img, signal, model, design
     finally:
-        del model, masker, design, atlas_maps, labels
+        del masker, atlas_maps, labels
         gc.collect()
 
     trial_ids = (
