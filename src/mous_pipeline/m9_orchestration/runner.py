@@ -547,11 +547,14 @@ def _run_subject_body(
         epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
 
     # ── m6a: phase-gradient waves + DCI ───────────────────────────────────────
+    # Load from cache whenever it exists (regardless of whether m6a is selected),
+    # so that downstream stages (m12) can use prior outputs when running fMRI-only.
     _emit("start", "m6a")
     t0 = perf_counter()
     sensor_xy = None
     meg_picks: list[int] = []
-    if _stage_selected("m6a", only, skip) and _m6a_hit:
+    _m6a_data_available = False
+    if _m6a_hit:
         result.metrics["m6a_cache_hit"] = True
         dirs_z    = np.load(_m6a_paths["dirs_z"])
         dirs_w    = np.load(_m6a_paths["dirs_w"])
@@ -562,7 +565,8 @@ def _run_subject_body(
         dci_r     = np.load(_m6a_paths["dci_r"])
         sliding_t = np.load(_m6a_paths["sliding_t"])
         sensor_xy = np.load(_m6a_sensor_xy)
-    else:
+        _m6a_data_available = True
+    elif _stage_selected("m6a", only, skip):
         assert epochs is not None and epochs_rest is not None
         sensor_xy, meg_picks = get_sensor_positions(epochs.info)
         dirs_z, dci_z = epochs_to_directions(epochs["ZINNEN"], sensor_xy, meg_picks)
@@ -575,19 +579,27 @@ def _run_subject_body(
             win=30,
             step=5,
         )
+        _m6a_data_available = True
+    else:
+        # m6a not selected and no cache: skip gracefully; m12 will also be skipped.
+        result.metrics["m6a_skipped_reason"] = "not selected and no prior cache available"
+        if _stage_selected("m12", only, skip):
+            result.skipped_stages.append("m12")
+            result.metrics["m12_skipped_reason"] = "m6a cache not available for fMRI-only run"
     result.stage_timings_s["m6a"] = perf_counter() - t0
     _emit("done", "m6a")
     if progress_callback and _stage_selected("m6a", only, skip):
         progress_callback("m6a")
-    result.metrics["dci_zinnen"] = float(np.mean(dci_z))
-    result.metrics["dci_woorden"] = float(np.mean(dci_w))
-    result.metrics["dci_rest"] = float(np.mean(dci_r))
-    result.metrics["n_rest"] = len(dci_r)
-    if not trial_df.empty:
-        n_z = len(dci_z)
-        n_w = len(dci_w)
-        trial_df.loc[trial_df["condition"] == "ZINNEN", "dci_trial"] = dci_z[:n_z]
-        trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
+    if _m6a_data_available:
+        result.metrics["dci_zinnen"] = float(np.mean(dci_z))
+        result.metrics["dci_woorden"] = float(np.mean(dci_w))
+        result.metrics["dci_rest"] = float(np.mean(dci_r))
+        result.metrics["n_rest"] = len(dci_r)
+        if not trial_df.empty:
+            n_z = len(dci_z)
+            n_w = len(dci_w)
+            trial_df.loc[trial_df["condition"] == "ZINNEN", "dci_trial"] = dci_z[:n_z]
+            trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
 
     if _stage_selected("m5", only, skip):
         _emit("start", "m5")
@@ -863,7 +875,7 @@ def _run_subject_body(
     else:
         result.skipped_stages.append("m11")
 
-    if _stage_selected("m12", only, skip):
+    if _stage_selected("m12", only, skip) and _m6a_data_available:
         _emit("start", "m12")
         t0 = perf_counter()
         try:
@@ -907,7 +919,7 @@ def _run_subject_body(
     else:
         result.skipped_stages.append("m12")
 
-    if not _m6a_hit:
+    if not _m6a_hit and _m6a_data_available:
         np.save(_m6a_paths["dirs_z"],    dirs_z)
         np.save(_m6a_paths["dirs_w"],    dirs_w)
         np.save(_m6a_paths["dirs_r"],    dirs_r)
