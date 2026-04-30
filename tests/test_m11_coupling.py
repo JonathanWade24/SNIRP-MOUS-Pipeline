@@ -5,7 +5,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from mous_pipeline.m11_coupling.regress import MEG_COUPLING_FEATURES, run_coupling_models
+from mous_pipeline.m11_coupling.regress import (
+    MEG_COUPLING_FEATURES,
+    hydrate_meg_features,
+    run_coupling_models,
+)
 
 
 def _base_df(n_per_cond: int = 10) -> pd.DataFrame:
@@ -53,6 +57,47 @@ def test_run_coupling_models_dci_only_no_keyerror():
     assert np.isnan(out["lme_like"]["p_prestim_beta"])
     assert np.isnan(out["lme_like"]["p_n400m"])
     assert not np.isnan(out["lme_like"]["p_dci_trial"])
+
+
+def test_hydrate_meg_features_adds_missing_cached_columns():
+    joined = _base_df(10)
+    joined["dci_trial"] = np.linspace(0.01, 0.03, len(joined))
+    trial_features = pd.DataFrame(
+        {
+            "trial_id": joined["trial_id"],
+            "prestim_beta": np.random.default_rng(1).standard_normal(len(joined)),
+            "n400m": np.random.default_rng(2).standard_normal(len(joined)),
+        }
+    )
+
+    hydrated, features = hydrate_meg_features(joined, trial_features)
+    out = run_coupling_models(hydrated)
+
+    assert features == ["prestim_beta", "n400m"]
+    assert out["features_used"] == list(MEG_COUPLING_FEATURES)
+    assert not np.isnan(out["lme_like"]["p_prestim_beta"])
+    assert not np.isnan(out["lme_like"]["p_n400m"])
+
+
+def test_hydrate_meg_features_fills_nulls_without_overwriting_values():
+    joined = _base_df(5)
+    joined["prestim_beta"] = [1.0, np.nan, 3.0, np.nan, 5.0, 6.0, np.nan, 8.0, 9.0, np.nan]
+    trial_features = pd.DataFrame(
+        {
+            "trial_id": joined["trial_id"],
+            "prestim_beta": np.arange(10.0, 20.0),
+        }
+    )
+
+    hydrated, features = hydrate_meg_features(
+        joined,
+        trial_features,
+        features=("prestim_beta",),
+    )
+
+    assert features == ["prestim_beta"]
+    assert hydrated.loc[0, "prestim_beta"] == 1.0
+    assert hydrated.loc[1, "prestim_beta"] == 11.0
 
 
 def test_run_coupling_models_mtg_only_returns_minimal():

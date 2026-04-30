@@ -10,6 +10,52 @@ import statsmodels.formula.api as smf
 MEG_COUPLING_FEATURES: tuple[str, ...] = ("prestim_beta", "n400m", "dci_trial")
 
 
+def hydrate_meg_features(
+    joined_df: pd.DataFrame,
+    trial_df: pd.DataFrame,
+    *,
+    features: tuple[str, ...] = MEG_COUPLING_FEATURES,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Add missing MEG feature columns to a joined trial table by ``trial_id``.
+
+    fMRI-only reruns often reuse an m10 joined CSV. If that CSV was written
+    before cached m4_trial features were attached, m11 can still use those
+    cached columns by hydrating them from the current trial table.
+    """
+    if "trial_id" not in joined_df.columns or "trial_id" not in trial_df.columns:
+        return joined_df, []
+
+    available = [feature for feature in features if feature in trial_df.columns]
+    needed = [
+        feature
+        for feature in available
+        if feature not in joined_df.columns or joined_df[feature].isna().any()
+    ]
+    if not needed:
+        return joined_df, []
+
+    out = joined_df.copy()
+    feature_df = trial_df[["trial_id", *needed]].drop_duplicates("trial_id")
+    merged = out.merge(feature_df, on="trial_id", how="left", suffixes=("", "__meg"))
+    hydrated: list[str] = []
+
+    for feature in needed:
+        if feature in out.columns:
+            source = f"{feature}__meg"
+            if source not in merged.columns:
+                continue
+            before_nonnull = int(merged[feature].notna().sum())
+            merged[feature] = merged[feature].combine_first(merged[source])
+            merged = merged.drop(columns=[source])
+            if int(merged[feature].notna().sum()) > before_nonnull:
+                hydrated.append(feature)
+        else:
+            if feature in merged.columns and merged[feature].notna().any():
+                hydrated.append(feature)
+
+    return merged, hydrated
+
+
 def partial_spearman(df: pd.DataFrame, feature: str, target: str, covars: list[str]) -> tuple[float, float]:
     """Approximate partial Spearman via rank-residualization."""
     ranked = df[[feature, target, *covars]].rank()
