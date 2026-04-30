@@ -67,7 +67,6 @@ fmri:
   container_runtime: ""
   container_binds:
     - "/scratch/jonathanwade:/scratch/jonathanwade"
-    - "/project/jonathanwade:/project/jonathanwade"
     - "/scratch/jonathanwade/templateflow:/opt/templateflow"
     - "/scratch/jonathanwade/MOUS/licenses:/scratch/jonathanwade/MOUS/licenses"
 

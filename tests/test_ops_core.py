@@ -13,6 +13,7 @@ from mous_pipeline.ops.actions import (
     compute_undownloaded_subjects,
     parse_sbatch_job_id,
 )
+from mous_pipeline.config import RuntimeOverrides
 from mous_pipeline.ops.models import OpsState, WorkflowPreset
 from mous_pipeline.ops.monitor import classify_failure
 from mous_pipeline.ops.state import default_presets, load_state, save_state
@@ -77,6 +78,56 @@ def test_default_presets_keep_command_keys_compatible() -> None:
     )
     assert "--include-m5" not in cmd
     assert "--dry-run" not in cmd
+
+
+def test_build_submit_cmd_applies_runtime_overrides_over_preset() -> None:
+    preset = WorkflowPreset(
+        name="full_submit",
+        description="",
+        mode="submit",
+        fetch_missing=False,
+        include_m5=False,
+        dry_run=False,
+    )
+    cmd = build_submit_cmd(
+        preset,
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="256G",
+        cpus_per_task="8",
+        overrides=RuntimeOverrides(fetch_missing=True, include_m5=True, dry_run=True),
+    )
+    assert "--fetch-missing" in cmd
+    assert "--include-m5" in cmd
+    assert "--dry-run" in cmd
+
+
+def test_state_migration_seeds_recent_configs_and_defaults(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        """
+{
+  "last_config": "configs/legacy.yaml",
+  "defaults": {"account": "acct"},
+  "workflow_presets": {},
+  "recent_jobs": []
+}
+""".strip()
+    )
+    loaded = load_state(path=state_path)
+    assert loaded.last_config == "configs/legacy.yaml"
+    assert loaded.recent_configs[0] == "configs/legacy.yaml"
+    assert isinstance(loaded.run_overrides_defaults, dict)
+
+
+def test_submit_flag_contract_with_palmetto_wrapper() -> None:
+    script = Path("scripts/palmetto_submit.sh").read_text()
+    expected_flags = ["--fetch-missing", "--include-m5", "--dry-run"]
+    for flag in expected_flags:
+        assert flag in script
 
 
 def test_build_recon_submit_cmd_preview() -> None:

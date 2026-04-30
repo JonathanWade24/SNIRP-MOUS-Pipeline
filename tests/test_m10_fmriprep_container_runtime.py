@@ -28,7 +28,7 @@ def test_run_fmriprep_prefers_apptainer_with_binds(monkeypatch, tmp_path: Path):
     container.parent.mkdir(parents=True)
     container.write_text("stub")
 
-    cfg = _base_cfg(tmp_path, container_binds=["/scratch:/scratch", "/project:/project"])
+    cfg = _base_cfg(tmp_path, container_binds=["/scratch:/scratch", "/scratch/jonathanwade:/scratch/jonathanwade"])
     calls: list[list[str]] = []
 
     def _fake_which(binary: str) -> str | None:
@@ -48,7 +48,7 @@ def test_run_fmriprep_prefers_apptainer_with_binds(monkeypatch, tmp_path: Path):
     assert cmd[0:2] == ["apptainer", "exec"]
     assert "-B" in cmd
     assert "/scratch:/scratch" in cmd
-    assert "/project:/project" in cmd
+    assert "/scratch/jonathanwade:/scratch/jonathanwade" in cmd
     assert "--fs-license-file" in cmd
     assert str(tmp_path / "licenses" / "license.txt") in cmd
 

@@ -45,6 +45,7 @@ class JobRecord:
 @dataclass
 class OpsState:
     last_config: str = "configs/palmetto_hpcnirc_fmri.yaml"
+    recent_configs: list[str] = field(default_factory=lambda: ["configs/palmetto_hpcnirc_fmri.yaml"])
     defaults: dict[str, str] = field(
         default_factory=lambda: {
             "account": "",
@@ -57,15 +58,18 @@ class OpsState:
     )
     subject_sets: dict[str, SubjectSet] = field(default_factory=dict)
     workflow_presets: dict[str, WorkflowPreset] = field(default_factory=dict)
+    run_overrides_defaults: dict[str, str] = field(default_factory=dict)
     recent_jobs: list[JobRecord] = field(default_factory=list)
     env_profile: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "last_config": self.last_config,
+            "recent_configs": self.recent_configs,
             "defaults": self.defaults,
             "subject_sets": {k: asdict(v) for k, v in self.subject_sets.items()},
             "workflow_presets": {k: asdict(v) for k, v in self.workflow_presets.items()},
+            "run_overrides_defaults": self.run_overrides_defaults,
             "recent_jobs": [asdict(j) for j in self.recent_jobs],
             "env_profile": self.env_profile,
         }

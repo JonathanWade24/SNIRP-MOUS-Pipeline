@@ -5,7 +5,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from ..config import load_config
+from ..config import RuntimeOverrides, load_config, resolve_runtime_overrides
 from ..m0_intake.repocli_rdr import build_repocli_ls_command, parse_repocli_ls_subjects, repocli_available
 from .models import JobRecord, WorkflowPreset
 
@@ -56,7 +56,14 @@ def build_submit_cmd(
     time_limit: str,
     mem: str,
     cpus_per_task: str,
+    overrides: RuntimeOverrides | None = None,
 ) -> list[str]:
+    preset_overrides = RuntimeOverrides(
+        fetch_missing=preset.fetch_missing,
+        include_m5=preset.include_m5,
+        dry_run=preset.dry_run,
+    )
+    resolved = resolve_runtime_overrides(preset_overrides, overrides)
     cmd = [
         "scripts/palmetto_submit.sh",
         "--config",
@@ -74,11 +81,11 @@ def build_submit_cmd(
         "--cpus-per-task",
         cpus_per_task,
     ]
-    if preset.fetch_missing:
+    if resolved.fetch_missing:
         cmd.append("--fetch-missing")
-    if preset.include_m5:
+    if resolved.include_m5:
         cmd.append("--include-m5")
-    if preset.dry_run:
+    if resolved.dry_run:
         cmd.append("--dry-run")
     cmd.extend(preset.extra_args)
     return cmd

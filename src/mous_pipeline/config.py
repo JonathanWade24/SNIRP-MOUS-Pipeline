@@ -104,6 +104,46 @@ class PipelineConfig:
     pipeline: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class RuntimeOverrides:
+    """Cross-surface runtime knobs with explicit precedence support."""
+
+    fetch_missing: bool | None = None
+    include_m5: bool | None = None
+    dry_run: bool | None = None
+    reuse_fmriprep: bool | None = None
+    allow_m11_cached_joined: bool | None = None
+
+
+def resolve_runtime_overrides(*layers: RuntimeOverrides | None) -> RuntimeOverrides:
+    """Resolve overrides left-to-right where later non-None values win."""
+
+    resolved = RuntimeOverrides()
+    for layer in layers:
+        if layer is None:
+            continue
+        if layer.fetch_missing is not None:
+            resolved.fetch_missing = layer.fetch_missing
+        if layer.include_m5 is not None:
+            resolved.include_m5 = layer.include_m5
+        if layer.dry_run is not None:
+            resolved.dry_run = layer.dry_run
+        if layer.reuse_fmriprep is not None:
+            resolved.reuse_fmriprep = layer.reuse_fmriprep
+        if layer.allow_m11_cached_joined is not None:
+            resolved.allow_m11_cached_joined = layer.allow_m11_cached_joined
+    return resolved
+
+
+def apply_runtime_overrides(cfg: PipelineConfig, overrides: RuntimeOverrides) -> None:
+    """Apply resolved runtime overrides into pipeline execution knobs."""
+
+    if overrides.reuse_fmriprep is not None:
+        cfg.pipeline["m10_reuse_fmriprep"] = bool(overrides.reuse_fmriprep)
+    if overrides.allow_m11_cached_joined is not None:
+        cfg.pipeline["m11_allow_cached_joined"] = bool(overrides.allow_m11_cached_joined)
+
+
 def _to_tuple_bands(bands: dict[str, list[float] | tuple[float, float]]) -> dict[str, tuple[float, float]]:
     out: dict[str, tuple[float, float]] = {}
     for key, vals in bands.items():
