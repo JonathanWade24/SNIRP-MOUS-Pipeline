@@ -45,7 +45,7 @@ from ..m8_reports.quarto_report import render_quarto_suite
 from ..m8_reports.dashboard import render_subject
 from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
 from ..m8_reports.export import export_subject_payload
-from ..m11_coupling.regress import MEG_COUPLING_FEATURES, run_coupling_models
+from ..m11_coupling.regress import MEG_COUPLING_FEATURES, hydrate_meg_features, run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
 from ..m12_wave_validation.simulate import simulate_two_dipoles
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
@@ -540,6 +540,24 @@ def _run_subject_body(
     else:
         result.skipped_stages.append("m4_trial")
 
+    if _m4trial_cache is not None:
+        prestim_beta_cached, n400m_cached, cached_trial_ids = _m4trial_cache
+        cache_trial_df = pd.DataFrame(
+            {
+                "trial_id": cached_trial_ids,
+                "prestim_beta": prestim_beta_cached,
+                "n400m": n400m_cached,
+            }
+        )
+        trial_df, hydrated_features = hydrate_meg_features(
+            trial_df,
+            cache_trial_df,
+            features=("prestim_beta", "n400m"),
+        )
+        if hydrated_features:
+            result.metrics["m4_trial_cache_hydrated_features"] = hydrated_features
+            result.metrics["m4_trial_cache_hydrated_rows"] = int(len(cache_trial_df))
+
     # ── rest data (only needed when m6a requires fresh computation) ───────────
     if not _m6a_hit and backend != "mne_bids_pipeline":
         rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
@@ -739,6 +757,14 @@ def _run_subject_body(
         try:
             if _m10_hit:
                 joined_df = pd.read_csv(_m10_joined_csv)
+                joined_df, hydrated_features = hydrate_meg_features(joined_df, trial_df)
+                if hydrated_features:
+                    result.metrics["m10_joined_hydrated_features"] = hydrated_features
+                    joined_df.to_csv(_m10_joined_csv, index=False)
+                    _append_live_log(
+                        live_log_path,
+                        f"[m10:cache] hydrated joined CSV with {','.join(hydrated_features)}",
+                    )
                 result.metrics["m10_cache_hit"] = True
                 result.metrics["m10_n_trials_joined"] = len(joined_df)
                 result.outputs.append(_m10_joined_csv)
@@ -846,6 +872,14 @@ def _run_subject_body(
             if _m10_joined_csv.exists():
                 try:
                     joined_df = pd.read_csv(_m10_joined_csv)
+                    joined_df, hydrated_features = hydrate_meg_features(joined_df, trial_df)
+                    if hydrated_features:
+                        result.metrics["m11_cached_joined_hydrated_features"] = hydrated_features
+                        joined_df.to_csv(_m10_joined_csv, index=False)
+                        _append_live_log(
+                            live_log_path,
+                            f"[m11:cache] hydrated joined CSV with {','.join(hydrated_features)}",
+                        )
                     result.metrics["m11_used_cached_joined"] = True
                     result.metrics["m11_cached_joined_path"] = str(_m10_joined_csv)
                 except Exception as exc:
