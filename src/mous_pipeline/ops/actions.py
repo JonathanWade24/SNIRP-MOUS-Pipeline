@@ -9,16 +9,52 @@ from ..config import RuntimeOverrides, load_config, resolve_runtime_overrides
 from ..m0_intake.repocli_rdr import build_repocli_ls_command, parse_repocli_ls_subjects, repocli_available
 from .models import JobRecord, WorkflowPreset
 
+MODE_TO_PRESET_DEFAULTS: dict[str, WorkflowPreset] = {
+    "full_pipeline": WorkflowPreset(
+        name="full_submit",
+        description="Multimodal driver with detached fMRI preprocessing",
+        mode="submit",
+    ),
+    "meg_only": WorkflowPreset(
+        name="meg_only",
+        description="MEG-focused submit mode",
+        mode="submit",
+    ),
+    "fmri_only": WorkflowPreset(
+        name="fmriprep_only_submit",
+        description="fMRI preprocessing only",
+        mode="submit",
+        extra_args=["--subjects"],
+    ),
+    "download_only": WorkflowPreset(
+        name="download_only",
+        description="Download only",
+        mode="download",
+        fetch_missing=True,
+    ),
+}
+
 
 def discover_subjects(config_path: str, data_root: str | None = None) -> list[str]:
     subjects: set[str] = set()
-    if data_root:
-        for p in Path(data_root).expanduser().glob("sub-*"):
+    cfg_path = Path(config_path).expanduser()
+    cfg_obj = None
+    if cfg_path.exists():
+        try:
+            cfg_obj = load_config(cfg_path)
+        except Exception:
+            cfg_obj = None
+    effective_data_root = data_root
+    if not effective_data_root and cfg_obj is not None:
+        effective_data_root = str(cfg_obj.data_root)
+    if effective_data_root:
+        for p in Path(effective_data_root).expanduser().glob("sub-*"):
             if p.is_dir():
                 subjects.add(p.name.removeprefix("sub-"))
-    cfg = Path(config_path).expanduser()
-    if cfg.exists():
-        txt = cfg.read_text()
+    if cfg_obj is not None:
+        subjects.update(s.removeprefix("sub-") for s in cfg_obj.subjects)
+    elif cfg_path.exists():
+        txt = cfg_path.read_text()
         for m in re.findall(r'^\s*-\s*"?([A-Za-z0-9_-]+)"?\s*$', txt, flags=re.M):
             if m.startswith("A") or m.startswith("sub-"):
                 subjects.add(m.removeprefix("sub-"))

@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from mous_pipeline.ops.actions import (
+    MODE_TO_PRESET_DEFAULTS,
     build_bem_submit_cmd,
     build_recon_submit_cmd,
     build_submit_cmd,
@@ -16,7 +17,7 @@ from mous_pipeline.ops.actions import (
 from mous_pipeline.config import RuntimeOverrides
 from mous_pipeline.ops.models import OpsState, WorkflowPreset
 from mous_pipeline.ops.monitor import classify_failure
-from mous_pipeline.ops.state import default_presets, load_state, save_state
+from mous_pipeline.ops.state import default_presets, load_state, preset_from_run_options, save_state
 
 
 def test_state_persistence_round_trip(tmp_path: Path) -> None:
@@ -80,6 +81,29 @@ def test_default_presets_keep_command_keys_compatible() -> None:
     assert "--dry-run" not in cmd
 
 
+def test_mode_to_preset_defaults_cover_all_modes() -> None:
+    assert {"full_pipeline", "meg_only", "fmri_only", "download_only"} <= set(MODE_TO_PRESET_DEFAULTS)
+    assert MODE_TO_PRESET_DEFAULTS["download_only"].fetch_missing is True
+    assert MODE_TO_PRESET_DEFAULTS["fmri_only"].extra_args == ["--subjects"]
+
+
+def test_preset_from_run_options_round_trip() -> None:
+    preset = preset_from_run_options(
+        name="my_saved",
+        mode="full_pipeline",
+        fetch_missing=True,
+        include_m5=True,
+        dry_run=False,
+        bids_convert=True,
+        bids_validate=False,
+    )
+    assert preset.name == "my_saved"
+    assert preset.mode == "full_pipeline"
+    assert preset.fetch_missing is True
+    assert preset.include_m5 is True
+    assert preset.bids_convert is True
+
+
 def test_build_submit_cmd_applies_runtime_overrides_over_preset() -> None:
     preset = WorkflowPreset(
         name="full_submit",
@@ -120,7 +144,7 @@ def test_state_migration_seeds_recent_configs_and_defaults(tmp_path: Path) -> No
     loaded = load_state(path=state_path)
     assert loaded.last_config == "configs/legacy.yaml"
     assert loaded.recent_configs[0] == "configs/legacy.yaml"
-    assert isinstance(loaded.run_overrides_defaults, dict)
+    assert isinstance(loaded.workflow_presets, dict)
 
 
 def test_submit_flag_contract_with_palmetto_wrapper() -> None:

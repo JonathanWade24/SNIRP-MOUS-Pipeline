@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from textual.containers import Container, Horizontal, ScrollableContainer, Verti
 from textual.screen import Screen
 from textual.widgets import (
     Button,
+    Checkbox,
     DataTable,
     Footer,
     Header,
@@ -24,6 +24,7 @@ from textual.widgets import (
 
 from ..config import RuntimeOverrides, load_config
 from .actions import (
+    MODE_TO_PRESET_DEFAULTS,
     build_bem_submit_cmd,
     build_recon_submit_cmd,
     compute_undownloaded_subjects,
@@ -33,14 +34,13 @@ from .actions import (
     build_download_cmd,
     build_submit_cmd,
     discover_subjects,
-    run_cmd,
     submit_detached_driver,
     submit_detached_wrap,
 )
 from .env import run_env_preflight
 from .models import SubjectSet, WorkflowPreset
 from .monitor import classify_failure, latest_log, recent_jobs, squeue_jobs, tail_text
-from .state import load_state, save_state
+from .state import load_state, preset_from_run_options, save_state
 
 
 # ── CSS ──────────────────────────────────────────────────────────────────────
@@ -129,11 +129,11 @@ Button { margin: 0 1; }
     height: 13;
     margin: 0 2;
 }
-#cfg-input, #data-root-input { width: 1fr; }
+#cfg-input { width: 1fr; }
 
-/* ── Preset ──────────────────────────────────────────── */
-#preset-select { margin: 1 2; }
-#preset-desc {
+/* ── Run Options ─────────────────────────────────────── */
+#mode-select { margin: 1 2; }
+#run-options-desc {
     border: round $primary-darken-2;
     background: $surface;
     height: 5;
@@ -228,37 +228,12 @@ def _latest_manifest_for_subject(derivatives_root: str, subject: str) -> Path | 
     return manifests[0] if manifests else None
 
 
-PRESET_DESCRIPTIONS: dict[str, str] = {
-    "download_only":          "Download subject data from RDR only. No processing.",
-    "bids_convert_validate":  "Run BIDS conversion + mne_bids validation. Good first step before submit.",
-    "dry_run_submit":         "Preview palmetto_submit.sh commands without running anything. Safe to use anytime.",
-    "full_submit":            "Multimodal driver: MEG trial metrics + MEG group summaries; submits fMRI preprocessing array; skips anatomical source models (m5).",
-    "m5_enabled_submit":      "Multimodal driver including anatomical source models (m5) before subject MEG outputs; also submits fMRI preprocessing array.",
-    "fmriprep_only_submit":   "Submit fMRI preprocessing track for selected subjects.",
+MODE_LABELS: dict[str, str] = {
+    "full_pipeline": "Full pipeline (MEG + fMRI preprocess)",
+    "meg_only": "MEG only",
+    "fmri_only": "fMRI preprocessing only",
+    "download_only": "Download only",
 }
-
-PRESET_LABELS: dict[str, str] = {
-    "download_only": "Download Only",
-    "bids_convert_validate": "BIDS Convert + Validate",
-    "dry_run_submit": "Dry Run (No Submit)",
-    "full_submit": "Multimodal Driver (MEG + fMRI preprocess)",
-    "m5_enabled_submit": "Multimodal Driver + Anatomical Source Models (m5)",
-    "fmriprep_only_submit": "fMRI Preprocessing Only",
-}
-
-
-def _preset_what_runs(name: str) -> str:
-    if name == "download_only":
-        return "Runs: RDR download only."
-    if name == "bids_convert_validate":
-        return "Runs: BIDS convert + validate only."
-    if name == "dry_run_submit":
-        return "Runs: command preview only; no jobs submitted."
-    if name == "fmriprep_only_submit":
-        return "Runs: fMRI preprocessing track. This submits detached fMRIPrep array jobs."
-    if name == "m5_enabled_submit":
-        return "Runs: Anatomical Source Models (m5), subject-level MEG outputs, MEG group summaries, and detached fMRI preprocessing."
-    return "Runs: subject-level MEG outputs, MEG group summaries, and detached fMRI preprocessing."
 
 FAILURE_HINTS: dict[str, str] = {
     "oom":         "[bold red]OUT OF MEMORY[/bold red]  →  Increase --mem (try 512G or 1T)",
@@ -502,11 +477,7 @@ class SubjectsScreen(Screen):
         yield Header(show_clock=True)
         yield Static("  New Run  ›  Step 2 / 4  ›  Select Subjects", classes="wizard-header")
         yield Static(f"[dim]Config:[/dim] [bold]{self.app.wizard_config}[/bold]")
-
-        with Horizontal(classes="frow"):
-            yield Label("Data root:", classes="flabel")
-            yield Input(value=self.app.state.defaults.get("data_root", "/scratch/jonathanwade/mous_data"),
-                        id="data-root-input", placeholder="/scratch/$USER/mous_data")
+        yield Static("[dim]Data root is read from the selected config file.[/dim]")
 
         with Horizontal(classes="frow"):
             yield Button("↺ Refresh List", id="btn-load", variant="default")
@@ -533,7 +504,7 @@ class SubjectsScreen(Screen):
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",          id="btn-back", variant="default")
-            yield Button("Next: Preset →",  id="btn-next", variant="primary")
+            yield Button("Next: Run Options →",  id="btn-next", variant="primary")
 
         yield Footer()
 
@@ -548,9 +519,8 @@ class SubjectsScreen(Screen):
         )
 
     def _load_subjects(self) -> None:
-        cfg       = self.app.wizard_config
-        data_root = self.query_one("#data-root-input", Input).value.strip()
-        subjects  = discover_subjects(cfg, data_root=data_root or None)
+        cfg = self.app.wizard_config
+        subjects = discover_subjects(cfg)
         sl = self.query_one("#subject-list", SelectionList)
         sl.clear_options()
         prev = set(self.app.wizard_subjects)
@@ -558,7 +528,7 @@ class SubjectsScreen(Screen):
             sl.add_option((f"sub-{s}", s, s in prev))
         self._local_subjects = subjects
         if not subjects:
-            self.notify("No subjects found — check config/data-root paths.", severity="warning")
+            self.notify("No subjects found — check config data_root and subjects.", severity="warning")
         self._refresh_undownloaded_box()
 
     def _refresh_undownloaded_box(self) -> None:
@@ -642,32 +612,39 @@ class SubjectsScreen(Screen):
             self.notify("Select at least one subject", severity="warning")
             return
         self.app.wizard_subjects = selected
-        self.app.push_screen(PresetScreen())
+        self.app.push_screen(RunOptionsScreen())
 
 
-# ── Step 2: Preset ────────────────────────────────────────────────────────────
+# ── Step 3: Run Options ───────────────────────────────────────────────────────
 
-class PresetScreen(Screen):
+class RunOptionsScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 3 / 4  ›  Choose Workflow", classes="wizard-header")
+        yield Static("  New Run  ›  Step 3 / 4  ›  Run Options", classes="wizard-header")
+
+        with Horizontal(classes="frow"):
+            yield Label("Mode:", classes="flabel")
+            mode_value = self.app.wizard_mode if self.app.wizard_mode in MODE_LABELS else "full_pipeline"
+            yield Select([(label, mode) for mode, label in MODE_LABELS.items()], value=mode_value, id="mode-select")
 
         with Horizontal(classes="frow"):
             yield Label("Preset:", classes="flabel")
             names = sorted(self.app.state.workflow_presets.keys())
-            cur   = self.app.wizard_preset_name if self.app.wizard_preset_name in names else names[0]
-            yield Select([(PRESET_LABELS.get(n, n), n) for n in names], value=cur, id="preset-select")
+            selected_name = self.app.wizard_saved_preset if self.app.wizard_saved_preset in names else (names[0] if names else "")
+            yield Select([(n, n) for n in names] or [("(none)", "")], value=selected_name, id="load-preset-select", allow_blank=True)
+            yield Button("Load Preset", id="btn-load-preset", variant="default")
+            yield Input(placeholder="new preset name", id="save-preset-name")
+            yield Button("Save Preset", id="btn-save-preset", variant="default")
 
-        yield Static(
-            PRESET_DESCRIPTIONS.get(self.app.wizard_preset_name, ""),
-            id="preset-desc",
-        )
-        yield Static(
-            "[dim]" + _preset_what_runs(self.app.wizard_preset_name) + "[/dim]",
-            id="preset-what-runs",
-        )
+        with Horizontal(classes="frow"):
+            yield Checkbox("Fetch missing subjects", value=self.app.wizard_flags.get("fetch_missing", False), id="flag-fetch")
+            yield Checkbox("Include source models (m5)", value=self.app.wizard_flags.get("include_m5", False), id="flag-m5")
+        with Horizontal(classes="frow"):
+            yield Checkbox("BIDS convert", value=self.app.wizard_flags.get("bids_convert", False), id="flag-bids-convert")
+            yield Checkbox("BIDS validate", value=self.app.wizard_flags.get("bids_validate", False), id="flag-bids-validate")
+            yield Checkbox("Dry run", value=self.app.wizard_flags.get("dry_run", False), id="flag-dry")
 
         yield Label("  Subjects selected for this run:", classes="section-title")
         subs = self.app.wizard_subjects
@@ -675,6 +652,8 @@ class PresetScreen(Screen):
             "  " + "  ·  ".join(f"sub-{s}" for s in subs) if subs else "[dim](none — go back and select subjects)[/dim]",
             id="subjects-summary",
         )
+        yield Static("", id="run-options-desc")
+        yield Static("", id="run-options-preview")
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",            id="btn-back", variant="default")
@@ -682,38 +661,150 @@ class PresetScreen(Screen):
 
         yield Footer()
 
-    @on(Select.Changed, "#preset-select")
-    def _on_changed(self, event: Select.Changed) -> None:
+    def on_mount(self) -> None:
+        self._sync_mode_defaults()
+        self._refresh_preview()
+
+    def _sync_mode_defaults(self) -> None:
+        mode = str(self.query_one("#mode-select", Select).value)
+        base = MODE_TO_PRESET_DEFAULTS.get(mode)
+        if base is None:
+            return
+        self.query_one("#flag-fetch", Checkbox).value = bool(base.fetch_missing)
+        self.query_one("#flag-m5", Checkbox).value = bool(base.include_m5)
+        self.query_one("#flag-dry", Checkbox).value = bool(base.dry_run)
+        self.query_one("#flag-bids-convert", Checkbox).value = bool(base.bids_convert)
+        self.query_one("#flag-bids-validate", Checkbox).value = bool(base.bids_validate)
+        self.query_one("#run-options-desc", Static).update(f"[dim]Mode default: {MODE_LABELS.get(mode, mode)}[/dim]")
+
+    def _mode_from_preset(self, preset: WorkflowPreset) -> str:
+        if preset.mode in MODE_LABELS:
+            return preset.mode
+        if preset.mode == "download":
+            return "download_only"
+        if preset.name == "fmriprep_only_submit":
+            return "fmri_only"
+        if preset.name == "m5_enabled_submit":
+            return "full_pipeline"
+        return "full_pipeline"
+
+    def _current_flags(self) -> dict[str, bool]:
+        return {
+            "fetch_missing": self.query_one("#flag-fetch", Checkbox).value,
+            "include_m5": self.query_one("#flag-m5", Checkbox).value,
+            "dry_run": self.query_one("#flag-dry", Checkbox).value,
+            "bids_convert": self.query_one("#flag-bids-convert", Checkbox).value,
+            "bids_validate": self.query_one("#flag-bids-validate", Checkbox).value,
+        }
+
+    def _refresh_preview(self) -> None:
+        flags = self._current_flags()
+        mode = str(self.query_one("#mode-select", Select).value)
+        defaults = self.app.state.defaults
+        base = MODE_TO_PRESET_DEFAULTS.get(mode, MODE_TO_PRESET_DEFAULTS["full_pipeline"])
+        preview_cmd = build_submit_cmd(
+            base,
+            config=self.app.wizard_config,
+            subjects=self.app.wizard_subjects or ["A2002"],
+            account=defaults.get("account", ""),
+            partition=defaults.get("partition", "hpcnirc"),
+            time_limit=defaults.get("time", "12:00:00"),
+            mem=defaults.get("mem", "256G"),
+            cpus_per_task=defaults.get("cpus_per_task", "8"),
+            overrides=RuntimeOverrides(
+                fetch_missing=flags["fetch_missing"],
+                include_m5=flags["include_m5"],
+                dry_run=flags["dry_run"],
+            ),
+        )
+        self.query_one("#run-options-preview", Static).update(
+            "[dim]Preview:[/dim] " + " ".join(preview_cmd)
+        )
+
+    def _preset_from_form(self, name: str) -> WorkflowPreset:
+        mode = str(self.query_one("#mode-select", Select).value)
+        flags = self._current_flags()
+        return preset_from_run_options(
+            name=name,
+            mode=mode,
+            fetch_missing=flags["fetch_missing"],
+            include_m5=flags["include_m5"],
+            dry_run=flags["dry_run"],
+            bids_convert=flags["bids_convert"],
+            bids_validate=flags["bids_validate"],
+        )
+
+    @on(Select.Changed, "#mode-select")
+    def _on_mode_changed(self, event: Select.Changed) -> None:
         if event.value is Select.BLANK:
             return
-        name = str(event.value)
-        self.app.wizard_preset_name = name
-        preset = self.app.state.workflow_presets.get(name)
-        desc = PRESET_DESCRIPTIONS.get(name, preset.description if preset else "")
-        self.query_one("#preset-desc", Static).update(desc)
-        self.query_one("#preset-what-runs", Static).update("[dim]" + _preset_what_runs(name) + "[/dim]")
+        self._sync_mode_defaults()
+        self._refresh_preview()
+
+    @on(Checkbox.Changed)
+    def _on_flags_changed(self, _: Checkbox.Changed) -> None:
+        self._refresh_preview()
+
+    @on(Button.Pressed, "#btn-load-preset")
+    def _on_load_preset(self, _) -> None:
+        val = self.query_one("#load-preset-select", Select).value
+        if val is Select.BLANK:
+            self.notify("Choose a preset to load", severity="warning")
+            return
+        preset_name = str(val)
+        preset = self.app.state.workflow_presets.get(preset_name)
+        if preset is None:
+            self.notify("Preset not found", severity="warning")
+            return
+        mode = self._mode_from_preset(preset)
+        self.query_one("#mode-select", Select).value = mode
+        self.query_one("#flag-fetch", Checkbox).value = bool(preset.fetch_missing)
+        self.query_one("#flag-m5", Checkbox).value = bool(preset.include_m5)
+        self.query_one("#flag-dry", Checkbox).value = bool(preset.dry_run)
+        self.query_one("#flag-bids-convert", Checkbox).value = bool(preset.bids_convert)
+        self.query_one("#flag-bids-validate", Checkbox).value = bool(preset.bids_validate)
+        self.app.wizard_saved_preset = preset_name
+        self._refresh_preview()
+        self.notify(f"Loaded preset '{preset_name}'")
+
+    @on(Button.Pressed, "#btn-save-preset")
+    def _on_save_preset(self, _) -> None:
+        name = self.query_one("#save-preset-name", Input).value.strip()
+        if not name:
+            self.notify("Enter a preset name first", severity="warning")
+            return
+        self.app.state.workflow_presets[name] = self._preset_from_form(name)
+        save_state(self.app.state)
+        selector = self.query_one("#load-preset-select", Select)
+        names = sorted(self.app.state.workflow_presets.keys())
+        selector.set_options([(n, n) for n in names])
+        selector.value = name
+        self.app.wizard_saved_preset = name
+        self.notify(f"Saved preset '{name}'")
 
     @on(Button.Pressed, "#btn-back")
     def action_back(self) -> None: self.app.pop_screen()
 
     @on(Button.Pressed, "#btn-next")
     def _on_next(self, _) -> None:
-        val = self.query_one("#preset-select", Select).value
-        if val is Select.BLANK:
-            self.notify("Choose a preset", severity="warning")
+        mode = self.query_one("#mode-select", Select).value
+        if mode is Select.BLANK:
+            self.notify("Choose a run mode", severity="warning")
             return
-        self.app.wizard_preset_name = str(val)
+        self.app.wizard_mode = str(mode)
+        self.app.wizard_flags = self._current_flags()
+        if not self.app.wizard_saved_preset:
+            self.app.wizard_saved_preset = ""
         self.app.push_screen(ResourcesScreen())
 
 
-# ── Step 3: Resources + Submit ────────────────────────────────────────────────
+# ── Step 4: Resources + Submit ────────────────────────────────────────────────
 
 class ResourcesScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         d = self.app.state.defaults
-        o = self.app.state.run_overrides_defaults
         yield Header(show_clock=True)
         yield Static("  New Run  ›  Step 4 / 4  ›  Resources & Submit", classes="wizard-header")
 
@@ -732,17 +823,10 @@ class ResourcesScreen(Screen):
             yield Input(value=d.get("cpus_per_task", "8"), id="cpus-input")
 
         yield Static(
-            f"[dim]Preset:[/dim] [bold]{PRESET_LABELS.get(self.app.wizard_preset_name, self.app.wizard_preset_name)}[/bold]  "
+            f"[dim]Mode:[/dim] [bold]{MODE_LABELS.get(self.app.wizard_mode, self.app.wizard_mode)}[/bold]  "
             f"[dim]Subjects:[/dim] [bold]{', '.join('sub-' + s for s in self.app.wizard_subjects)}[/bold]",
             id="run-summary",
         )
-        with Horizontal(classes="frow"):
-            yield Label("Fetch:", classes="flabel")
-            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("fetch_missing", "preset"), id="ov-fetch")
-            yield Label("m5:", classes="flabel")
-            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("include_m5", "preset"), id="ov-m5")
-            yield Label("Dry:", classes="flabel")
-            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("dry_run", "preset"), id="ov-dry")
 
         yield Static(
             "[dim]Submit launches a detached Multimodal Driver job (safe for SSH disconnects). "
@@ -753,7 +837,6 @@ class ResourcesScreen(Screen):
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",       id="btn-back",    variant="default")
             yield Button("Preview",       id="btn-preview", variant="default")
-            yield Button("🔍  Dry Run",   id="btn-dry",     variant="warning")
             yield Button("▶  Submit",     id="btn-submit",  variant="success")
 
         yield Footer()
@@ -767,13 +850,6 @@ class ResourcesScreen(Screen):
             cpus_per_task= self.query_one("#cpus-input",       Input).value.strip(),
         )
 
-    def _select_to_bool(self, value: str) -> bool | None:
-        if value == "yes":
-            return True
-        if value == "no":
-            return False
-        return None
-
     def _save_defaults(self, r: dict) -> None:
         self.app.state.defaults.update({
             "account":      r["account"],
@@ -782,27 +858,22 @@ class ResourcesScreen(Screen):
             "mem":          r["mem"],
             "cpus_per_task":r["cpus_per_task"],
         })
-        self.app.state.run_overrides_defaults = {
-            "fetch_missing": str(self.query_one("#ov-fetch", Select).value),
-            "include_m5": str(self.query_one("#ov-m5", Select).value),
-            "dry_run": str(self.query_one("#ov-dry", Select).value),
-        }
         save_state(self.app.state)
 
-    def _build(self, *, dry: bool = False) -> list[str]:
-        preset = deepcopy(
-            self.app.state.workflow_presets.get(
-                self.app.wizard_preset_name,
-                WorkflowPreset(name="full_submit", description="", mode="submit"),
-            )
+    def _build(self) -> list[str]:
+        default_preset = MODE_TO_PRESET_DEFAULTS.get(
+            self.app.wizard_mode,
+            MODE_TO_PRESET_DEFAULTS["full_pipeline"],
+        )
+        preset = self.app.state.workflow_presets.get(
+            self.app.wizard_saved_preset,
+            default_preset,
         )
         overrides = RuntimeOverrides(
-            fetch_missing=self._select_to_bool(str(self.query_one("#ov-fetch", Select).value)),
-            include_m5=self._select_to_bool(str(self.query_one("#ov-m5", Select).value)),
-            dry_run=self._select_to_bool(str(self.query_one("#ov-dry", Select).value)),
+            fetch_missing=self.app.wizard_flags.get("fetch_missing"),
+            include_m5=self.app.wizard_flags.get("include_m5"),
+            dry_run=self.app.wizard_flags.get("dry_run"),
         )
-        if dry:
-            overrides.dry_run = True
         r = self._collect()
         return build_submit_cmd(
             preset,
@@ -821,21 +892,6 @@ class ResourcesScreen(Screen):
         self.query_one("#cmd-preview", Static).update(
             "[bold]Command preview:[/bold]\n" + " ".join(cmd)
         )
-
-    @on(Button.Pressed, "#btn-dry")
-    def _on_dry(self, _) -> None:
-        r = self._collect()
-        self._save_defaults(r)
-        cmd = self._build(dry=True)
-        self.query_one("#cmd-preview", Static).update(
-            "[bold yellow]Dry-run:[/bold yellow]\n" + " ".join(cmd) + "\n\n[dim]Running…[/dim]"
-        )
-        proc = run_cmd(cmd, cwd=Path.cwd())
-        out = (proc.stdout or "") + (proc.stderr or "")
-        self.query_one("#cmd-preview", Static).update(
-            "[bold yellow]Dry-run output:[/bold yellow]\n" + out[-3000:]
-        )
-        self.notify("Dry run complete")
 
     @on(Button.Pressed, "#btn-submit")
     def _on_submit(self, _) -> None:
@@ -1415,7 +1471,15 @@ class OpsApp(App[None]):
         # Wizard state shared across wizard screens
         self.wizard_config:      str       = self.state.last_config
         self.wizard_subjects:    list[str] = []
-        self.wizard_preset_name: str       = "full_submit"
+        self.wizard_mode:        str       = "full_pipeline"
+        self.wizard_flags:       dict[str, bool] = {
+            "fetch_missing": False,
+            "include_m5": False,
+            "bids_convert": False,
+            "bids_validate": False,
+            "dry_run": False,
+        }
+        self.wizard_saved_preset: str = ""
 
     def on_mount(self) -> None:
         self.push_screen(DashboardScreen())

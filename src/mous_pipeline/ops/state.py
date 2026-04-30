@@ -6,6 +6,29 @@ from pathlib import Path
 from .models import JobRecord, OpsState, SubjectSet, WorkflowPreset
 
 
+def preset_from_run_options(
+    *,
+    name: str,
+    mode: str,
+    fetch_missing: bool,
+    include_m5: bool,
+    dry_run: bool,
+    bids_convert: bool,
+    bids_validate: bool,
+    description: str = "",
+) -> WorkflowPreset:
+    return WorkflowPreset(
+        name=name,
+        description=description or f"Saved run options for {mode}",
+        mode=mode,
+        fetch_missing=fetch_missing,
+        include_m5=include_m5,
+        dry_run=dry_run,
+        bids_convert=bids_convert,
+        bids_validate=bids_validate,
+    )
+
+
 def default_presets() -> dict[str, WorkflowPreset]:
     return {
         "download_only": WorkflowPreset(
@@ -67,16 +90,7 @@ def load_state(path: Path | None = None) -> OpsState:
         recent_configs=list(payload.get("recent_configs", [])),
         defaults=payload.get("defaults", OpsState().defaults),
         env_profile=payload.get("env_profile", {}),
-        run_overrides_defaults=payload.get("run_overrides_defaults", {}),
     )
-    # Migrate old bool-valued run override defaults to tri-state string values.
-    migrated: dict[str, str] = {}
-    for key, value in st.run_overrides_defaults.items():
-        if isinstance(value, bool):
-            migrated[key] = "yes" if value else "preset"
-        elif isinstance(value, str) and value in {"preset", "yes", "no"}:
-            migrated[key] = value
-    st.run_overrides_defaults = migrated
     if not st.recent_configs:
         st.recent_configs = [st.last_config]
     elif st.last_config and st.last_config not in st.recent_configs:
