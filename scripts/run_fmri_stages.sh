@@ -7,6 +7,10 @@ Run fMRI-dependent stages (m8,m10,m11,m12) per subject, then group aggregation.
 
 Usage:
   run_fmri_stages.sh --config <config.yaml> --subjects-file <path> --deriv-root <path> [--dry-run]
+
+Environment:
+  MOUS_R_MODULE  R module to load when Rscript is not already on PATH
+                 (default: r/4.5.0)
 EOF
 }
 
@@ -14,6 +18,7 @@ CONFIG=""
 SUBJECTS_FILE=""
 DERIV_ROOT=""
 DRY_RUN=0
+R_MODULE="${MOUS_R_MODULE:-r/4.5.0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,6 +66,50 @@ if ! command -v mous-pipeline >/dev/null 2>&1; then
   exit 1
 fi
 
+load_r_runtime() {
+  if command -v Rscript >/dev/null 2>&1; then
+    echo "[fmri-stages][r] Rscript already on PATH: $(command -v Rscript)"
+    return
+  fi
+
+  if ! command -v module >/dev/null 2>&1; then
+    for module_init in /etc/profile.d/modules.sh /usr/share/Modules/init/bash; do
+      if [[ -r "$module_init" ]]; then
+        # shellcheck source=/dev/null
+        source "$module_init"
+        break
+      fi
+    done
+  fi
+
+  if ! command -v module >/dev/null 2>&1; then
+    echo "[fmri-stages][error] Rscript is not on PATH and the module command is unavailable." >&2
+    echo "[fmri-stages][error] Load R before running or set MOUS_R_MODULE to an available Palmetto R module." >&2
+    exit 1
+  fi
+
+  echo "[fmri-stages][r] Loading R module: $R_MODULE"
+  if ! module load "$R_MODULE"; then
+    echo "[fmri-stages][error] Failed to load R module: $R_MODULE" >&2
+    echo "[fmri-stages][error] Set MOUS_R_MODULE to an available module, for example r/4.4.0 or r/4.5.0." >&2
+    exit 1
+  fi
+
+  if ! command -v Rscript >/dev/null 2>&1; then
+    echo "[fmri-stages][error] Loaded $R_MODULE, but Rscript is still not on PATH." >&2
+    exit 1
+  fi
+  echo "[fmri-stages][r] Rscript: $(command -v Rscript)"
+}
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[dry-run][fmri-stages][r] would load R module if needed: $R_MODULE"
+else
+  load_r_runtime
+  echo "[fmri-stages][r] Checking Quarto/R runtime"
+  mous-pipeline check-quarto-env
+fi
+
 run_subject_cmd() {
   local subject="$1"
   local -a cmd=(
@@ -71,6 +120,7 @@ run_subject_cmd() {
     --reuse-fmriprep
     --allow-m11-from-cached-joined
     --assume-upstream-done
+    --preflight-quarto-env
   )
   if [[ "$DRY_RUN" -eq 1 ]]; then
     cmd+=(--dry-run)

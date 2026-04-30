@@ -261,3 +261,68 @@ def test_run_fmri_stages_dry_run_includes_m8(tmp_path: Path):
 
     assert '--only "m8,m10,m11,m12"' not in proc.stdout
     assert "--only m8,m10,m11,m12" in proc.stdout
+    assert "--preflight-quarto-env" in proc.stdout
+
+
+def test_run_fmri_stages_loads_r_module_before_pipeline(tmp_path: Path):
+    data_root = tmp_path / "data"
+    derivatives_root = tmp_path / "derivatives"
+    cfg = tmp_path / "cfg.yaml"
+    _write_minimal_config(cfg, data_root=data_root, derivatives_root=derivatives_root)
+    subjects_file = tmp_path / "subjects.txt"
+    subjects_file.write_text("A2002\n")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_mous_pipeline(fake_bin)
+
+    fake_r_dir = tmp_path / "fake_r"
+    fake_r_dir.mkdir()
+    fake_rscript = fake_r_dir / "Rscript"
+    fake_rscript.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_rscript.chmod(fake_rscript.stat().st_mode | stat.S_IXUSR)
+
+    module_log = tmp_path / "module.log"
+    bash_env = tmp_path / "bash_env"
+    bash_env.write_text(
+        "\n".join(
+            [
+                "module() {",
+                '  echo "$*" >> "$MODULE_LOG"',
+                '  if [[ "$1" == "load" ]]; then',
+                '    export PATH="$FAKE_R_DIR:$PATH"',
+                "  fi",
+                "}",
+                "",
+            ]
+        )
+    )
+
+    env = _base_env(fake_bin)
+    env["BASH_ENV"] = str(bash_env)
+    env["FAKE_R_DIR"] = str(fake_r_dir)
+    env["MODULE_LOG"] = str(module_log)
+    env["PATH"] = f"{fake_bin}:/usr/bin:/bin"
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "scripts/run_fmri_stages.sh",
+            "--config",
+            str(cfg),
+            "--subjects-file",
+            str(subjects_file),
+            "--deriv-root",
+            str(derivatives_root),
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert module_log.read_text().strip() == "load r/4.5.0"
+    assert "[fmri-stages][r] Loading R module: r/4.5.0" in proc.stdout
+    assert "[fmri-stages][r] Rscript:" in proc.stdout
+    assert "--preflight-quarto-env" in proc.stdout
