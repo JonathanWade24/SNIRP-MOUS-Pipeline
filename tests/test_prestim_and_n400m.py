@@ -36,6 +36,28 @@ def test_prestim_beta_and_n400m_shapes(repo_root):
     n400m = n400m_amplitude(epochs, "TEST", cfg, meta)
     assert prestim.shape == (len(epochs),)
     assert n400m.shape == (len(epochs),)
+    npz = np.load(repo_root / "derivatives" / "test_tmp" / "TEST" / "m4_features" / "TEST_prestim_beta.npz")
+    assert "condition_diag_ks_p" in npz
+    assert "aim1_prestim_condition_t_map" in npz
+    assert npz["prestim_beta_by_channel"].shape[0] == len(epochs)
+    npz_n400 = np.load(repo_root / "derivatives" / "test_tmp" / "TEST" / "m4_features" / "TEST_n400m.npz")
+    assert int(npz_n400["n_channels_used"]) == len(epochs.ch_names)
+
+
+def test_n400m_accepts_topography_weights(repo_root):
+    epochs = _fake_epochs()
+    cfg = PipelineConfig(data_root=repo_root, derivatives_root=repo_root / "derivatives" / "test_tmp")
+    meta = pd.DataFrame(
+        {
+            "trial_id": np.arange(len(epochs)),
+            "condition": ["ZINNEN"] * (len(epochs) // 2) + ["WOORDEN"] * (len(epochs) // 2),
+            "block_id": [0] * len(epochs),
+            "pos_in_block": np.arange(len(epochs)),
+        }
+    )
+    weights = np.linspace(1.0, 2.0, len(epochs.ch_names))
+    n400m = n400m_amplitude(epochs, "TEST", cfg, meta, topography_weights=weights)
+    assert n400m.shape == (len(epochs),)
 
 
 def test_trial_meta_must_match_epoch_count(repo_root):

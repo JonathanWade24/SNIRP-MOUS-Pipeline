@@ -36,11 +36,17 @@ def test_run_coupling_models_full_meg_columns():
     out = run_coupling_models(df)
 
     assert out["features_used"] == list(MEG_COUPLING_FEATURES)
+    assert out["feature_roles"]["prestim_beta"] == "primary"
+    assert out["feature_roles"]["n400m"] == "exploratory"
     assert "zinnen_prestim_beta_vs_mtg" in out
     assert "woorden_dci_trial_vs_mtg" in out
+    assert "p_fdr_bh" in out["zinnen_prestim_beta_vs_mtg"]
+    assert "fdr_bh_condition_vs_mtg" in out
     assert "lme_like" in out
     assert "r2" in out["lme_like"]
     for key in ("p_prestim_beta", "p_n400m", "p_dci_trial"):
+        assert key in out["lme_like"]
+    for key in ("p_prestim_beta_fdr_bh", "p_n400m_fdr_bh", "p_dci_trial_fdr_bh"):
         assert key in out["lme_like"]
 
 

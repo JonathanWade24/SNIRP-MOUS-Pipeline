@@ -75,6 +75,8 @@ class FmriConfig:
     fs_license_file: str = ""
     container_runtime: str = ""
     container_binds: list[str] = field(default_factory=list)
+    onset_shift_s: float = 0.0
+    hrf_lag_sweep_s: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +85,7 @@ class WaveValidationConfig:
     n_trials: int = 60
     snr: float = 1.0
     random_state: int = 42
+    z_threshold: float = 1.645
 
 
 @dataclass
@@ -155,6 +158,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         fs_license_file=str(fmri_raw.get("fs_license_file", "")),
         container_runtime=str(fmri_raw.get("container_runtime", "")),
         container_binds=[str(p) for p in fmri_raw.get("container_binds", [])],
+        onset_shift_s=float(fmri_raw.get("onset_shift_s", 0.0)),
+        hrf_lag_sweep_s=[float(v) for v in fmri_raw.get("hrf_lag_sweep_s", [])],
     )
     wv_raw = raw.get("wave_validation", {})
     wave_validation = WaveValidationConfig(
@@ -162,6 +167,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         n_trials=int(wv_raw.get("n_trials", 60)),
         snr=float(wv_raw.get("snr", 1.0)),
         random_state=int(wv_raw.get("random_state", 42)),
+        z_threshold=float(wv_raw.get("z_threshold", 1.645)),
     )
 
     return PipelineConfig(

@@ -211,3 +211,20 @@ def test_trialwise_betas_masker_fit_uses_bold_image(monkeypatch):
 
     assert _SpyMasker.fit_args
     assert _SpyMasker.fit_args[0] == ("dummy_bold.nii.gz",)
+
+
+def test_trialwise_betas_applies_onset_shift(monkeypatch):
+    _SpyModel.fit_calls = []
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.FirstLevelModel", _SpyModel)
+    monkeypatch.setattr("mous_pipeline.m10_fmri.glm.NiftiLabelsMasker", _SpyMasker)
+    monkeypatch.setattr(
+        "mous_pipeline.m10_fmri.glm._atlas_and_label",
+        lambda *a, **k: ("dummy_atlas", ["L_TE1a"], "L_TE1a"),
+    )
+    events = pd.DataFrame({"onset": [0.0, 6.0], "duration": [6.0, 6.0]})
+
+    trialwise_betas("dummy_bold.nii.gz", events, tr=2.0, onset_shift_s=1.5)
+
+    assert _SpyModel.fit_calls
+    first_design = _SpyModel.fit_calls[0]["events"]
+    assert np.allclose(first_design["onset"].to_numpy(), np.array([1.5, 7.5]))

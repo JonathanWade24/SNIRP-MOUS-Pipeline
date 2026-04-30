@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from mous_pipeline.m7_stats.trialwise import lme_block_control
+from mous_pipeline.m7_stats.trialwise import add_first_trial_control_columns, lme_block_control
 
 
 def test_block_position_covariate_controls_confound():
@@ -17,3 +17,10 @@ def test_block_position_covariate_controls_confound():
     assert p_block is not None
     assert np.isfinite(p_block)
     assert "pos_in_block" in set(tidy["term"])
+
+
+def test_add_first_trial_control_columns():
+    df = pd.DataFrame({"pos_in_block": [1, 2, 1, 4]})
+    out = add_first_trial_control_columns(df)
+    assert list(out["is_first_in_block"]) == [1, 0, 1, 0]
+    assert list(out["is_subsequent_in_block"]) == [0, 1, 0, 1]

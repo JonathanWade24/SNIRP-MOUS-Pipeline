@@ -17,3 +17,5 @@ def test_two_dipole_null_z_is_finite():
     null_dci = np.abs(sim.mean(axis=(1, 2)))
     summary = confound_null_dci(real_dci, null_dci)
     assert np.isfinite(summary["z"])
+    assert "wave_detected" in summary
+    assert "z_threshold" in summary
