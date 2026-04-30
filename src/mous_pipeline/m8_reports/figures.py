@@ -34,3 +34,20 @@ def dci_timecourse(t, dci_a, dci_b=None, label_a="ZINNEN", label_b="WOORDEN"):
     ax.set_ylabel("Directional Consistency Index")
     ax.legend()
     return fig, ax
+
+
+def prestim_topography(ax, sensor_xy: np.ndarray, channel_power: np.ndarray, title: str = "Pre-stim topography"):
+    """Render a simple 2D sensor-space prestim power topography."""
+    sc = ax.scatter(
+        sensor_xy[:, 0],
+        sensor_xy[:, 1],
+        c=channel_power,
+        cmap="viridis",
+        s=28,
+        edgecolors="none",
+    )
+    ax.set_title(title)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_aspect("equal", adjustable="box")
+    return sc

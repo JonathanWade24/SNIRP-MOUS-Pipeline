@@ -64,9 +64,24 @@ def load_state(path: Path | None = None) -> OpsState:
     payload = json.loads(p.read_text())
     st = OpsState(
         last_config=payload.get("last_config", "configs/palmetto_hpcnirc_fmri.yaml"),
+        recent_configs=list(payload.get("recent_configs", [])),
         defaults=payload.get("defaults", OpsState().defaults),
         env_profile=payload.get("env_profile", {}),
+        run_overrides_defaults=payload.get("run_overrides_defaults", {}),
     )
+    # Migrate old bool-valued run override defaults to tri-state string values.
+    migrated: dict[str, str] = {}
+    for key, value in st.run_overrides_defaults.items():
+        if isinstance(value, bool):
+            migrated[key] = "yes" if value else "preset"
+        elif isinstance(value, str) and value in {"preset", "yes", "no"}:
+            migrated[key] = value
+    st.run_overrides_defaults = migrated
+    if not st.recent_configs:
+        st.recent_configs = [st.last_config]
+    elif st.last_config and st.last_config not in st.recent_configs:
+        st.recent_configs.insert(0, st.last_config)
+    st.recent_configs = st.recent_configs[:10]
     st.subject_sets = {
         k: SubjectSet(**v) for k, v in payload.get("subject_sets", {}).items()
     }

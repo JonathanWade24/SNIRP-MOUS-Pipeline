@@ -22,6 +22,7 @@ from textual.widgets import (
     Static,
 )
 
+from ..config import RuntimeOverrides, load_config
 from .actions import (
     build_bem_submit_cmd,
     build_recon_submit_cmd,
@@ -265,7 +266,7 @@ FAILURE_HINTS: dict[str, str] = {
     "validation":  "[bold yellow]BIDS VALIDATION[/bold yellow]  →  Run bids-convert, or set skip_bids_validation: true",
     "missing_file":"[bold yellow]MISSING FILE[/bold yellow]  →  Check data_root paths and repocli fetch",
     "container":   "[bold red]CONTAINER ERROR[/bold red]  →  Verify fmriprep_container path and apptainer bind mounts",
-    "permission":  "[bold red]PERMISSION DENIED[/bold red]  →  Check scratch/project directory permissions",
+    "permission":  "[bold red]PERMISSION DENIED[/bold red]  →  Check /scratch/jonathanwade directory permissions",
     "unknown":     "[dim]No pattern matched. Scan the log manually.[/dim]",
 }
 
@@ -378,7 +379,7 @@ class DashboardScreen(Screen):
                 status_str = j.status
             t.add_row(j.submitted_at[:16], j.job_id, j.job_name, subs, status_str)
 
-    def action_new_run(self)  -> None: self.app.push_screen(SubjectsScreen())
+    def action_new_run(self)  -> None: self.app.push_screen(ConfigPickerScreen())
     def action_prep_source(self) -> None: self.app.push_screen(PrepSourceScreen())
     def action_redownload(self) -> None: self.app.push_screen(RedownloadScreen())
     def action_run_results(self) -> None: self.app.push_screen(RunResultsScreen())
@@ -415,17 +416,92 @@ class DashboardScreen(Screen):
 
 # ── Step 1: Subjects ──────────────────────────────────────────────────────────
 
+class ConfigPickerScreen(Screen):
+    BINDINGS = [Binding("escape", "action_back", "Back")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("  New Run  ›  Step 1 / 4  ›  Choose Config", classes="wizard-header")
+        with Horizontal(classes="frow"):
+            yield Label("Recent:", classes="flabel")
+            yield Select([], id="config-recent-select", allow_blank=True)
+            yield Button("Use selected", id="btn-use-recent", variant="default")
+        with Horizontal(classes="frow"):
+            yield Label("Path:", classes="flabel")
+            yield Input(value=self.app.wizard_config, id="config-path-input", placeholder="configs/palmetto_hpcnirc_fmri.yaml")
+            yield Button("Validate", id="btn-validate-config", variant="default")
+        yield Static("[dim]Pick a recent config or enter a path, then validate.[/dim]", id="config-validation")
+        with Horizontal(classes="nav-bar"):
+            yield Button("← Back", id="btn-back", variant="default")
+            yield Button("Next: Subjects →", id="btn-next", variant="primary")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._populate_recent()
+
+    def _populate_recent(self) -> None:
+        options = [(p, p) for p in self.app.state.recent_configs]
+        self.query_one("#config-recent-select", Select).set_options(options or [("(none)", "")])
+
+    def _validate_path(self, raw_path: str) -> tuple[bool, str]:
+        p = Path(raw_path).expanduser()
+        if not p.is_absolute():
+            p = (Path.cwd() / p).resolve()
+        if not p.exists():
+            return False, f"Config not found: {p}"
+        try:
+            load_config(p)
+        except Exception as exc:
+            return False, f"Invalid config: {exc}"
+        return True, str(p)
+
+    @on(Button.Pressed, "#btn-use-recent")
+    def _on_use_recent(self, _) -> None:
+        val = self.query_one("#config-recent-select", Select).value
+        if val is Select.BLANK:
+            self.notify("Choose a recent config first", severity="warning")
+            return
+        self.query_one("#config-path-input", Input).value = str(val)
+
+    @on(Button.Pressed, "#btn-validate-config")
+    def _on_validate(self, _) -> None:
+        raw = self.query_one("#config-path-input", Input).value.strip()
+        ok, msg = self._validate_path(raw)
+        if ok:
+            self.query_one("#config-validation", Static).update(f"[green]Valid config:[/green] {msg}")
+            self.notify("Config validated")
+        else:
+            self.query_one("#config-validation", Static).update(f"[red]{msg}[/red]")
+            self.notify("Config validation failed", severity="error")
+
+    @on(Button.Pressed, "#btn-back")
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    @on(Button.Pressed, "#btn-next")
+    def _on_next(self, _) -> None:
+        raw = self.query_one("#config-path-input", Input).value.strip()
+        ok, msg = self._validate_path(raw)
+        if not ok:
+            self.query_one("#config-validation", Static).update(f"[red]{msg}[/red]")
+            self.notify("Set a valid config path first", severity="error")
+            return
+        selected = msg
+        self.app.wizard_config = selected
+        self.app.state.last_config = selected
+        recents = [selected] + [p for p in self.app.state.recent_configs if p != selected]
+        self.app.state.recent_configs = recents[:10]
+        save_state(self.app.state)
+        self.app.push_screen(SubjectsScreen())
+
+
 class SubjectsScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 1 / 3  ›  Select Subjects", classes="wizard-header")
-
-        with Horizontal(classes="frow"):
-            yield Label("Config:", classes="flabel")
-            yield Input(value=self.app.state.last_config, id="cfg-input",
-                        placeholder="configs/palmetto_hpcnirc_fmri.yaml")
+        yield Static("  New Run  ›  Step 2 / 4  ›  Select Subjects", classes="wizard-header")
+        yield Static(f"[dim]Config:[/dim] [bold]{self.app.wizard_config}[/bold]")
 
         with Horizontal(classes="frow"):
             yield Label("Data root:", classes="flabel")
@@ -472,7 +548,7 @@ class SubjectsScreen(Screen):
         )
 
     def _load_subjects(self) -> None:
-        cfg       = self.query_one("#cfg-input",       Input).value.strip()
+        cfg       = self.app.wizard_config
         data_root = self.query_one("#data-root-input", Input).value.strip()
         subjects  = discover_subjects(cfg, data_root=data_root or None)
         sl = self.query_one("#subject-list", SelectionList)
@@ -508,7 +584,7 @@ class SubjectsScreen(Screen):
 
     @on(Button.Pressed, "#btn-query-rdr")
     def _on_query_rdr(self, _) -> None:
-        cfg = self.query_one("#cfg-input", Input).value.strip()
+        cfg = self.app.wizard_config
         remote, err = discover_remote_subjects(cfg)
         self._remote_subjects = remote
         if err:
@@ -566,8 +642,6 @@ class SubjectsScreen(Screen):
             self.notify("Select at least one subject", severity="warning")
             return
         self.app.wizard_subjects = selected
-        self.app.wizard_config   = self.query_one("#cfg-input", Input).value.strip()
-        self.app.state.last_config = self.app.wizard_config
         self.app.push_screen(PresetScreen())
 
 
@@ -578,7 +652,7 @@ class PresetScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 2 / 3  ›  Choose Workflow", classes="wizard-header")
+        yield Static("  New Run  ›  Step 3 / 4  ›  Choose Workflow", classes="wizard-header")
 
         with Horizontal(classes="frow"):
             yield Label("Preset:", classes="flabel")
@@ -639,8 +713,9 @@ class ResourcesScreen(Screen):
 
     def compose(self) -> ComposeResult:
         d = self.app.state.defaults
+        o = self.app.state.run_overrides_defaults
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 3 / 3  ›  Resources & Submit", classes="wizard-header")
+        yield Static("  New Run  ›  Step 4 / 4  ›  Resources & Submit", classes="wizard-header")
 
         with Horizontal(classes="frow"):
             yield Label("Account:", classes="flabel")
@@ -661,6 +736,13 @@ class ResourcesScreen(Screen):
             f"[dim]Subjects:[/dim] [bold]{', '.join('sub-' + s for s in self.app.wizard_subjects)}[/bold]",
             id="run-summary",
         )
+        with Horizontal(classes="frow"):
+            yield Label("Fetch:", classes="flabel")
+            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("fetch_missing", "preset"), id="ov-fetch")
+            yield Label("m5:", classes="flabel")
+            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("include_m5", "preset"), id="ov-m5")
+            yield Label("Dry:", classes="flabel")
+            yield Select([("Preset", "preset"), ("Yes", "yes"), ("No", "no")], value=o.get("dry_run", "preset"), id="ov-dry")
 
         yield Static(
             "[dim]Submit launches a detached Multimodal Driver job (safe for SSH disconnects). "
@@ -685,6 +767,13 @@ class ResourcesScreen(Screen):
             cpus_per_task= self.query_one("#cpus-input",       Input).value.strip(),
         )
 
+    def _select_to_bool(self, value: str) -> bool | None:
+        if value == "yes":
+            return True
+        if value == "no":
+            return False
+        return None
+
     def _save_defaults(self, r: dict) -> None:
         self.app.state.defaults.update({
             "account":      r["account"],
@@ -693,6 +782,11 @@ class ResourcesScreen(Screen):
             "mem":          r["mem"],
             "cpus_per_task":r["cpus_per_task"],
         })
+        self.app.state.run_overrides_defaults = {
+            "fetch_missing": str(self.query_one("#ov-fetch", Select).value),
+            "include_m5": str(self.query_one("#ov-m5", Select).value),
+            "dry_run": str(self.query_one("#ov-dry", Select).value),
+        }
         save_state(self.app.state)
 
     def _build(self, *, dry: bool = False) -> list[str]:
@@ -702,13 +796,19 @@ class ResourcesScreen(Screen):
                 WorkflowPreset(name="full_submit", description="", mode="submit"),
             )
         )
+        overrides = RuntimeOverrides(
+            fetch_missing=self._select_to_bool(str(self.query_one("#ov-fetch", Select).value)),
+            include_m5=self._select_to_bool(str(self.query_one("#ov-m5", Select).value)),
+            dry_run=self._select_to_bool(str(self.query_one("#ov-dry", Select).value)),
+        )
         if dry:
-            preset.dry_run = True
+            overrides.dry_run = True
         r = self._collect()
         return build_submit_cmd(
             preset,
             config=self.app.wizard_config,
             subjects=self.app.wizard_subjects,
+            overrides=overrides,
             **r,
         )
 

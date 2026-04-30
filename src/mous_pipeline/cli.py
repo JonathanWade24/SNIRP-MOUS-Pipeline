@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 import pandas as pd
 
-from .config import load_config
+from .config import RuntimeOverrides, apply_runtime_overrides, load_config, resolve_runtime_overrides
 from .m0_intake.cyberduck import build_duck_download_command, duck_available, execute_duck_command
 from .m0_intake.bids_convert import convert_subject_to_bids
 from .m0_intake.repocli_rdr import (
@@ -529,6 +529,13 @@ def main() -> None:
     ops_run.add_argument("--time", default="12:00:00")
     ops_run.add_argument("--mem", default="256G")
     ops_run.add_argument("--cpus-per-task", default="8")
+    ops_run.add_argument("--fetch-missing", dest="fetch_missing", action="store_true")
+    ops_run.add_argument("--no-fetch-missing", dest="fetch_missing", action="store_false")
+    ops_run.add_argument("--include-m5", dest="include_m5", action="store_true")
+    ops_run.add_argument("--no-include-m5", dest="include_m5", action="store_false")
+    ops_run.add_argument("--dry-run", dest="ops_dry_run", action="store_true")
+    ops_run.add_argument("--no-dry-run", dest="ops_dry_run", action="store_false")
+    ops_run.set_defaults(fetch_missing=None, include_m5=None, ops_dry_run=None)
     ops_run.add_argument("--execute", action="store_true")
     ops_status = ops_sub.add_parser("status", help="Show persisted recent jobs")
     ops_status.add_argument("--limit", type=int, default=20)
@@ -580,10 +587,15 @@ def main() -> None:
             only = only | {"m10", "m11"}
         if args.include_waves_validation and only is not None:
             only = only | {"m12"}
-        if args.reuse_fmriprep:
-            cfg.pipeline["m10_reuse_fmriprep"] = True
-        if args.allow_m11_from_cached_joined:
-            cfg.pipeline["m11_allow_cached_joined"] = True
+        resolved_overrides = resolve_runtime_overrides(
+            RuntimeOverrides(),
+            RuntimeOverrides(
+                dry_run=True if args.dry_run else None,
+                reuse_fmriprep=True if args.reuse_fmriprep else None,
+                allow_m11_cached_joined=True if args.allow_m11_from_cached_joined else None,
+            ),
+        )
+        apply_runtime_overrides(cfg, resolved_overrides)
         selected = [s for s in STAGE_ORDER if (not only or s in only) and (not skip or s not in skip)]
         try:
             result = run_subject(
@@ -592,7 +604,7 @@ def main() -> None:
                 only=only,
                 skip=skip,
                 force=args.force,
-                dry_run=args.dry_run,
+                dry_run=bool(resolved_overrides.dry_run),
                 config_path=Path(args.config),
                 progress_event_callback=_make_cli_progress_callback(selected),
                 memory_profile=args.memory_profile,
@@ -937,6 +949,11 @@ def main() -> None:
                 time_limit=args.time,
                 mem=args.mem,
                 cpus_per_task=args.cpus_per_task,
+                overrides=RuntimeOverrides(
+                    fetch_missing=args.fetch_missing,
+                    include_m5=args.include_m5,
+                    dry_run=args.ops_dry_run,
+                ),
             )
             print("Command:")
             print(" ".join(shlex.quote(c) for c in cmd))
@@ -1007,6 +1024,8 @@ def main() -> None:
                     st.last_config = str(rel)
                 except ValueError:
                     st.last_config = str(p)
+                st.recent_configs = [st.last_config] + [c for c in st.recent_configs if c != st.last_config]
+                st.recent_configs = st.recent_configs[:10]
                 save_state(st)
                 print(f"Set ops default config to: {st.last_config}")
         elif args.ops_cmd == "prep-m5":

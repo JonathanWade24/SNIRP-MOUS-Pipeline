@@ -11,6 +11,7 @@ import time
 from typing import Callable
 
 import mne
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -41,7 +42,7 @@ from ..m6_waves.rotational import RotationalDetector
 from ..m7_stats.circular import rayleigh_p
 from ..m7_stats.permutation import perm_test_dci
 from ..m7_stats.trialwise import lme_block_control, logreg_condition_from_prestim, n400m_condition_t
-from ..m8_reports.quarto_report import render_quarto_suite
+from ..m8_reports.quarto_report import render_quarto
 from ..m8_reports.dashboard import render_subject
 from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
 from ..m8_reports.export import export_subject_payload
@@ -83,6 +84,60 @@ class RunResult:
         verdict = self.metrics.get("pilot_verdict", "unknown")
         skipped = f", skipped={','.join(self.skipped_stages)}" if self.skipped_stages else ""
         return f"Subject {self.subject}: status={self.status}, pilot verdict={verdict}{skipped}"
+
+
+def _prestim_diagnostics(prestim_beta: np.ndarray, y: np.ndarray) -> dict[str, float | int | bool]:
+    arr = np.asarray(prestim_beta, dtype=float)
+    labels = np.asarray(y, dtype=int)
+    finite = np.isfinite(arr)
+    finite_vals = arr[finite]
+    if finite_vals.size == 0:
+        return {
+            "n_total": int(arr.size),
+            "n_finite": 0,
+            "n_unique_finite": 0,
+            "std_finite": 0.0,
+            "is_degenerate": True,
+            "n_class0": int((labels == 0).sum()),
+            "n_class1": int((labels == 1).sum()),
+        }
+    std = float(np.std(finite_vals))
+    n_unique = int(np.unique(np.round(finite_vals, decimals=12)).size)
+    n0 = int((labels == 0).sum())
+    n1 = int((labels == 1).sum())
+    is_degenerate = (std <= 1e-12) or (n_unique <= 1) or (min(n0, n1) == 0)
+    return {
+        "n_total": int(arr.size),
+        "n_finite": int(finite_vals.size),
+        "n_unique_finite": n_unique,
+        "std_finite": std,
+        "min_finite": float(np.min(finite_vals)),
+        "max_finite": float(np.max(finite_vals)),
+        "is_degenerate": bool(is_degenerate),
+        "n_class0": n0,
+        "n_class1": n1,
+    }
+
+
+def _guarded_prestim_auc(prestim_beta: np.ndarray, y: np.ndarray) -> tuple[float, str | None, dict[str, float | int | bool]]:
+    diag = _prestim_diagnostics(prestim_beta, y)
+    if bool(diag.get("is_degenerate", False)):
+        return float("nan"), "degenerate_prestim_distribution_or_labels", diag
+    try:
+        return float(logreg_condition_from_prestim(prestim_beta, y)), None, diag
+    except Exception as exc:
+        return float("nan"), f"auc_error:{exc}", diag
+
+
+def _m12_z_threshold_decision(z_value: float, z_threshold: float) -> dict[str, float | bool]:
+    z = float(z_value)
+    threshold = float(z_threshold)
+    return {
+        "z_value": z,
+        "z_threshold": threshold,
+        "passes_z_threshold": bool(z >= threshold),
+        "z_margin": float(z - threshold),
+    }
 
 
 def _strict_stage_failures_enabled(cfg) -> bool:
@@ -397,6 +452,8 @@ def _run_subject_body(
     _m4_psd       = m4_out_dir / f"{subject}_beta_psd.npz"
     _m4t_prestim  = m4_out_dir / f"{subject}_prestim_beta.npz"
     _m4t_n400m    = m4_out_dir / f"{subject}_n400m.npz"
+    _m4t_prestim_dist = m4_out_dir / f"{subject}_prestim_distribution.npz"
+    _m4t_prestim_topo = m4_out_dir / f"{subject}_prestim_topography.npz"
     _m6a_paths: dict[str, Path] = {
         "dirs_z":    out_dir / f"sub-{subject}_dirs_zinnen.npy",
         "dirs_w":    out_dir / f"sub-{subject}_dirs_woorden.npy",
@@ -411,7 +468,15 @@ def _run_subject_body(
     # reloading raw/epoch data.
     _m6a_sensor_xy   = out_dir / f"sub-{subject}_sensor_xy.npy"
     _m6a_epoch_shape = out_dir / f"sub-{subject}_epoch_shape.npz"
-    out_files = list(_m6a_paths.values())
+    _m6a_alpha_paths: dict[str, Path] = {
+        "dirs_z": out_dir / f"sub-{subject}_alpha_dirs_zinnen.npy",
+        "dirs_w": out_dir / f"sub-{subject}_alpha_dirs_woorden.npy",
+        "dirs_r": out_dir / f"sub-{subject}_alpha_dirs_rest.npy",
+        "dci_z": out_dir / f"sub-{subject}_alpha_dci_zinnen.npy",
+        "dci_w": out_dir / f"sub-{subject}_alpha_dci_woorden.npy",
+        "dci_r": out_dir / f"sub-{subject}_alpha_dci_rest.npy",
+    }
+    out_files = list(_m6a_paths.values()) + list(_m6a_alpha_paths.values())
 
     # ── Per-stage output file paths (cont.) ──────────────────────────────────
     _m10_out_dir    = stage_output_dir(cfg, subject, "m10_fmri")
@@ -439,6 +504,7 @@ def _run_subject_body(
         and _m6a_sensor_xy.exists()
         and _m6a_epoch_shape.exists()
     )
+    _m6a_alpha_hit = not force and all(p.exists() for p in _m6a_alpha_paths.values())
 
     # m2/m3 (epochs) are only needed when at least one epoch-dependent stage
     # requires fresh computation.
@@ -459,7 +525,10 @@ def _run_subject_body(
     backend = getattr(cfg.preprocess, "backend", "inhouse")
     epochs = None
     epochs_rest = None
+    epochs_alpha = None
+    epochs_rest_alpha = None
     task_raw = None
+    task_raw_clean = None
     ica = None
     if _needs_epochs:
         if backend == "mne_bids_pipeline":
@@ -469,9 +538,9 @@ def _run_subject_body(
         else:
             task_raw = mne.io.read_raw_ctf(str(task_path), preload=True, system_clock="truncate", verbose="WARNING")
             task_raw.apply_gradient_compensation(3)
-            task_raw = apply_notch_and_resample(task_raw, cfg)
-            task_raw, ica = fit_and_apply(task_raw, cfg)
-            task_raw = apply_band(task_raw, 13, 30)
+            task_raw_clean = apply_notch_and_resample(task_raw, cfg)
+            task_raw_clean, ica = fit_and_apply(task_raw_clean, cfg)
+            task_raw = apply_band(task_raw_clean.copy(), 13, 30)
     else:
         result.metrics["m2_cache_skip"] = True
     result.stage_timings_s["m2"] = perf_counter() - t0
@@ -485,6 +554,9 @@ def _run_subject_body(
     if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
         epochs, trial_meta = make_epochs(task_raw, trials, cfg)
+        if task_raw_clean is not None:
+            task_raw_alpha = apply_band(task_raw_clean.copy(), 8, 13)
+            epochs_alpha, _ = make_epochs(task_raw_alpha, trials, cfg)
     result.stage_timings_s["m3"] = perf_counter() - t0
     _emit("done", "m3")
     if progress_callback and _stage_selected("m3", only, skip):
@@ -526,11 +598,75 @@ def _run_subject_body(
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta_aligned)
             n400m        = n400m_amplitude(epochs, subject, cfg, trial_meta_aligned)
         y = (trial_meta_aligned["condition"] == "ZINNEN").to_numpy(dtype=int)
-        result.metrics["aim1_prestim_auc"] = logreg_condition_from_prestim(prestim_beta, y)
+        auc_value, auc_guard_reason, prestim_diag = _guarded_prestim_auc(prestim_beta, y)
+        result.metrics["aim1_prestim_auc"] = auc_value
+        if auc_guard_reason is not None:
+            result.metrics["aim1_prestim_auc_guard_reason"] = auc_guard_reason
+        result.metrics["aim1_prestim_is_degenerate"] = bool(prestim_diag.get("is_degenerate", False))
+        result.metrics["aim1_prestim_std"] = float(prestim_diag.get("std_finite", 0.0))
+        result.metrics["aim1_prestim_n_unique"] = int(prestim_diag.get("n_unique_finite", 0))
+        result.metrics["aim1_prestim_n_finite"] = int(prestim_diag.get("n_finite", 0))
+        cond_arr = trial_meta_aligned["condition"].to_numpy(dtype=str)
+        z_vals = prestim_beta[cond_arr == "ZINNEN"]
+        w_vals = prestim_beta[cond_arr == "WOORDEN"]
+        result.metrics["prestim_beta_mean_zinnen"] = float(np.mean(z_vals)) if len(z_vals) else float("nan")
+        result.metrics["prestim_beta_mean_woorden"] = float(np.mean(w_vals)) if len(w_vals) else float("nan")
+        result.metrics["prestim_beta_std"] = float(np.std(prestim_beta, ddof=1)) if len(prestim_beta) > 1 else 0.0
+        if len(z_vals) > 1 and len(w_vals) > 1:
+            from scipy.stats import ks_2samp
+
+            result.metrics["prestim_beta_ks_p"] = float(ks_2samp(z_vals, w_vals).pvalue)
         result.metrics["aim1_n400m_zinnen_vs_woorden_t"] = n400m_condition_t(
             n400m,
             trial_meta_aligned["condition"].to_numpy(dtype=str),
         )
+        n400_npz = stage_output_dir(cfg, subject, "m4_features") / f"{subject}_n400m.npz"
+        if n400_npz.exists():
+            try:
+                n400_dat = np.load(n400_npz)
+                result.metrics["aim1_n400m_n_channels"] = int(n400_dat["n_channels_used"])
+            except Exception:
+                pass
+        if len(prestim_beta):
+            np.savez(
+                _m4t_prestim_dist,
+                prestim_beta=prestim_beta,
+                condition=cond_arr,
+                trial_id=trial_meta_aligned["trial_id"].to_numpy(dtype=int),
+            )
+            dist_png = _m4t_prestim_dist.with_suffix(".png")
+            try:
+                fig, ax = plt.subplots(figsize=(5, 3.5))
+                if len(z_vals):
+                    ax.hist(z_vals, bins=20, alpha=0.5, label="ZINNEN")
+                if len(w_vals):
+                    ax.hist(w_vals, bins=20, alpha=0.5, label="WOORDEN")
+                ax.set_title("Pre-stim beta distribution")
+                ax.set_xlabel("Beta power")
+                ax.set_ylabel("Count")
+                ax.legend(loc="best")
+                fig.tight_layout()
+                fig.savefig(dist_png, dpi=140)
+                plt.close(fig)
+                result.metrics["aim1_prestim_distribution_plot"] = str(dist_png)
+                result.outputs.append(dist_png)
+            except Exception as exc:
+                result.metrics["aim1_prestim_distribution_plot_error"] = str(exc)
+            result.metrics["aim1_prestim_distribution_artifact"] = str(_m4t_prestim_dist)
+            result.outputs.append(_m4t_prestim_dist)
+        if epochs is not None:
+            try:
+                prestim_crop = epochs.copy().crop(tmin=-0.8, tmax=0.0).get_data(picks="meg")
+                # Channel-wise prestim power topography for report-side plotting.
+                ch_power = np.nanmean(prestim_crop**2, axis=(0, 2))
+                sensor_xy_topo, _ = get_sensor_positions(epochs.info)
+                np.savez(_m4t_prestim_topo, sensor_xy=sensor_xy_topo, channel_power=ch_power)
+                result.metrics["aim1_prestim_topography_artifact"] = str(_m4t_prestim_topo)
+                result.outputs.append(_m4t_prestim_topo)
+            except Exception as exc:
+                result.metrics["aim1_prestim_topography_error"] = str(exc)
+        elif _m4t_prestim_topo.exists():
+            result.metrics["aim1_prestim_topography_artifact"] = str(_m4t_prestim_topo)
         trial_df["prestim_beta"] = prestim_beta
         trial_df["n400m"] = n400m
         result.stage_timings_s["m4_trial"] = perf_counter() - t0
@@ -539,6 +675,11 @@ def _run_subject_body(
             progress_callback("m4_trial")
     else:
         result.skipped_stages.append("m4_trial")
+
+    if _m4t_prestim_dist.exists():
+        result.metrics.setdefault("aim1_prestim_distribution_artifact", str(_m4t_prestim_dist))
+    if _m4t_prestim_topo.exists():
+        result.metrics.setdefault("aim1_prestim_topography_artifact", str(_m4t_prestim_topo))
 
     if _m4trial_cache is not None:
         prestim_beta_cached, n400m_cached, cached_trial_ids = _m4trial_cache
@@ -565,9 +706,11 @@ def _run_subject_body(
         rest_raw = apply_notch_and_resample(rest_raw, cfg)
         assert ica is not None
         ica.apply(rest_raw)
-        rest_raw = apply_band(rest_raw, 13, 30)
         epoch_len = cfg.epoching.tmax - cfg.epoching.tmin
-        epochs_rest = make_pseudo_epochs(rest_raw, epoch_len)
+        rest_beta = apply_band(rest_raw.copy(), 13, 30)
+        rest_alpha = apply_band(rest_raw.copy(), 8, 13)
+        epochs_rest = make_pseudo_epochs(rest_beta, epoch_len)
+        epochs_rest_alpha = make_pseudo_epochs(rest_alpha, epoch_len)
 
     # ── m6a: phase-gradient waves + DCI ───────────────────────────────────────
     # Load from cache whenever it exists (regardless of whether m6a is selected),
@@ -584,6 +727,9 @@ def _run_subject_body(
     sensor_xy = None
     meg_picks: list[int] = []
     _m6a_data_available = False
+    _m6a_alpha_available = False
+    alpha_dirs_z = alpha_dirs_w = alpha_dirs_r = np.array([])
+    alpha_dci_z = alpha_dci_w = alpha_dci_r = np.array([])
     if _m6a_hit:
         result.metrics["m6a_cache_hit"] = True
         dirs_z    = np.load(_m6a_paths["dirs_z"])
@@ -596,6 +742,14 @@ def _run_subject_body(
         sliding_t = np.load(_m6a_paths["sliding_t"])
         sensor_xy = np.load(_m6a_sensor_xy)
         _m6a_data_available = True
+        if _m6a_alpha_hit:
+            alpha_dirs_z = np.load(_m6a_alpha_paths["dirs_z"])
+            alpha_dirs_w = np.load(_m6a_alpha_paths["dirs_w"])
+            alpha_dirs_r = np.load(_m6a_alpha_paths["dirs_r"])
+            alpha_dci_z = np.load(_m6a_alpha_paths["dci_z"])
+            alpha_dci_w = np.load(_m6a_alpha_paths["dci_w"])
+            alpha_dci_r = np.load(_m6a_alpha_paths["dci_r"])
+            _m6a_alpha_available = True
     elif _stage_selected("m6a", only, skip):
         assert epochs is not None and epochs_rest is not None
         sensor_xy, meg_picks = get_sensor_positions(epochs.info)
@@ -610,6 +764,11 @@ def _run_subject_body(
             step=5,
         )
         _m6a_data_available = True
+        if epochs_alpha is not None and epochs_rest_alpha is not None:
+            alpha_dirs_z, alpha_dci_z = epochs_to_directions(epochs_alpha["ZINNEN"], sensor_xy, meg_picks)
+            alpha_dirs_w, alpha_dci_w = epochs_to_directions(epochs_alpha["WOORDEN"], sensor_xy, meg_picks)
+            alpha_dirs_r, alpha_dci_r = epochs_to_directions(epochs_rest_alpha, sensor_xy, meg_picks)
+            _m6a_alpha_available = True
     else:
         # m6a not selected and no cache: skip gracefully; m12 will also be skipped.
         result.metrics["m6a_skipped_reason"] = "not selected and no prior cache available"
@@ -630,6 +789,12 @@ def _run_subject_body(
             n_w = len(dci_w)
             trial_df.loc[trial_df["condition"] == "ZINNEN", "dci_trial"] = dci_z[:n_z]
             trial_df.loc[trial_df["condition"] == "WOORDEN", "dci_trial"] = dci_w[:n_w]
+    if _m6a_alpha_available:
+        result.metrics["alpha_dci_zinnen"] = float(np.mean(alpha_dci_z))
+        result.metrics["alpha_dci_woorden"] = float(np.mean(alpha_dci_w))
+        result.metrics["alpha_dci_rest"] = float(np.mean(alpha_dci_r))
+    else:
+        result.metrics["alpha_dci_status"] = "not_available"
 
     if _stage_selected("m5", only, skip):
         _emit("start", "m5")
@@ -730,11 +895,45 @@ def _run_subject_body(
     result.metrics["dci_zinnen_pooled"] = directional_consistency_index(dirs_z)
     result.metrics["dci_woorden_pooled"] = directional_consistency_index(dirs_w)
     result.metrics["dci_rest_pooled"] = directional_consistency_index(dirs_r)
+    if _m6a_alpha_available:
+        _, p_alpha_sz = perm_test_dci(alpha_dci_z, alpha_dci_r)
+        _, p_alpha_wr = perm_test_dci(alpha_dci_w, alpha_dci_r)
+        _, p_alpha_zw = perm_test_dci(alpha_dci_z, alpha_dci_w)
+        result.metrics["alpha_p_task_vs_rest"] = p_alpha_sz
+        result.metrics["alpha_p_woorden_vs_rest"] = p_alpha_wr
+        result.metrics["alpha_p_zinnen_vs_woorden"] = p_alpha_zw
+        result.metrics["alpha_p_rayleigh_zinnen"] = rayleigh_p(alpha_dirs_z)
+        result.metrics["alpha_p_rayleigh_woorden"] = rayleigh_p(alpha_dirs_w)
+        result.metrics["alpha_dci_zinnen_pooled"] = directional_consistency_index(alpha_dirs_z)
+        result.metrics["alpha_dci_woorden_pooled"] = directional_consistency_index(alpha_dirs_w)
+        result.metrics["alpha_dci_rest_pooled"] = directional_consistency_index(alpha_dirs_r)
     if {"dci_trial", "pos_in_block"}.issubset(trial_df.columns):
         model_df = trial_df.dropna(subset=["dci_trial", "pos_in_block"]).copy()
         if not model_df.empty:
+            model_df["first_trial"] = (model_df["pos_in_block"] == 1).astype(int)
             p_block, _ = lme_block_control(model_df, "dci_trial ~ C(condition) + pos_in_block")
             result.metrics["aim1_dci_block_effect_p"] = p_block
+            p_block_first, _ = lme_block_control(
+                model_df,
+                "dci_trial ~ C(condition) + pos_in_block + first_trial",
+                term="first_trial",
+            )
+            result.metrics["aim1_dci_first_trial_effect_p"] = p_block_first
+    if {"prestim_beta", "pos_in_block"}.issubset(trial_df.columns):
+        prestim_model_df = trial_df.dropna(subset=["prestim_beta", "pos_in_block"]).copy()
+        if not prestim_model_df.empty:
+            prestim_model_df["first_trial"] = (prestim_model_df["pos_in_block"] == 1).astype(int)
+            p_prestim_block, _ = lme_block_control(
+                prestim_model_df,
+                "prestim_beta ~ C(condition) + pos_in_block",
+            )
+            result.metrics["aim1_prestim_block_effect_p"] = p_prestim_block
+            p_prestim_first, _ = lme_block_control(
+                prestim_model_df,
+                "prestim_beta ~ C(condition) + pos_in_block + first_trial",
+                term="first_trial",
+            )
+            result.metrics["aim1_prestim_first_trial_effect_p"] = p_prestim_first
     result.stage_timings_s["m7"] = perf_counter() - t0
     _emit("done", "m7")
     if progress_callback and _stage_selected("m7", only, skip):
@@ -751,9 +950,12 @@ def _run_subject_body(
         progress_callback("m9")
 
     joined_df: pd.DataFrame | None = None
+    lag_model_inputs: dict[str, pd.DataFrame] = {}
     if _stage_selected("m10", only, skip):
         _emit("start", "m10")
         t0 = perf_counter()
+        bold_path = None
+        fmri_cfg = getattr(cfg, "fmri", None)
         try:
             if _m10_hit:
                 joined_df = pd.read_csv(_m10_joined_csv)
@@ -770,7 +972,6 @@ def _run_subject_body(
                 result.outputs.append(_m10_joined_csv)
                 _append_live_log(live_log_path, f"[m10:cache] reusing {_m10_joined_csv}")
             else:
-                fmri_cfg = getattr(cfg, "fmri", None)
                 if fmri_cfg:
                     from ..m10_fmri.glm import trialwise_betas
                     from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
@@ -816,6 +1017,7 @@ def _run_subject_body(
                             atlas=fmri_cfg.atlas,
                             roi=fmri_cfg.roi,
                             n_jobs=m10_n_jobs,
+                            onset_shift_s=float(getattr(fmri_cfg, "onset_shift_s", 0.0)),
                         )
                         joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
                         result.metrics["m10_n_trials_joined"] = int(len(joined_df))
@@ -824,6 +1026,38 @@ def _run_subject_body(
                         result.outputs.append(_m10_joined_csv)
                 else:
                     result.metrics["m10_skipped_reason"] = "fmri configuration missing"
+
+            lag_sweep_cfg = getattr(fmri_cfg, "hrf_lag_sweep_s", [])
+            lag_sweep_vals = [float(v) for v in lag_sweep_cfg] if isinstance(lag_sweep_cfg, list) else []
+            if (
+                lag_sweep_vals
+                and fmri_cfg is not None
+                and joined_df is not None
+                and bold_path is not None
+                and "trial_id" in trial_df.columns
+            ):
+                from ..m10_fmri.glm import trialwise_betas
+
+                lag_tables: dict[str, str] = {}
+                for lag_s in lag_sweep_vals:
+                    lag_beta_tbl = trialwise_betas(
+                        str(bold_path),
+                        trial_df,
+                        fmri_cfg.tr,
+                        atlas=fmri_cfg.atlas,
+                        roi=fmri_cfg.roi,
+                        n_jobs=m10_n_jobs,
+                        onset_shift_s=lag_s,
+                    )
+                    lag_joined = trial_df.merge(lag_beta_tbl, on="trial_id", how="inner")
+                    lag_csv = _m10_out_dir / f"{subject}_trials_joined_shift_{lag_s:+.3f}s.csv"
+                    lag_joined.to_csv(lag_csv, index=False)
+                    lag_tables[f"{lag_s:+.3f}s"] = str(lag_csv)
+                    lag_model_inputs[f"{lag_s:+.3f}s"] = lag_joined
+                    result.outputs.append(lag_csv)
+                result.metrics["m10_hrf_lag_sweep_tables"] = lag_tables
+                result.metrics["m10_hrf_lag_sweep_s"] = lag_sweep_vals
+                result.metrics["m11_hrf_lag_sweep_ready"] = list(lag_model_inputs.keys())
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
             if not strict_stage_failures:
@@ -896,6 +1130,25 @@ def _run_subject_body(
                     coupling = run_coupling_models(joined_df)
                     result.metrics["m11_coupling"] = coupling
                     result.metrics["m11_trials_rows"] = joined_df.to_dict(orient="records")
+                    if lag_model_inputs:
+                        lag_coupling: dict[str, dict] = {}
+                        for lag_label, lag_df in lag_model_inputs.items():
+                            if lag_df is not None and not lag_df.empty:
+                                lag_coupling[lag_label] = run_coupling_models(lag_df)
+                        if lag_coupling:
+                            result.metrics["m11_coupling_hrf_lag_sweep"] = lag_coupling
+                            best_lag = None
+                            best_abs_r = -1.0
+                            for lag_label, lag_metrics in lag_coupling.items():
+                                for cond_key in ("zinnen_prestim_beta_vs_mtg", "woorden_prestim_beta_vs_mtg"):
+                                    row = lag_metrics.get(cond_key)
+                                    if isinstance(row, dict):
+                                        r_val = abs(float(row.get("r", 0.0)))
+                                        if np.isfinite(r_val) and r_val > best_abs_r:
+                                            best_abs_r = r_val
+                                            best_lag = lag_label
+                            if best_lag is not None:
+                                result.metrics["m10_best_hrf_lag_s"] = best_lag
                 except Exception as exc:
                     result.metrics["m11_error"] = str(exc)
                     if not strict_stage_failures:
@@ -959,9 +1212,23 @@ def _run_subject_body(
                     random_state=int(getattr(wv, "random_state", 42)),
                 )
                 _, null_dci = epochs_to_directions(_sim_source, _sensor_xy_m12, data_override=sim_data)
-                null_summary = confound_null_dci(dci_z, null_dci)
+                null_summary = confound_null_dci(
+                    dci_z,
+                    null_dci,
+                    z_threshold=float(getattr(wv, "z_threshold", 1.645)),
+                )
+                decision = _m12_z_threshold_decision(
+                    float(null_summary.get("z", 0.0)),
+                    float(null_summary.get("z_threshold", getattr(wv, "z_threshold", 1.645))),
+                )
                 result.metrics["aim3_two_dipole_z"] = null_summary["z"]
                 result.metrics["m12_null_summary"] = null_summary
+                result.metrics["aim3_two_dipole_z_threshold"] = decision["z_threshold"]
+                result.metrics["aim3_two_dipole_passes_threshold"] = decision["passes_z_threshold"]
+                result.metrics["aim3_two_dipole_z_margin"] = decision["z_margin"]
+                result.metrics["aim3_wave_detected"] = bool(decision["passes_z_threshold"])
+                result.metrics["aim3_z_threshold"] = float(decision["z_threshold"])
+                result.metrics["m12_decision"] = decision
                 m12_out = stage_output_dir(cfg, subject, "m12_wave_validation")
                 np.save(m12_out / f"sub-{subject}_null_dci.npy", null_dci)
                 result.outputs.append(m12_out / f"sub-{subject}_null_dci.npy")
@@ -991,6 +1258,13 @@ def _run_subject_body(
             meg_data = epochs["ZINNEN"].get_data(picks="meg")
             np.savez(_m6a_epoch_shape, n_ch=meg_data.shape[1], n_t=meg_data.shape[2],
                      sfreq=epochs.info["sfreq"])
+    if not _m6a_alpha_hit and _m6a_alpha_available:
+        np.save(_m6a_alpha_paths["dirs_z"], alpha_dirs_z)
+        np.save(_m6a_alpha_paths["dirs_w"], alpha_dirs_w)
+        np.save(_m6a_alpha_paths["dirs_r"], alpha_dirs_r)
+        np.save(_m6a_alpha_paths["dci_z"], alpha_dci_z)
+        np.save(_m6a_alpha_paths["dci_w"], alpha_dci_w)
+        np.save(_m6a_alpha_paths["dci_r"], alpha_dci_r)
     result.outputs.extend(out_files)
 
     if _stage_selected("m8", only, skip):
@@ -1036,7 +1310,8 @@ def _run_subject_body(
         _emit("done", "m8")
         result.outputs.append(report_path)
         result.outputs.append(export_dir)
-        for quarto_path in render_quarto_suite(subject, cfg):
+        quarto_path = render_quarto(subject, cfg)
+        if quarto_path is not None:
             result.outputs.append(quarto_path)
         if progress_callback:
             progress_callback("m8")

@@ -15,7 +15,7 @@ export MOUS_FREESURFER_MODULE="freesurfer/7.4.1"
 
 # Optional: set location for venv and container images.
 export MOUS_VENV_PATH="$HOME/.venvs/mous-palmetto"
-export MOUS_CONTAINER_DIR="/project/$USER/containers"
+export MOUS_CONTAINER_DIR="/scratch/jonathanwade/containers"
 export MOUS_PULL_FMRIPREP=1
 
 bash scripts/palmetto_setup.sh

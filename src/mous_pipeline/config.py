@@ -75,6 +75,8 @@ class FmriConfig:
     fs_license_file: str = ""
     container_runtime: str = ""
     container_binds: list[str] = field(default_factory=list)
+    onset_shift_s: float = 0.0
+    hrf_lag_sweep_s: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +85,7 @@ class WaveValidationConfig:
     n_trials: int = 60
     snr: float = 1.0
     random_state: int = 42
+    z_threshold: float = 1.645
 
 
 @dataclass
@@ -99,6 +102,46 @@ class PipelineConfig:
     epoching: EpochingConfig = field(default_factory=EpochingConfig)
     features: FeatureConfig = field(default_factory=FeatureConfig)
     pipeline: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RuntimeOverrides:
+    """Cross-surface runtime knobs with explicit precedence support."""
+
+    fetch_missing: bool | None = None
+    include_m5: bool | None = None
+    dry_run: bool | None = None
+    reuse_fmriprep: bool | None = None
+    allow_m11_cached_joined: bool | None = None
+
+
+def resolve_runtime_overrides(*layers: RuntimeOverrides | None) -> RuntimeOverrides:
+    """Resolve overrides left-to-right where later non-None values win."""
+
+    resolved = RuntimeOverrides()
+    for layer in layers:
+        if layer is None:
+            continue
+        if layer.fetch_missing is not None:
+            resolved.fetch_missing = layer.fetch_missing
+        if layer.include_m5 is not None:
+            resolved.include_m5 = layer.include_m5
+        if layer.dry_run is not None:
+            resolved.dry_run = layer.dry_run
+        if layer.reuse_fmriprep is not None:
+            resolved.reuse_fmriprep = layer.reuse_fmriprep
+        if layer.allow_m11_cached_joined is not None:
+            resolved.allow_m11_cached_joined = layer.allow_m11_cached_joined
+    return resolved
+
+
+def apply_runtime_overrides(cfg: PipelineConfig, overrides: RuntimeOverrides) -> None:
+    """Apply resolved runtime overrides into pipeline execution knobs."""
+
+    if overrides.reuse_fmriprep is not None:
+        cfg.pipeline["m10_reuse_fmriprep"] = bool(overrides.reuse_fmriprep)
+    if overrides.allow_m11_cached_joined is not None:
+        cfg.pipeline["m11_allow_cached_joined"] = bool(overrides.allow_m11_cached_joined)
 
 
 def _to_tuple_bands(bands: dict[str, list[float] | tuple[float, float]]) -> dict[str, tuple[float, float]]:
@@ -155,6 +198,8 @@ def load_config(path: str | Path) -> PipelineConfig:
         fs_license_file=str(fmri_raw.get("fs_license_file", "")),
         container_runtime=str(fmri_raw.get("container_runtime", "")),
         container_binds=[str(p) for p in fmri_raw.get("container_binds", [])],
+        onset_shift_s=float(fmri_raw.get("onset_shift_s", 0.0)),
+        hrf_lag_sweep_s=[float(v) for v in fmri_raw.get("hrf_lag_sweep_s", [])],
     )
     wv_raw = raw.get("wave_validation", {})
     wave_validation = WaveValidationConfig(
@@ -162,6 +207,7 @@ def load_config(path: str | Path) -> PipelineConfig:
         n_trials=int(wv_raw.get("n_trials", 60)),
         snr=float(wv_raw.get("snr", 1.0)),
         random_state=int(wv_raw.get("random_state", 42)),
+        z_threshold=float(wv_raw.get("z_threshold", 1.645)),
     )
 
     return PipelineConfig(

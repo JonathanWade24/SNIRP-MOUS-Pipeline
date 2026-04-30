@@ -11,6 +11,15 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 
+def add_first_trial_control_columns(df: pd.DataFrame, *, pos_col: str = "pos_in_block") -> pd.DataFrame:
+    """Return a copy with first-trial vs subsequent-trial control columns."""
+    out = df.copy()
+    pos = out[pos_col].to_numpy()
+    out["is_first_in_block"] = (pos == 1).astype(int)
+    out["is_subsequent_in_block"] = (pos > 1).astype(int)
+    return out
+
+
 def logreg_condition_from_prestim(x: np.ndarray, y: np.ndarray) -> float:
     """Cross-validated AUC for condition decoding from one feature."""
     model = LogisticRegression(max_iter=500, solver="lbfgs")
@@ -27,9 +36,14 @@ def n400m_condition_t(n400m: np.ndarray, condition: np.ndarray) -> float:
     return float(stat.statistic)
 
 
-def lme_block_control(df: pd.DataFrame, formula: str) -> tuple[float | None, pd.DataFrame]:
+def lme_block_control(
+    df: pd.DataFrame,
+    formula: str,
+    *,
+    term: str = "pos_in_block",
+) -> tuple[float | None, pd.DataFrame]:
     """
-    Fit mixed model with block random intercept and return p-value for pos_in_block.
+    Fit mixed model with block random intercept and return p-value for ``term``.
 
     Returns (p_value, tidy_table).
     """
@@ -45,7 +59,7 @@ def lme_block_control(df: pd.DataFrame, formula: str) -> tuple[float | None, pd.
             raise
         fit = smf.ols(formula=formula, data=df).fit()
 
-    pval = fit.pvalues.get("pos_in_block")
+    pval = fit.pvalues.get(term)
     tidy = pd.DataFrame(
         {
             "term": fit.params.index.astype(str),

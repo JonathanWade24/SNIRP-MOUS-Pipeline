@@ -62,10 +62,11 @@ fmri:
   skip_bids_validation: false
   neurodesk_module: ""
   fs_license_file: "/scratch/jonathanwade/MOUS/licenses/freesurfer/license.txt"
+  onset_shift_s: 0.0
+  hrf_lag_sweep_s: [4.0, 5.0, 6.0, 7.0, 8.0]
   container_runtime: ""
   container_binds:
     - "/scratch/jonathanwade:/scratch/jonathanwade"
-    - "/project/jonathanwade:/project/jonathanwade"
     - "/scratch/jonathanwade/templateflow:/opt/templateflow"
     - "/scratch/jonathanwade/MOUS/licenses:/scratch/jonathanwade/MOUS/licenses"
 
@@ -74,6 +75,7 @@ wave_validation:
   n_trials: 60
   snr: 1.0
   random_state: 42
+  z_threshold: 1.645
 
 pipeline:
   m10_reuse_fmriprep: true

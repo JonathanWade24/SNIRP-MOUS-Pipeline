@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from ..io import stage_output_dir
-from .figures import dci_timecourse, rose_plot
+from .figures import dci_timecourse, prestim_topography, rose_plot
 
 
 def _fig_to_base64(fig) -> str:
@@ -165,6 +165,25 @@ def render_subject(
             f'style="max-width:100%;">'
         )
 
+    prestim_topo_html = ""
+    prestim_topo_path = metrics.get("aim1_prestim_topography_artifact")
+    if prestim_topo_path:
+        topo_path = Path(str(prestim_topo_path))
+        if topo_path.exists():
+            try:
+                topo_npz = np.load(topo_path)
+                sensor_xy = np.asarray(topo_npz["sensor_xy"])
+                channel_power = np.asarray(topo_npz["channel_power"])
+                fig, ax = plt.subplots(figsize=(5, 4))
+                sc = prestim_topography(ax, sensor_xy, channel_power, title="Pre-stim beta sensor power")
+                fig.colorbar(sc, ax=ax, shrink=0.8)
+                prestim_topo_html = (
+                    f'<img alt="prestim topography" src="data:image/png;base64,{_fig_to_base64(fig)}" '
+                    f'style="max-width:100%;">'
+                )
+            except Exception:
+                prestim_topo_html = ""
+
     # ── Key metrics table ─────────────────────────────────────────────────────
     key_metric_order = list(_METRIC_LABELS.keys())
     rows_html = "".join(
@@ -233,6 +252,7 @@ def render_subject(
         f"<h2>Stage timings</h2>{timing_html}"
         f"<h2>Direction rose plots</h2>{rose_html if rose_html else '<p><em>No direction data.</em></p>'}"
         f"<h2>Sliding DCI (ZINNEN)</h2>{dci_html if dci_html else '<p><em>No DCI timecourse data.</em></p>'}"
+        f"<h2>Pre-stim topography</h2>{prestim_topo_html if prestim_topo_html else '<p><em>No topography artifact available.</em></p>'}"
         f"<h2>Generated outputs</h2><ul>{output_rows}</ul>"
         f"<h2>Raw payload</h2><details><summary>Expand JSON</summary><pre>{pretty}</pre></details>"
         f"</body></html>"
