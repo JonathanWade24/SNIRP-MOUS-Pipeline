@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import mous_pipeline.ops.actions as actions
 from mous_pipeline.ops.actions import (
     MODE_TO_PRESET_DEFAULTS,
     build_bem_submit_cmd,
     build_recon_submit_cmd,
     build_submit_cmd,
     compute_undownloaded_subjects,
+    resolve_repo_root,
     parse_sbatch_job_id,
 )
 from mous_pipeline.config import RuntimeOverrides
@@ -194,3 +197,116 @@ def test_compute_undownloaded_subjects() -> None:
         remote_subjects=["A2002", "A2003", "sub-A2004"],
     )
     assert missing == ["A2003", "A2004"]
+
+
+def _fake_repo(tmp_path: Path) -> tuple[Path, Path]:
+    repo = tmp_path / "MOUS"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "src" / "mous_pipeline").mkdir(parents=True)
+    (repo / "configs").mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname = 'mous-pipeline'\n")
+    submit = repo / "scripts" / "palmetto_submit.sh"
+    submit.write_text("#!/usr/bin/env bash\n")
+    config = repo / "configs" / "palmetto.yaml"
+    config.write_text("derivatives_root: /scratch/example/derivatives\n")
+    return repo, config
+
+
+def test_resolve_repo_root_prefers_config_checkout_over_cwd(tmp_path: Path, monkeypatch) -> None:
+    repo, config = _fake_repo(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.chdir(home)
+
+    assert resolve_repo_root(repo_root=home, config_path=str(config)) == repo
+
+
+def test_execute_submit_cmd_runs_repo_script_from_repo_root(tmp_path: Path, monkeypatch) -> None:
+    repo, config = _fake_repo(tmp_path)
+    captured = {}
+
+    def fake_run_cmd(cmd: list[str], *, cwd: Path | None = None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return subprocess.CompletedProcess(cmd, 0, stdout="Submitted batch job 42\n", stderr="")
+
+    monkeypatch.setattr(actions, "run_cmd", fake_run_cmd)
+    job, proc = actions.execute_submit_cmd(
+        ["scripts/palmetto_submit.sh", "--config", str(config)],
+        config_path=str(config),
+        subjects=["A2002"],
+    )
+
+    assert proc.returncode == 0
+    assert job is not None and job.job_id == "42"
+    assert captured["cwd"] == repo
+    assert captured["cmd"][0] == str(repo / "scripts" / "palmetto_submit.sh")
+    assert captured["cmd"][2] == str(config)
+
+
+def test_execute_submit_cmd_preserves_external_relative_config(tmp_path: Path, monkeypatch) -> None:
+    repo, _ = _fake_repo(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    config = external / "ad_hoc.yaml"
+    config.write_text("derivatives_root: /scratch/example/adhoc\n")
+    captured = {}
+
+    def fake_run_cmd(cmd: list[str], *, cwd: Path | None = None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return subprocess.CompletedProcess(cmd, 0, stdout="Submitted batch job 44\n", stderr="")
+
+    monkeypatch.chdir(external)
+    monkeypatch.setenv("MOUS_REPO_ROOT", str(repo))
+    monkeypatch.setattr(actions, "run_cmd", fake_run_cmd)
+    job, _ = actions.execute_submit_cmd(
+        ["scripts/palmetto_submit.sh", "--config", "ad_hoc.yaml"],
+        config_path="ad_hoc.yaml",
+        subjects=["A2002"],
+    )
+
+    assert job is not None and job.job_id == "44"
+    assert captured["cwd"] == repo
+    assert captured["cmd"][0] == str(repo / "scripts" / "palmetto_submit.sh")
+    assert captured["cmd"][2] == str(config)
+
+
+def test_detached_driver_anchors_script_without_moving_logs(tmp_path: Path, monkeypatch) -> None:
+    repo, config = _fake_repo(tmp_path)
+    derivatives_root = tmp_path / "derivatives"
+    captured = {}
+
+    def fake_run_cmd(cmd: list[str], *, cwd: Path | None = None):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        return subprocess.CompletedProcess(cmd, 0, stdout="Submitted batch job 43\n", stderr="")
+
+    monkeypatch.setattr(actions, "run_cmd", fake_run_cmd)
+    job, _ = actions.submit_detached_driver(
+        ["scripts/palmetto_submit.sh", "--config", str(config)],
+        config_path=str(config),
+        subjects=["A2002"],
+        account="acct",
+        partition="hpcnirc",
+        time_limit="01:00:00",
+        mem="8G",
+        cpus_per_task="2",
+        venv_path=str(tmp_path / "venv"),
+        derivatives_root=str(derivatives_root),
+        repo_root=tmp_path / "home",
+    )
+
+    assert job is not None and job.job_id == "43"
+    assert captured["cwd"] == repo
+    sbatch_cmd = captured["cmd"]
+    wrapped = sbatch_cmd[sbatch_cmd.index("--wrap") + 1]
+    assert f"cd {repo}" in wrapped
+    assert str(repo / "scripts" / "palmetto_submit.sh") in wrapped
+    assert str(config) in wrapped
+    assert sbatch_cmd[sbatch_cmd.index("--output") + 1] == str(
+        derivatives_root / "slurm" / "mous_driver_%j.out"
+    )
+    assert sbatch_cmd[sbatch_cmd.index("--error") + 1] == str(
+        derivatives_root / "slurm" / "mous_driver_%j.err"
+    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import subprocess
@@ -33,6 +34,82 @@ MODE_TO_PRESET_DEFAULTS: dict[str, WorkflowPreset] = {
         fetch_missing=True,
     ),
 }
+
+
+def _is_repo_root(path: Path) -> bool:
+    return (
+        (path / "pyproject.toml").is_file()
+        and (path / "scripts" / "palmetto_submit.sh").is_file()
+        and (path / "src" / "mous_pipeline").is_dir()
+    )
+
+
+def _find_repo_root(start: Path) -> Path | None:
+    current = start.expanduser()
+    if current.is_file():
+        current = current.parent
+    current = current.resolve()
+    for candidate in (current, *current.parents):
+        if _is_repo_root(candidate):
+            return candidate
+    return None
+
+
+def resolve_repo_root(*, repo_root: Path | None = None, config_path: str | None = None) -> Path:
+    """Resolve the project checkout that owns the Palmetto helper scripts."""
+    starts: list[Path] = []
+    env_root = os.environ.get("MOUS_REPO_ROOT")
+    if repo_root is not None:
+        starts.append(repo_root)
+    if env_root:
+        starts.append(Path(env_root))
+    if config_path:
+        cfg = Path(config_path).expanduser()
+        starts.append(cfg if cfg.is_absolute() else Path.cwd() / cfg)
+    starts.extend([Path.cwd(), Path(__file__).resolve()])
+    for start in starts:
+        found = _find_repo_root(start)
+        if found is not None:
+            return found
+    return (repo_root or Path.cwd()).expanduser().resolve()
+
+
+def _anchor_repo_script(cmd: list[str], repo_root: Path) -> list[str]:
+    if not cmd:
+        return cmd
+    executable = Path(cmd[0]).expanduser()
+    if executable.is_absolute():
+        return cmd
+    if executable.parts[:1] == ("scripts",):
+        anchored = repo_root / executable
+        if anchored.exists():
+            return [str(anchored), *cmd[1:]]
+    return cmd
+
+
+def _preserve_config_path(cmd: list[str], original_cwd: Path, repo_root: Path) -> list[str]:
+    if "--config" not in cmd:
+        return cmd
+    index = cmd.index("--config") + 1
+    if index >= len(cmd):
+        return cmd
+    config = Path(cmd[index]).expanduser()
+    if config.is_absolute():
+        return cmd
+    if (repo_root / config).exists():
+        return cmd
+    original_config = (original_cwd / config).resolve()
+    if original_config.exists():
+        updated = list(cmd)
+        updated[index] = str(original_config)
+        return updated
+    return cmd
+
+
+def prepare_repo_command(cmd: list[str], repo_root: Path, *, original_cwd: Path | None = None) -> list[str]:
+    """Anchor repo helper scripts while preserving relative config semantics."""
+    prepared = _preserve_config_path(cmd, original_cwd or Path.cwd(), repo_root)
+    return _anchor_repo_script(prepared, repo_root)
 
 
 def discover_subjects(config_path: str, data_root: str | None = None) -> list[str]:
@@ -239,7 +316,9 @@ def execute_submit_cmd(
     kind: str = "palmetto_submit",
     job_name: str = "mous_fmriprep",
 ) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
-    proc = run_cmd(cmd, cwd=Path.cwd())
+    original_cwd = Path.cwd()
+    root = resolve_repo_root(config_path=config_path)
+    proc = run_cmd(prepare_repo_command(cmd, root, original_cwd=original_cwd), cwd=root)
     job_id = parse_sbatch_job_id((proc.stdout or "") + "\n" + (proc.stderr or ""))
     if not job_id:
         return None, proc
@@ -270,13 +349,15 @@ def submit_detached_driver(
     derivatives_root: str,
     repo_root: Path | None = None,
 ) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
-    root = (repo_root or Path.cwd()).resolve()
+    original_cwd = Path.cwd()
+    root = resolve_repo_root(repo_root=repo_root, config_path=config_path)
     slurm_dir = Path(derivatives_root).expanduser().resolve() / "slurm"
     slurm_dir.mkdir(parents=True, exist_ok=True)
+    anchored_submit_cmd = prepare_repo_command(submit_cmd, root, original_cwd=original_cwd)
     wrapped = (
         f"cd {shlex.quote(str(root))} && "
         f"source {shlex.quote(str(Path(venv_path).expanduser() / 'bin/activate'))} && "
-        + " ".join(shlex.quote(part) for part in submit_cmd)
+        + " ".join(shlex.quote(part) for part in anchored_submit_cmd)
     )
     sbatch_cmd = [
         "sbatch",
@@ -331,10 +412,12 @@ def submit_detached_wrap(
     derivatives_root: str,
     repo_root: Path | None = None,
 ) -> tuple[JobRecord | None, subprocess.CompletedProcess[str]]:
-    root = (repo_root or Path.cwd()).resolve()
+    original_cwd = Path.cwd()
+    root = resolve_repo_root(repo_root=repo_root, config_path=config_path)
     slurm_dir = Path(derivatives_root).expanduser().resolve() / "slurm"
     slurm_dir.mkdir(parents=True, exist_ok=True)
-    wrapped = f"cd {shlex.quote(str(root))} && " + " ".join(shlex.quote(part) for part in wrapped_cmd)
+    anchored_wrapped_cmd = prepare_repo_command(wrapped_cmd, root, original_cwd=original_cwd)
+    wrapped = f"cd {shlex.quote(str(root))} && " + " ".join(shlex.quote(part) for part in anchored_wrapped_cmd)
     sbatch_cmd = [
         "sbatch",
         "--job-name",
