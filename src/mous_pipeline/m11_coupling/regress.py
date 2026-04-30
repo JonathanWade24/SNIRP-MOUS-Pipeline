@@ -7,6 +7,8 @@ import pandas as pd
 from scipy.stats import spearmanr
 import statsmodels.formula.api as smf
 
+MEG_COUPLING_FEATURES: tuple[str, ...] = ("prestim_beta", "n400m", "dci_trial")
+
 
 def partial_spearman(df: pd.DataFrame, feature: str, target: str, covars: list[str]) -> tuple[float, float]:
     """Approximate partial Spearman via rank-residualization."""
@@ -20,22 +22,34 @@ def partial_spearman(df: pd.DataFrame, feature: str, target: str, covars: list[s
 
 
 def run_coupling_models(df: pd.DataFrame) -> dict:
-    """Compute condition-wise partial Spearman and a mixed model summary."""
-    out: dict[str, float | dict] = {}
+    """Compute condition-wise partial Spearman and an OLS summary (trial-level).
+
+    Only MEG columns that exist on ``df`` are used (e.g. ``m4_trial`` may have been
+    skipped so ``prestim_beta`` / ``n400m`` are absent).
+    """
+    available = [c for c in MEG_COUPLING_FEATURES if c in df.columns]
+    out: dict[str, float | dict | list[str]] = {"features_used": list(available)}
+
+    if "mtg_beta" not in df.columns or not available:
+        return out
+
     for condition in ["ZINNEN", "WOORDEN"]:
         subset = df[df["condition"] == condition]
         if len(subset) < 8:
             continue
-        for feature in ["prestim_beta", "n400m", "dci_trial"]:
+        for feature in available:
             r, p = partial_spearman(subset, feature, "mtg_beta", ["pos_in_block"])
             key = f"{condition.lower()}_{feature}_vs_mtg"
             out[key] = {"r": r, "p": p}
-    if len(df) >= 10:
-        fit = smf.ols("mtg_beta ~ prestim_beta + n400m + dci_trial + C(condition) + pos_in_block", data=df).fit()
-        out["lme_like"] = {
-            "r2": float(fit.rsquared),
-            "p_prestim_beta": float(fit.pvalues.get("prestim_beta", np.nan)),
-            "p_n400m": float(fit.pvalues.get("n400m", np.nan)),
-            "p_dci_trial": float(fit.pvalues.get("dci_trial", np.nan)),
-        }
+
+    if len(df) >= 10 and available:
+        rhs = " + ".join(available)
+        formula = f"mtg_beta ~ {rhs} + C(condition) + pos_in_block"
+        fit = smf.ols(formula, data=df).fit()
+        lme_like: dict[str, float] = {"r2": float(fit.rsquared)}
+        for name in MEG_COUPLING_FEATURES:
+            pkey = "p_dci_trial" if name == "dci_trial" else f"p_{name}"
+            lme_like[pkey] = float(fit.pvalues.get(name, np.nan))
+        out["lme_like"] = lme_like
+
     return out

@@ -45,7 +45,7 @@ from ..m8_reports.quarto_report import render_quarto_suite
 from ..m8_reports.dashboard import render_subject
 from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
 from ..m8_reports.export import export_subject_payload
-from ..m11_coupling.regress import run_coupling_models
+from ..m11_coupling.regress import MEG_COUPLING_FEATURES, run_coupling_models
 from ..m12_wave_validation.compare import confound_null_dci
 from ..m12_wave_validation.simulate import simulate_two_dipoles
 from ..provenance import build_run_manifest, config_fingerprint, write_manifest
@@ -413,7 +413,12 @@ def _run_subject_body(
     _m6a_epoch_shape = out_dir / f"sub-{subject}_epoch_shape.npz"
     out_files = list(_m6a_paths.values())
 
+    # ── Per-stage output file paths (cont.) ──────────────────────────────────
+    _m10_out_dir    = stage_output_dir(cfg, subject, "m10_fmri")
+    _m10_joined_csv = _m10_out_dir / f"{subject}_trials_joined.csv"
+
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
+    _m10_hit     = not force and _m10_joined_csv.exists()
     _m4_hit      = not force and _m4_analytic.exists() and _m4_psd.exists()
     # Cache stores (prestim_beta, n400m, trial_ids_after_rejection).
     # trial_ids let us restore the post-rejection trial_meta slice without
@@ -732,61 +737,67 @@ def _run_subject_body(
         _emit("start", "m10")
         t0 = perf_counter()
         try:
-            fmri_cfg = getattr(cfg, "fmri", None)
-            if fmri_cfg:
-                from ..m10_fmri.glm import trialwise_betas
-                from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
-
-                verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
-                m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
-                reuse_existing_fmriprep = bool(getattr(cfg, "pipeline", {}).get("m10_reuse_fmriprep", False))
-                fmriprep_out = run_fmriprep(
-                    subject,
-                    cfg,
-                    bids_root=cfg.data_root,
-                    log_callback=(lambda line: _append_live_log(live_log_path, f"[m10:fmriprep] {line}"))
-                    if verbose_tools
-                    else None,
-                    reuse_existing=reuse_existing_fmriprep,
-                )
-                bold_path = resolve_subject_bold_path(
-                    subject,
-                    cfg,
-                    bids_root=cfg.data_root,
-                    fmriprep_out_dir=fmriprep_out,
-                )
-                if bold_path is None:
-                    expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
-                    expected_func_dir.mkdir(parents=True, exist_ok=True)
-                    result.metrics["m10_skipped_reason"] = (
-                        "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
-                        f"{fmriprep_out}/sub-{subject.removeprefix('sub-')}/func. "
-                        f"Created expected directory: {expected_func_dir}"
-                    )
-                else:
-                    sidecar = (
-                        bold_path.with_suffix("").with_suffix(".json")
-                        if str(bold_path).endswith(".nii.gz")
-                        else bold_path.with_suffix(".json")
-                    )
-                    if sidecar.exists():
-                        validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
-                    beta_tbl = trialwise_betas(
-                        str(bold_path),
-                        trial_df,
-                        fmri_cfg.tr,
-                        atlas=fmri_cfg.atlas,
-                        roi=fmri_cfg.roi,
-                        n_jobs=m10_n_jobs,
-                    )
-                    joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
-                    result.metrics["m10_n_trials_joined"] = int(len(joined_df))
-                    m10_out = stage_output_dir(cfg, subject, "m10_fmri")
-                    joined_csv = m10_out / f"{subject}_trials_joined.csv"
-                    joined_df.to_csv(joined_csv, index=False)
-                    result.outputs.append(joined_csv)
+            if _m10_hit:
+                joined_df = pd.read_csv(_m10_joined_csv)
+                result.metrics["m10_cache_hit"] = True
+                result.metrics["m10_n_trials_joined"] = len(joined_df)
+                result.outputs.append(_m10_joined_csv)
+                _append_live_log(live_log_path, f"[m10:cache] reusing {_m10_joined_csv}")
             else:
-                result.metrics["m10_skipped_reason"] = "fmri configuration missing"
+                fmri_cfg = getattr(cfg, "fmri", None)
+                if fmri_cfg:
+                    from ..m10_fmri.glm import trialwise_betas
+                    from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
+
+                    verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
+                    m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
+                    reuse_existing_fmriprep = bool(getattr(cfg, "pipeline", {}).get("m10_reuse_fmriprep", False))
+                    fmriprep_out = run_fmriprep(
+                        subject,
+                        cfg,
+                        bids_root=cfg.data_root,
+                        log_callback=(lambda line: _append_live_log(live_log_path, f"[m10:fmriprep] {line}"))
+                        if verbose_tools
+                        else None,
+                        reuse_existing=reuse_existing_fmriprep,
+                    )
+                    bold_path = resolve_subject_bold_path(
+                        subject,
+                        cfg,
+                        bids_root=cfg.data_root,
+                        fmriprep_out_dir=fmriprep_out,
+                    )
+                    if bold_path is None:
+                        expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
+                        expected_func_dir.mkdir(parents=True, exist_ok=True)
+                        result.metrics["m10_skipped_reason"] = (
+                            "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
+                            f"{fmriprep_out}/sub-{subject.removeprefix('sub-')}/func. "
+                            f"Created expected directory: {expected_func_dir}"
+                        )
+                    else:
+                        sidecar = (
+                            bold_path.with_suffix("").with_suffix(".json")
+                            if str(bold_path).endswith(".nii.gz")
+                            else bold_path.with_suffix(".json")
+                        )
+                        if sidecar.exists():
+                            validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
+                        beta_tbl = trialwise_betas(
+                            str(bold_path),
+                            trial_df,
+                            fmri_cfg.tr,
+                            atlas=fmri_cfg.atlas,
+                            roi=fmri_cfg.roi,
+                            n_jobs=m10_n_jobs,
+                        )
+                        joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
+                        result.metrics["m10_n_trials_joined"] = int(len(joined_df))
+                        _m10_out_dir.mkdir(parents=True, exist_ok=True)
+                        joined_df.to_csv(_m10_joined_csv, index=False)
+                        result.outputs.append(_m10_joined_csv)
+                else:
+                    result.metrics["m10_skipped_reason"] = "fmri configuration missing"
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
             if not strict_stage_failures:
@@ -832,47 +843,52 @@ def _run_subject_body(
         _emit("start", "m11")
         t0 = perf_counter()
         if joined_df is None and bool(getattr(cfg, "pipeline", {}).get("m11_allow_cached_joined", False)):
-            m10_out = stage_output_dir(cfg, subject, "m10_fmri")
-            cached_joined = m10_out / f"{subject}_trials_joined.csv"
-            if cached_joined.exists():
+            if _m10_joined_csv.exists():
                 try:
-                    joined_df = pd.read_csv(cached_joined)
+                    joined_df = pd.read_csv(_m10_joined_csv)
                     result.metrics["m11_used_cached_joined"] = True
-                    result.metrics["m11_cached_joined_path"] = str(cached_joined)
+                    result.metrics["m11_cached_joined_path"] = str(_m10_joined_csv)
                 except Exception as exc:
                     result.metrics["m11_cached_joined_error"] = str(exc)
         if joined_df is not None and not joined_df.empty:
-            try:
-                coupling = run_coupling_models(joined_df)
-                result.metrics["m11_coupling"] = coupling
-                result.metrics["m11_trials_rows"] = joined_df.to_dict(orient="records")
-            except Exception as exc:
-                result.metrics["m11_error"] = str(exc)
-                if not strict_stage_failures:
-                    result.status = "completed_with_skips"
-                if strict_stage_failures and _is_critical_stage("m11", cfg):
-                    blocked = _mark_critical_failure(
-                        result=result,
-                        state=state,
-                        stage="m11",
-                        error=exc,
-                        only=only,
-                        skip=skip,
-                    )
-                    _append_live_log(live_log_path, f"[run] critical_failure stage=m11 error={exc}")
-                    return _finalize_run(
-                        subject=subject,
-                        cfg=cfg,
-                        result=result,
-                        out_dir=out_dir,
-                        state=state,
-                        state_path=state_path,
-                        live_log_path=live_log_path,
-                        only=only,
-                        skip=skip,
-                        force=force,
-                        config_path=config_path,
-                    )
+            meg_cols_present = [c for c in MEG_COUPLING_FEATURES if c in joined_df.columns]
+            if not meg_cols_present:
+                result.metrics["m11_skipped_reason"] = (
+                    "MEG feature columns (prestim_beta, n400m, dci_trial) absent — "
+                    "e.g. m4_trial / m6a not run for this joined table."
+                )
+            else:
+                try:
+                    coupling = run_coupling_models(joined_df)
+                    result.metrics["m11_coupling"] = coupling
+                    result.metrics["m11_trials_rows"] = joined_df.to_dict(orient="records")
+                except Exception as exc:
+                    result.metrics["m11_error"] = str(exc)
+                    if not strict_stage_failures:
+                        result.status = "completed_with_skips"
+                    if strict_stage_failures and _is_critical_stage("m11", cfg):
+                        blocked = _mark_critical_failure(
+                            result=result,
+                            state=state,
+                            stage="m11",
+                            error=exc,
+                            only=only,
+                            skip=skip,
+                        )
+                        _append_live_log(live_log_path, f"[run] critical_failure stage=m11 error={exc}")
+                        return _finalize_run(
+                            subject=subject,
+                            cfg=cfg,
+                            result=result,
+                            out_dir=out_dir,
+                            state=state,
+                            state_path=state_path,
+                            live_log_path=live_log_path,
+                            only=only,
+                            skip=skip,
+                            force=force,
+                            config_path=config_path,
+                        )
         else:
             result.metrics["m11_skipped_reason"] = "No joined MEG-fMRI trial table."
         result.stage_timings_s["m11"] = perf_counter() - t0
@@ -972,13 +988,12 @@ def _run_subject_body(
             sliding_t=sliding_t,
             sliding_dci_z=sliding_z,
         )
-        joined_csv = stage_output_dir(cfg, subject, "m10_fmri") / f"{subject}_trials_joined.csv"
         try:
             aim2_subject_report = render_aim2_subject(
                 subject,
                 cfg,
                 metrics=result.metrics,
-                joined_csv=joined_csv,
+                joined_csv=_m10_joined_csv,
             )
             result.outputs.append(aim2_subject_report)
         except Exception as exc:
