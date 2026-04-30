@@ -335,10 +335,12 @@ class TestVerifyRunManifest:
         errs = _verify_run_manifest(m, strict_mode=True)
         assert any("m10_error" in e for e in errs)
 
-    def test_empty_outputs_list_fails(self):
+    def test_empty_outputs_list_is_tolerated(self):
+        # verify-run was relaxed (b5eecf0) to tolerate manifests without
+        # top-level outputs so successful runs are not falsely flagged.
         payload = {"metrics": {"run_status": "done", "skipped_stages": []}, "outputs": []}
         errs = _verify_run_manifest(payload)
-        assert any("outputs" in e for e in errs)
+        assert not any("outputs" in e for e in errs)
 
 
 # ---------------------------------------------------------------------------

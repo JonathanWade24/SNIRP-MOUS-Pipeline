@@ -26,7 +26,7 @@ def test_epoch_counts_match_pilot(repo_root):
     raw = apply_notch_and_resample(raw, cfg)
     raw, ica = fit_and_apply(raw, cfg)
     raw = apply_band(raw, 13, 30)
-    epochs = make_epochs(raw, trials, cfg)
+    epochs, _ = make_epochs(raw, trials, cfg)
 
     raw_rest = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
     raw_rest.apply_gradient_compensation(3)
