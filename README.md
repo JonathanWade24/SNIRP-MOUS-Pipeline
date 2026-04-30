@@ -32,6 +32,31 @@ pip install -e ".[fmri]"    # Aim 2 fMRI / nilearn stack
 pip install -e ".[ops]"     # SSH-first Textual operations UI
 ```
 
+### Palmetto (recommended: Miniforge/Conda)
+
+Use the Palmetto setup wrapper to create/update the Conda environment from
+`environment.yml`:
+
+```bash
+export MOUS_CONDA_MODULE="miniforge3/24.3.0-0"   # default
+export MOUS_CONDA_ENV_NAME="mous-palmetto"        # default
+bash scripts/palmetto_setup.sh
+```
+
+Manual activation in later sessions:
+
+```bash
+module load miniforge3/24.3.0-0
+eval "$(conda shell.bash hook)"
+conda activate mous-palmetto
+```
+
+Rollback path (if needed):
+
+```bash
+source "$HOME/.venvs/mous-palmetto/bin/activate"
+```
+
 ## Expected data structure
 
 The pipeline expects CTF `.ds` directories and events TSV under `data_root`:

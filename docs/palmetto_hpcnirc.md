@@ -9,17 +9,19 @@ git clone https://github.com/JonathanWade24/MOUS.git
 cd MOUS
 
 # Optional: set site-specific modules.
-export MOUS_PYTHON_MODULE="python/3.11"
+export MOUS_CONDA_MODULE="miniforge3/24.3.0-0"
 export MOUS_APPTAINER_MODULE="apptainer"
 export MOUS_FREESURFER_MODULE="freesurfer/7.4.1"
 
-# Optional: set location for venv and container images.
-export MOUS_VENV_PATH="$HOME/.venvs/mous-palmetto"
+# Optional: set Conda env name and container image location.
+export MOUS_CONDA_ENV_NAME="mous-palmetto"
 export MOUS_CONTAINER_DIR="/scratch/jonathanwade/containers"
 export MOUS_PULL_FMRIPREP=1
 
 bash scripts/palmetto_setup.sh
-source "$MOUS_VENV_PATH/bin/activate"
+module load "$MOUS_CONDA_MODULE"
+eval "$(conda shell.bash hook)"
+conda activate "$MOUS_CONDA_ENV_NAME"
 ```
 
 ## 2) Configure your YAML
@@ -160,6 +162,8 @@ scripts/palmetto_submit.sh \
 
 ## Troubleshooting
 
+- `conda not found after module load`: set `MOUS_CONDA_MODULE` to a valid Palmetto module (recommended `miniforge3/24.3.0-0`).
+- Need old behavior quickly: activate prior venv directly (`source "$HOME/.venvs/mous-palmetto/bin/activate"`).
 - `fmriprep container not found`: check `fmri.fmriprep_container` and file permissions.
 - `No container runtime found`: load module or set `fmri.container_runtime` (`apptainer` or `singularity`).
 - `recon-all not found`: load `MOUS_FREESURFER_MODULE` or set `MOUS_FREESURFER_CONTAINER`.

@@ -6,11 +6,12 @@ usage() {
 One-time setup for Clemson Palmetto (hpcnirc-friendly defaults).
 
 Environment overrides:
-  MOUS_PYTHON_MODULE      Optional module to load before venv creation.
+  MOUS_CONDA_MODULE       Conda module to load (default: miniforge3/24.3.0-0).
   MOUS_APPTAINER_MODULE   Optional module to load for apptainer.
   MOUS_FREESURFER_MODULE  Optional module to load for recon-all.
   MOUS_FREESURFER_LICENSE Optional path to FreeSurfer license.txt.
-  MOUS_VENV_PATH          Virtualenv path (default: .venv-palmetto).
+  MOUS_CONDA_ENV_NAME     Conda environment name (default: mous-palmetto).
+  MOUS_CONDA_ENV_FILE     Conda environment.yml path (default: $ROOT_DIR/environment.yml).
   MOUS_INSTALL_EXTRAS     Editable extras (default: [fmri,bids]).
   MOUS_CONTAINER_DIR      Directory for SIF images (default: $HOME/containers).
   MOUS_PULL_FMRIPREP      1 to pull image, 0 to skip (default: 0).
@@ -27,9 +28,8 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if [[ -n "${MOUS_PYTHON_MODULE:-}" ]]; then
-  module load "$MOUS_PYTHON_MODULE"
-fi
+CONDA_MODULE="${MOUS_CONDA_MODULE:-miniforge3/24.3.0-0}"
+module load "$CONDA_MODULE"
 if [[ -n "${MOUS_APPTAINER_MODULE:-}" ]]; then
   module load "$MOUS_APPTAINER_MODULE"
 fi
@@ -40,24 +40,42 @@ if [[ -n "${MOUS_FREESURFER_MODULE:-}" ]]; then
   fi
 fi
 
-PYTHON_BIN="$(command -v python3 || true)"
-if [[ -z "$PYTHON_BIN" ]]; then
-  echo "python3 not found. Load a Python module first (MOUS_PYTHON_MODULE)." >&2
+CONDA_BIN="$(command -v conda || true)"
+MAMBA_BIN="$(command -v mamba || true)"
+if [[ -z "$CONDA_BIN" ]]; then
+  echo "conda not found after module load ($CONDA_MODULE)." >&2
   exit 1
 fi
 
-VENV_PATH="${MOUS_VENV_PATH:-$ROOT_DIR/.venv-palmetto}"
+CONDA_ENV_NAME="${MOUS_CONDA_ENV_NAME:-mous-palmetto}"
+CONDA_ENV_FILE="${MOUS_CONDA_ENV_FILE:-$ROOT_DIR/environment.yml}"
 INSTALL_EXTRAS="${MOUS_INSTALL_EXTRAS:-[fmri,bids]}"
 CONTAINER_DIR="${MOUS_CONTAINER_DIR:-$HOME/containers}"
 PULL_FMRIPREP="${MOUS_PULL_FMRIPREP:-0}"
 FMRIPREP_REF="${MOUS_FMRIPREP_REF:-docker://nipreps/fmriprep:24.0.1}"
 FREESURFER_LICENSE="${MOUS_FREESURFER_LICENSE:-}"
 
-if [[ ! -d "$VENV_PATH" ]]; then
-  "$PYTHON_BIN" -m venv "$VENV_PATH"
+if [[ ! -f "$CONDA_ENV_FILE" ]]; then
+  echo "Conda environment file not found: $CONDA_ENV_FILE" >&2
+  exit 1
 fi
-source "$VENV_PATH/bin/activate"
-python -m pip install --upgrade pip
+
+eval "$("$CONDA_BIN" shell.bash hook)"
+if conda env list | awk -v target="$CONDA_ENV_NAME" '($1 !~ /^#/ && $1 == target) {found=1} END {exit(found ? 0 : 1)}'; then
+  if [[ -n "$MAMBA_BIN" ]]; then
+    "$MAMBA_BIN" env update -n "$CONDA_ENV_NAME" -f "$CONDA_ENV_FILE" --prune
+  else
+    "$CONDA_BIN" env update -n "$CONDA_ENV_NAME" -f "$CONDA_ENV_FILE" --prune
+  fi
+else
+  if [[ -n "$MAMBA_BIN" ]]; then
+    "$MAMBA_BIN" env create -n "$CONDA_ENV_NAME" -f "$CONDA_ENV_FILE"
+  else
+    "$CONDA_BIN" env create -n "$CONDA_ENV_NAME" -f "$CONDA_ENV_FILE"
+  fi
+fi
+
+conda activate "$CONDA_ENV_NAME"
 python -m pip install -e ".${INSTALL_EXTRAS}"
 
 if [[ "$PULL_FMRIPREP" == "1" ]]; then
@@ -73,7 +91,9 @@ fi
 echo ""
 echo "Palmetto setup complete."
 echo "Status:"
-echo "  python: $PYTHON_BIN"
+echo "  conda_module: $CONDA_MODULE"
+echo "  conda_env: $CONDA_ENV_NAME"
+echo "  python: $(command -v python)"
 if command -v apptainer >/dev/null 2>&1; then
   echo "  container_runtime: apptainer ($(command -v apptainer))"
 elif command -v singularity >/dev/null 2>&1; then
@@ -94,7 +114,9 @@ if [[ -n "$FREESURFER_LICENSE" ]]; then
   fi
 fi
 echo "Activate env:"
-echo "  source \"$VENV_PATH/bin/activate\""
+echo "  module load \"$CONDA_MODULE\""
+echo "  eval \"\$(conda shell.bash hook)\""
+echo "  conda activate \"$CONDA_ENV_NAME\""
 echo "Suggested smoke test:"
 echo "  mous-pipeline --help"
 echo ""

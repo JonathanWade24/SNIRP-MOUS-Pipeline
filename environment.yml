@@ -1,0 +1,28 @@
+name: mous-palmetto
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - scikit-learn
+  - pandas
+  - matplotlib
+  - pyyaml
+  - pydantic
+  - pytest
+  - nibabel
+  - statsmodels
+  - h5py
+  - pyarrow
+  - mne
+  - mne-bids
+  - pycircstat
+  - tensorpac
+  - nilearn
+  - templateflow
+  - vtk
+  - pyvista
+  - pip:
+      - -e ".[fmri,bids]"
