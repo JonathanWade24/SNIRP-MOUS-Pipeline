@@ -63,6 +63,7 @@ _STAGE_LABELS: dict[str, str] = {
 }
 
 _stage_start_times: dict[str, float] = {}
+_QUARTO_REQUIRED_R_PACKAGES: tuple[str, ...] = ("ggplot2", "dplyr", "knitr", "lmerTest", "readr")
 
 
 def _make_cli_progress_callback(selected_stages: list[str]):
@@ -359,6 +360,49 @@ def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool 
     print("\n✓ No hard BIDS errors detected by mne_bids validation.")
 
 
+def _check_quarto_env() -> tuple[bool, list[str]]:
+    """Check Quarto + R runtime needed by cumulative subject report."""
+    messages: list[str] = []
+    quarto_path = shutil.which("quarto")
+    if quarto_path is None:
+        messages.append("missing binary: quarto (install Quarto >=1.5 and ensure it is on PATH)")
+    else:
+        messages.append(f"quarto: {quarto_path}")
+
+    rscript_path = shutil.which("Rscript")
+    if rscript_path is None:
+        messages.append("missing binary: Rscript (install R and ensure it is on PATH)")
+        return False, messages
+    messages.append(f"Rscript: {rscript_path}")
+
+    check_cmd = [
+        "Rscript",
+        "-e",
+        (
+            "pkgs <- c('ggplot2','dplyr','knitr','lmerTest','readr'); "
+            "missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly=TRUE)]; "
+            "if (length(missing) > 0) {"
+            "  cat(paste(missing, collapse=',')); "
+            "  quit(status=2)"
+            "}"
+        ),
+    ]
+    proc = subprocess.run(check_cmd, check=False, capture_output=True, text=True)
+    if proc.returncode == 0:
+        messages.append("R packages: OK (ggplot2, dplyr, knitr, lmerTest, readr)")
+    else:
+        missing = proc.stdout.strip()
+        if missing:
+            messages.append(f"missing R packages: {missing}")
+        else:
+            messages.append("R package check failed (could not resolve missing package list)")
+        if proc.stderr.strip():
+            messages.append(f"Rscript stderr: {proc.stderr.strip()}")
+
+    ok = quarto_path is not None and rscript_path is not None and proc.returncode == 0
+    return ok, messages
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MOUS pipeline")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -397,6 +441,11 @@ def main() -> None:
         type=float,
         default=0.5,
         help="Seconds between background RSS samples when --memory-profile is set",
+    )
+    run_parser.add_argument(
+        "--preflight-quarto-env",
+        action="store_true",
+        help="Before running, verify Quarto + R dependencies used by m8 cumulative reports.",
     )
 
     plan_parser = sub.add_parser(
@@ -498,6 +547,10 @@ def main() -> None:
         action="store_true",
         help="Log each non-BIDS filename under the naming check",
     )
+    quarto_check_parser = sub.add_parser(
+        "check-quarto-env",
+        help="Check Quarto + R runtime dependencies for cumulative report rendering",
+    )
     gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
     gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
     gui_parser.add_argument(
@@ -597,6 +650,17 @@ def main() -> None:
         )
         apply_runtime_overrides(cfg, resolved_overrides)
         selected = [s for s in STAGE_ORDER if (not only or s in only) and (not skip or s not in skip)]
+        if args.preflight_quarto_env and "m8" in selected:
+            ok, messages = _check_quarto_env()
+            print("Quarto preflight:")
+            for msg in messages:
+                print(f"- {msg}")
+            if not ok:
+                print(
+                    "Quarto preflight failed. Install R/R packages before full run.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
         try:
             result = run_subject(
                 args.subject,
@@ -843,6 +907,13 @@ def main() -> None:
             print(f"BIDS root does not exist: {bids_root}", file=sys.stderr)
             sys.exit(1)
         _run_bids_validate(bids_root, subject=args.subject, verbose=args.verbose)
+    elif args.cmd == "check-quarto-env":
+        ok, messages = _check_quarto_env()
+        print("Quarto preflight:")
+        for msg in messages:
+            print(f"- {msg}")
+        if not ok:
+            sys.exit(1)
     elif args.cmd == "gui":
         service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
         if args.base_url_path:

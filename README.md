@@ -53,6 +53,14 @@ Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
 ```
 
+Before full runs that include `m8`, verify Quarto runtime dependencies:
+
+```bash
+mous-pipeline check-quarto-env
+```
+
+The command exits non-zero when `quarto`, `Rscript`, or required R packages are missing (`ggplot2`, `dplyr`, `knitr`, `lmerTest`, `readr`).
+
 Canonical configs live under `configs/`: `palmetto_hpcnirc_fmri.yaml` and `palmetto_hpcnirc_A2004_A2014.yaml`. YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, `source`, optional `fmri` / `wave_validation`, and `pipeline`.
 
 Pipeline behavior toggles can be set under `pipeline`, for example:
@@ -285,6 +293,13 @@ bash scripts/palmetto_setup.sh
 scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account YOUR_ACCOUNT --dry-run
 scripts/palmetto_recon_all.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
 scripts/palmetto_prep_bem.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
+```
+
+For Quarto cumulative reports on Palmetto, install R runtime dependencies once in your `mous-palmetto` conda env:
+
+```bash
+conda install -n mous-palmetto -c conda-forge r-base r-ggplot2 r-dplyr r-knitr r-lmertest r-readr
+mous-pipeline check-quarto-env
 ```
 
 See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.

@@ -193,6 +193,20 @@ def _resolve_path(cfg, subject: str, key: str, fallback: Path) -> Path:
     return cfg.data_root / custom if custom else fallback
 
 
+def _resolve_fmriprep_output_dir(cfg) -> Path | None:
+    """Resolve fmri.fmriprep_output from config to an absolute path when set."""
+    fmri_cfg = getattr(cfg, "fmri", None)
+    if fmri_cfg is None:
+        return None
+    raw = str(getattr(fmri_cfg, "fmriprep_output", "")).strip()
+    if not raw:
+        return None
+    out_dir = Path(raw).expanduser()
+    if not out_dir.is_absolute():
+        out_dir = (Path.cwd() / out_dir).resolve()
+    return out_dir
+
+
 def _validate_stage_dependencies(selected: list[str], *, assume_upstream_done: bool = False) -> None:
     if assume_upstream_done:
         return
@@ -956,6 +970,7 @@ def _run_subject_body(
         t0 = perf_counter()
         bold_path = None
         fmri_cfg = getattr(cfg, "fmri", None)
+        m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
         try:
             if _m10_hit:
                 joined_df = pd.read_csv(_m10_joined_csv)
@@ -977,7 +992,6 @@ def _run_subject_body(
                     from ..m10_fmri.prep import resolve_subject_bold_path, run_fmriprep, validate_tr_from_sidecar
 
                     verbose_tools = bool(getattr(cfg, "pipeline", {}).get("verbose_tool_logs", True))
-                    m10_n_jobs = int(getattr(cfg, "pipeline", {}).get("m10_n_jobs", 1))
                     reuse_existing_fmriprep = bool(getattr(cfg, "pipeline", {}).get("m10_reuse_fmriprep", False))
                     fmriprep_out = run_fmriprep(
                         subject,
@@ -988,44 +1002,53 @@ def _run_subject_body(
                         else None,
                         reuse_existing=reuse_existing_fmriprep,
                     )
-                    bold_path = resolve_subject_bold_path(
-                        subject,
-                        cfg,
-                        bids_root=cfg.data_root,
-                        fmriprep_out_dir=fmriprep_out,
-                    )
-                    if bold_path is None:
-                        expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
-                        expected_func_dir.mkdir(parents=True, exist_ok=True)
-                        result.metrics["m10_skipped_reason"] = (
-                            "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
-                            f"{fmriprep_out}/sub-{subject.removeprefix('sub-')}/func. "
-                            f"Created expected directory: {expected_func_dir}"
-                        )
-                    else:
-                        sidecar = (
-                            bold_path.with_suffix("").with_suffix(".json")
-                            if str(bold_path).endswith(".nii.gz")
-                            else bold_path.with_suffix(".json")
-                        )
-                        if sidecar.exists():
-                            validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
-                        beta_tbl = trialwise_betas(
-                            str(bold_path),
-                            trial_df,
-                            fmri_cfg.tr,
-                            atlas=fmri_cfg.atlas,
-                            roi=fmri_cfg.roi,
-                            n_jobs=m10_n_jobs,
-                            onset_shift_s=float(getattr(fmri_cfg, "onset_shift_s", 0.0)),
-                        )
-                        joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
-                        result.metrics["m10_n_trials_joined"] = int(len(joined_df))
-                        _m10_out_dir.mkdir(parents=True, exist_ok=True)
-                        joined_df.to_csv(_m10_joined_csv, index=False)
-                        result.outputs.append(_m10_joined_csv)
                 else:
                     result.metrics["m10_skipped_reason"] = "fmri configuration missing"
+
+            if fmri_cfg is not None:
+                from ..m10_fmri.prep import resolve_subject_bold_path, validate_tr_from_sidecar
+
+                fmriprep_out_dir = _resolve_fmriprep_output_dir(cfg) if _m10_hit else fmriprep_out
+                bold_path = resolve_subject_bold_path(
+                    subject,
+                    cfg,
+                    bids_root=cfg.data_root,
+                    fmriprep_out_dir=fmriprep_out_dir,
+                )
+                if bold_path is None:
+                    if not _m10_hit:
+                        expected_func_dir = cfg.data_root / f"sub-{subject.removeprefix('sub-')}" / "func"
+                        expected_func_dir.mkdir(parents=True, exist_ok=True)
+                        checked_fmriprep = fmriprep_out_dir if fmriprep_out_dir is not None else "<unset>"
+                        result.metrics["m10_skipped_reason"] = (
+                            "No BOLD file found. Checked config fmri.bold_path, BIDS func paths, and "
+                            f"{checked_fmriprep}/sub-{subject.removeprefix('sub-')}/func. "
+                            f"Created expected directory: {expected_func_dir}"
+                        )
+                elif not _m10_hit:
+                    from ..m10_fmri.glm import trialwise_betas
+
+                    sidecar = (
+                        bold_path.with_suffix("").with_suffix(".json")
+                        if str(bold_path).endswith(".nii.gz")
+                        else bold_path.with_suffix(".json")
+                    )
+                    if sidecar.exists():
+                        validate_tr_from_sidecar(sidecar, fmri_cfg.tr)
+                    beta_tbl = trialwise_betas(
+                        str(bold_path),
+                        trial_df,
+                        fmri_cfg.tr,
+                        atlas=fmri_cfg.atlas,
+                        roi=fmri_cfg.roi,
+                        n_jobs=m10_n_jobs,
+                        onset_shift_s=float(getattr(fmri_cfg, "onset_shift_s", 0.0)),
+                    )
+                    joined_df = trial_df.merge(beta_tbl, on="trial_id", how="inner")
+                    result.metrics["m10_n_trials_joined"] = int(len(joined_df))
+                    _m10_out_dir.mkdir(parents=True, exist_ok=True)
+                    joined_df.to_csv(_m10_joined_csv, index=False)
+                    result.outputs.append(_m10_joined_csv)
 
             lag_sweep_cfg = getattr(fmri_cfg, "hrf_lag_sweep_s", [])
             lag_sweep_vals = [float(v) for v in lag_sweep_cfg] if isinstance(lag_sweep_cfg, list) else []
