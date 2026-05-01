@@ -12,8 +12,9 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-summary = json.loads(Path(params["summary_json"]).read_text())
-derivatives_root = Path(params["summary_json"]).parent
+summary_json = Path(r.params["summary_json"])
+summary = json.loads(summary_json.read_text())
+derivatives_root = summary_json.parent
 rows = []
 for metric, stats in summary.get("metrics", {}).items():
     rec = {"metric": metric}
@@ -57,7 +58,39 @@ group_trials = pd.read_csv(group_trials_path) if group_trials_path.exists() else
 
 ```{r}
 library(ggplot2)
+library(jsonlite)
 library(knitr)
+library(readr)
+
+summary_json <- params$summary_json
+derivatives_root <- dirname(summary_json)
+summary_r <- jsonlite::fromJSON(summary_json, simplifyVector = FALSE)
+metrics_r <- summary_r$metrics
+if (is.null(metrics_r)) {
+  metrics_r <- list()
+}
+
+metric_rows <- lapply(names(metrics_r), function(metric) {
+  stats <- metrics_r[[metric]]
+  data.frame(
+    metric = metric,
+    mean = if (!is.null(stats$mean)) stats$mean else NA_real_,
+    sd = if (!is.null(stats$sd)) stats$sd else if (!is.null(stats$std)) stats$std else NA_real_,
+    stringsAsFactors = FALSE
+  )
+})
+tbl <- if (length(metric_rows) > 0) {
+  do.call(rbind, metric_rows)
+} else {
+  data.frame(metric = character(), mean = numeric(), sd = numeric())
+}
+
+group_trials_path <- file.path(derivatives_root, "group_trials.csv")
+group_trials <- if (file.exists(group_trials_path)) {
+  readr::read_csv(group_trials_path, show_col_types = FALSE)
+} else {
+  data.frame()
+}
 
 theme_mous <- function(base_size = 13) {
   theme_minimal(base_size = base_size) +

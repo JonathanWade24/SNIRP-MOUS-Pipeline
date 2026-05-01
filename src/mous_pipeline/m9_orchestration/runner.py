@@ -283,6 +283,49 @@ def _finalize_run(
     return result
 
 
+_REPORT_PRESERVED_STAGE_PREFIXES: dict[str, tuple[str, ...]] = {
+    "m5": ("m5_", "source_", "aim1_source_"),
+    "m10": ("m10_",),
+    "m11": ("m11_",),
+    "m12": ("m12_", "aim3_"),
+}
+
+
+def _load_previous_manifest_metrics(manifest_path: Path) -> dict:
+    try:
+        payload = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    metrics = payload.get("metrics")
+    return dict(metrics) if isinstance(metrics, dict) else {}
+
+
+def _preserve_unselected_stage_metrics_for_reports(
+    current_metrics: dict,
+    previous_metrics: dict,
+    selected_stages: set[str],
+) -> list[str]:
+    """Carry prior downstream metrics into report-only runs."""
+    if not previous_metrics or "m8" not in selected_stages:
+        return []
+    prefixes: list[str] = []
+    for stage, stage_prefixes in _REPORT_PRESERVED_STAGE_PREFIXES.items():
+        if stage not in selected_stages:
+            prefixes.extend(stage_prefixes)
+    if not prefixes:
+        return []
+    preserved: list[str] = []
+    for key, value in previous_metrics.items():
+        if key in current_metrics:
+            continue
+        if key.startswith(tuple(prefixes)):
+            current_metrics[key] = value
+            preserved.append(key)
+    if preserved:
+        current_metrics["m8_preserved_previous_metric_keys"] = preserved
+    return preserved
+
+
 def run_subject(
     subject: str,
     cfg,
@@ -446,6 +489,9 @@ def _run_subject_body(
     _ = memory_probe  # reserved for future intra-body hooks
     out_dir = stage_output_dir(cfg, subject, "m9_orchestration")
     m4_out_dir = stage_output_dir(cfg, subject, "m4_features")
+    previous_manifest_metrics = _load_previous_manifest_metrics(
+        out_dir / f"sub-{subject}_run_manifest.json"
+    )
     events_path = _resolve_path(cfg, subject, "events_tsv", events_tsv(subject, cfg.data_root))
     task_path = _resolve_path(cfg, subject, "task_ds", task_ds(subject, cfg.data_root))
     rest_path = _resolve_path(cfg, subject, "rest_ds", rest_ds(subject, cfg.data_root))
@@ -1337,6 +1383,16 @@ def _run_subject_body(
     if _stage_selected("m8", only, skip):
         _emit("start", "m8")
         t0 = perf_counter()
+        preserved_metrics = _preserve_unselected_stage_metrics_for_reports(
+            result.metrics,
+            previous_manifest_metrics,
+            set(result.metrics.get("selected_stages", [])),
+        )
+        if preserved_metrics:
+            _append_live_log(
+                live_log_path,
+                f"[m8:metrics] preserved previous metrics: {','.join(preserved_metrics)}",
+            )
         export_dir = export_subject_payload(
             subject,
             cfg,

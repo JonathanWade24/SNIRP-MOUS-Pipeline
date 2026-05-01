@@ -64,7 +64,16 @@ _STAGE_LABELS: dict[str, str] = {
 }
 
 _stage_start_times: dict[str, float] = {}
-_QUARTO_REQUIRED_R_PACKAGES: tuple[str, ...] = ("ggplot2", "dplyr", "knitr", "lmerTest", "readr")
+_QUARTO_REQUIRED_R_PACKAGES: tuple[str, ...] = (
+    "ggplot2",
+    "dplyr",
+    "knitr",
+    "jsonlite",
+    "lmerTest",
+    "readr",
+    "rmarkdown",
+    "reticulate",
+)
 
 
 def _make_cli_progress_callback(selected_stages: list[str]):
@@ -364,6 +373,8 @@ def _run_bids_validate(root: Path, *, subject: str | None = None, verbose: bool 
 def _check_quarto_env() -> tuple[bool, list[str]]:
     """Check Quarto + R runtime needed by cumulative subject report."""
     messages: list[str] = []
+    r_packages = ",".join(f"'{pkg}'" for pkg in _QUARTO_REQUIRED_R_PACKAGES)
+    r_package_label = ", ".join(_QUARTO_REQUIRED_R_PACKAGES)
     quarto_path = shutil.which("quarto")
     if quarto_path is None:
         messages.append("missing binary: quarto (install Quarto >=1.5 and ensure it is on PATH)")
@@ -380,7 +391,7 @@ def _check_quarto_env() -> tuple[bool, list[str]]:
         "Rscript",
         "-e",
         (
-            "pkgs <- c('ggplot2','dplyr','knitr','lmerTest','readr'); "
+            f"pkgs <- c({r_packages}); "
             "missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly=TRUE)]; "
             "if (length(missing) > 0) {"
             "  cat(paste(missing, collapse=',')); "
@@ -390,7 +401,7 @@ def _check_quarto_env() -> tuple[bool, list[str]]:
     ]
     proc = subprocess.run(check_cmd, check=False, capture_output=True, text=True)
     if proc.returncode == 0:
-        messages.append("R packages: OK (ggplot2, dplyr, knitr, lmerTest, readr)")
+        messages.append(f"R packages: OK ({r_package_label})")
     else:
         missing = proc.stdout.strip()
         if missing:
@@ -896,12 +907,6 @@ def main() -> None:
         out_path = root / "group_summary.json"
         out_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote group summary: {out_path}")
-        try:
-            group_report = render_group_quarto(derivatives_root=root, summary_json=out_path)
-            if group_report is not None:
-                print(f"Wrote group report: {group_report}")
-        except Exception as exc:
-            print(f"Group Quarto report render failed (non-fatal): {exc}", file=sys.stderr)
         if trial_tables:
             group_trials = pd.concat(trial_tables, ignore_index=True)
             trial_path = root / "group_trials.csv"
@@ -912,6 +917,12 @@ def main() -> None:
             qc_path = root / "group_qc_summary.csv"
             group_qc.to_csv(qc_path, index=False)
             print(f"Wrote group QC summary: {qc_path}")
+        try:
+            group_report = render_group_quarto(derivatives_root=root, summary_json=out_path)
+            if group_report is not None:
+                print(f"Wrote group report: {group_report}")
+        except Exception as exc:
+            print(f"Group Quarto report render failed (non-fatal): {exc}", file=sys.stderr)
     elif args.cmd == "bids-convert":
         cfg = load_config(args.config)
         bids_paths = convert_subject_to_bids(args.subject, cfg)

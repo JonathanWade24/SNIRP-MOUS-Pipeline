@@ -10,7 +10,16 @@ from pathlib import Path
 from ..io import stage_output_dir
 
 _LOG = logging.getLogger(__name__)
-_REQUIRED_R_PACKAGES = ("ggplot2", "dplyr", "knitr", "lmerTest", "readr")
+_REQUIRED_R_PACKAGES = (
+    "ggplot2",
+    "dplyr",
+    "knitr",
+    "jsonlite",
+    "lmerTest",
+    "readr",
+    "rmarkdown",
+    "reticulate",
+)
 
 
 def _write_quarto_log(out_dir: Path, lines: list[str]) -> Path:
@@ -22,11 +31,12 @@ def _write_quarto_log(out_dir: Path, lines: list[str]) -> Path:
 
 def _check_r_dependencies(out_dir: Path) -> bool:
     """Return True when required R packages are installed and loadable."""
+    r_packages = ",".join(f"'{pkg}'" for pkg in _REQUIRED_R_PACKAGES)
     check_cmd = [
         "Rscript",
         "-e",
         (
-            "pkgs <- c('ggplot2','dplyr','knitr','lmerTest','readr'); "
+            f"pkgs <- c({r_packages}); "
             "missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly=TRUE)]; "
             "if (length(missing) > 0) {"
             "  cat(paste(missing, collapse=',')); "
@@ -84,17 +94,21 @@ def _render_quarto_template(
         return None
     if not _check_r_dependencies(out_dir):
         return None
-    cmd = ["quarto", "render", str(qmd_path)]
+    log_path = out_dir / "quarto_render.log"
+    if log_path.exists():
+        log_path.unlink()
+    cmd = ["quarto", "render", qmd_path.name]
     for key, value in params.items():
         cmd.extend(["-P", f"{key}:{value}"])
     cmd.extend(["--output", output_name, "--output-dir", str(out_dir)])
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     out_html = out_dir / output_name
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, cwd=qmd_path.parent)
     if proc.returncode != 0:
         log_path = _write_quarto_log(
             out_dir,
             [
                 f"Command: {' '.join(cmd)}",
+                f"Working directory: {qmd_path.parent}",
                 f"Return code: {proc.returncode}",
                 "",
                 "[stderr]",

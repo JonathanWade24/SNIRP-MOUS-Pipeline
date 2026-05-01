@@ -25,7 +25,7 @@ def test_render_quarto_uses_cumulative_template_once(tmp_path, monkeypatch) -> N
         lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
     )
 
-    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool, cwd=None):
         calls.append(cmd)
         if cmd[0] == "Rscript":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -44,7 +44,7 @@ def test_render_quarto_uses_cumulative_template_once(tmp_path, monkeypatch) -> N
     assert len(calls) == 2
     assert calls[0][0] == "Rscript"
     cmd = calls[1]
-    assert cmd[0:3] == ["quarto", "render", str(qmd)]
+    assert cmd[0:3] == ["quarto", "render", qmd.name]
     assert cmd.count("-P") == 2
     assert f"subject:{subject}" in cmd
     assert f"export_dir:{cfg.derivatives_root / subject / 'm8_reports' / 'exports'}" in cmd
@@ -67,7 +67,7 @@ def test_render_quarto_suite_returns_single_path(tmp_path, monkeypatch) -> None:
         lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
     )
 
-    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool, cwd=None):
         if cmd[0] == "Rscript":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         out_idx = cmd.index("--output") + 1
@@ -117,7 +117,7 @@ def test_render_quarto_writes_log_when_quarto_fails(tmp_path, monkeypatch) -> No
         lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
     )
 
-    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool, cwd=None):
         if cmd[0] == "Rscript":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         return SimpleNamespace(returncode=1, stdout="stdout details", stderr="stderr details")
@@ -147,7 +147,7 @@ def test_render_quarto_writes_log_when_r_packages_missing(tmp_path, monkeypatch)
         lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
     )
 
-    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool, cwd=None):
         calls.append(cmd)
         if cmd[0] == "Rscript":
             return SimpleNamespace(returncode=2, stdout="lmerTest,readr", stderr="")
@@ -179,7 +179,7 @@ def test_render_group_quarto_writes_group_html(tmp_path, monkeypatch) -> None:
         lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
     )
 
-    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool, cwd=None):
         if cmd[0] == "Rscript":
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         out_idx = cmd.index("--output") + 1
