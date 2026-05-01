@@ -74,6 +74,10 @@ _QUARTO_REQUIRED_R_PACKAGES: tuple[str, ...] = (
     "rmarkdown",
     "reticulate",
 )
+_GUI_DEPRECATION_MESSAGE = (
+    "DEPRECATION: `mous-pipeline gui` (Streamlit/JupyterHub workflow) is deprecated and "
+    "scheduled for removal in v0.3.0. Prefer `mous-pipeline run` + `watch` + `verify-run`."
+)
 
 
 def _make_cli_progress_callback(selected_stages: list[str]):
@@ -544,6 +548,16 @@ def main() -> None:
         help="Derivatives root containing <subject>/m9_orchestration/*_run_manifest.json",
     )
     group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
+    group_parser.add_argument(
+        "--subjects",
+        default="",
+        help="Optional comma-separated subject IDs to include (e.g. A2002,A2003)",
+    )
+    group_parser.add_argument(
+        "--quarto-only",
+        action="store_true",
+        help="Skip group model recompute and only render group Quarto from existing group_summary.json",
+    )
     bids_convert_parser = sub.add_parser("bids-convert", help="Add in-place BIDS metadata sidecars for a subject")
     bids_convert_parser.add_argument("--config", required=True)
     bids_convert_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
@@ -563,7 +577,10 @@ def main() -> None:
         "check-quarto-env",
         help="Check Quarto + R runtime dependencies for cumulative report rendering",
     )
-    gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
+    gui_parser = sub.add_parser(
+        "gui",
+        help="Launch Streamlit GUI with printed access URLs (deprecated; remove in v0.3.0)",
+    )
     gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
     gui_parser.add_argument(
         "--config",
@@ -872,16 +889,33 @@ def main() -> None:
             sys.exit(proc.returncode)
     elif args.cmd == "group":
         root = Path(args.derivatives_root)
+        selected_subjects = {s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()}
+        out_path = root / "group_summary.json"
+        if args.quarto_only:
+            if not out_path.exists():
+                print(f"group_summary.json not found for --quarto-only: {out_path}", file=sys.stderr)
+                sys.exit(2)
+            try:
+                group_report = render_group_quarto(derivatives_root=root, summary_json=out_path)
+                if group_report is not None:
+                    print(f"Wrote group report: {group_report}")
+            except Exception as exc:
+                print(f"Group Quarto report render failed (non-fatal): {exc}", file=sys.stderr)
+                sys.exit(1)
+            return
         metrics_list = []
         trial_tables = []
         qc_tables = []
         for mf in root.glob("*/m9_orchestration/*_run_manifest.json"):
             try:
+                sid = mf.parent.parent.name.removeprefix("sub-")
+                if selected_subjects and sid not in selected_subjects:
+                    continue
                 payload = json.loads(mf.read_text())
                 metrics = payload.get("metrics", {})
                 if metrics:
                     metrics = dict(metrics)
-                    metrics.setdefault("subject_id", mf.parent.parent.name.removeprefix("sub-"))
+                    metrics.setdefault("subject_id", sid)
                     metrics_list.append(metrics)
             except Exception:
                 continue
@@ -889,7 +923,10 @@ def main() -> None:
             try:
                 df = pd.read_csv(tf)
                 if not df.empty:
-                    df["subject"] = tf.parts[-4].removeprefix("sub-")
+                    sid = tf.parts[-4].removeprefix("sub-")
+                    if selected_subjects and sid not in selected_subjects:
+                        continue
+                    df["subject"] = sid
                     trial_tables.append(df)
             except Exception:
                 continue
@@ -897,6 +934,9 @@ def main() -> None:
             try:
                 qd = pd.read_csv(qf)
                 if not qd.empty:
+                    sid = qf.parts[-4].removeprefix("sub-")
+                    if selected_subjects and sid not in selected_subjects:
+                        continue
                     qc_tables.append(qd)
             except Exception:
                 continue
@@ -904,7 +944,6 @@ def main() -> None:
             print("No subject manifests found for group analysis.", file=sys.stderr)
             sys.exit(1)
         summary = run_group_model(metrics_list, test=args.test)
-        out_path = root / "group_summary.json"
         out_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote group summary: {out_path}")
         if trial_tables:
@@ -948,6 +987,7 @@ def main() -> None:
         if not ok:
             sys.exit(1)
     elif args.cmd == "gui":
+        print(_GUI_DEPRECATION_MESSAGE, file=sys.stderr)
         service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
         if args.base_url_path:
             base_url_path = args.base_url_path

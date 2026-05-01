@@ -30,6 +30,32 @@ class WorkflowPreset:
 
 
 @dataclass
+class IntentProfile:
+    intent_id: str
+    label: str
+    description: str
+    target: str = "submit"  # submit | group
+    requested_stages: list[str] = field(default_factory=list)
+    default_fetch_missing: bool = False
+    default_include_m5: bool = False
+    default_dry_run: bool = False
+    preferred_test: str = "wilcoxon"
+    legacy_preset_name: str = ""
+
+
+@dataclass
+class IntentExecutionPlan:
+    intent_id: str
+    command_kind: str  # submit | group
+    base_preset_name: str
+    resolved_stages: list[str] = field(default_factory=list)
+    resolved_flags: dict[str, bool] = field(default_factory=dict)
+    dependency_notes: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    legacy_translation_note: str = ""
+
+
+@dataclass
 class JobRecord:
     job_id: str
     job_name: str
@@ -44,6 +70,7 @@ class JobRecord:
 
 @dataclass
 class OpsState:
+    schema_version: int = 2
     last_config: str = "configs/palmetto_hpcnirc_fmri.yaml"
     recent_configs: list[str] = field(default_factory=lambda: ["configs/palmetto_hpcnirc_fmri.yaml"])
     defaults: dict[str, str] = field(
@@ -58,17 +85,20 @@ class OpsState:
     )
     subject_sets: dict[str, SubjectSet] = field(default_factory=dict)
     workflow_presets: dict[str, WorkflowPreset] = field(default_factory=dict)
+    intent_profiles: dict[str, IntentProfile] = field(default_factory=dict)
     run_overrides_defaults: dict[str, str] = field(default_factory=dict)
     recent_jobs: list[JobRecord] = field(default_factory=list)
     env_profile: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
+            "schema_version": self.schema_version,
             "last_config": self.last_config,
             "recent_configs": self.recent_configs,
             "defaults": self.defaults,
             "subject_sets": {k: asdict(v) for k, v in self.subject_sets.items()},
             "workflow_presets": {k: asdict(v) for k, v in self.workflow_presets.items()},
+            "intent_profiles": {k: asdict(v) for k, v in self.intent_profiles.items()},
             "run_overrides_defaults": self.run_overrides_defaults,
             "recent_jobs": [asdict(j) for j in self.recent_jobs],
             "env_profile": self.env_profile,

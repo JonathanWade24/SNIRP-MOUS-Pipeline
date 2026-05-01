@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .models import JobRecord, OpsState, SubjectSet, WorkflowPreset
+from .models import IntentProfile, JobRecord, OpsState, SubjectSet, WorkflowPreset
 
 
 def preset_from_run_options(
@@ -74,6 +74,49 @@ def default_presets() -> dict[str, WorkflowPreset]:
     }
 
 
+def default_intent_profiles() -> dict[str, IntentProfile]:
+    return {
+        "quick_qc": IntentProfile(
+            intent_id="quick_qc",
+            label="Quick QC (MEG core)",
+            description="Fast MEG quality path with reporting outputs.",
+            requested_stages=["m1", "m2", "m3", "m4", "m6a", "m7", "m8", "m9"],
+            legacy_preset_name="full_submit",
+        ),
+        "full_subject": IntentProfile(
+            intent_id="full_subject",
+            label="Full Subject",
+            description="Complete single-subject run with optional m5/fMRI blocks.",
+            requested_stages=["m1", "m2", "m3", "m4", "m4_trial", "m6a", "m7", "m8", "m9", "m10", "m11"],
+            legacy_preset_name="full_submit",
+        ),
+        "full_cohort": IntentProfile(
+            intent_id="full_cohort",
+            label="Full Cohort",
+            description="Cohort-scale full pipeline submission profile.",
+            requested_stages=["m1", "m2", "m3", "m4", "m4_trial", "m6a", "m7", "m8", "m9", "m10", "m11"],
+            legacy_preset_name="full_submit",
+            default_fetch_missing=True,
+        ),
+        "group_reports_only": IntentProfile(
+            intent_id="group_reports_only",
+            label="Group Reports Only",
+            description="Regenerate group Quarto outputs without full subject reruns.",
+            target="group",
+            requested_stages=[],
+            legacy_preset_name="bids_convert_validate",
+        ),
+        "recover_failed": IntentProfile(
+            intent_id="recover_failed",
+            label="Recover Failed Runs",
+            description="Retry failed workloads with safe defaults and dependency closure.",
+            requested_stages=["m1", "m2", "m3", "m4", "m4_trial", "m6a", "m7", "m8", "m9"],
+            legacy_preset_name="full_submit",
+            default_fetch_missing=True,
+        ),
+    }
+
+
 def state_file_path() -> Path:
     return Path("~/.config/mous_ops/state.json").expanduser()
 
@@ -83,9 +126,11 @@ def load_state(path: Path | None = None) -> OpsState:
     if not p.exists():
         st = OpsState()
         st.workflow_presets = default_presets()
+        st.intent_profiles = default_intent_profiles()
         return st
     payload = json.loads(p.read_text())
     st = OpsState(
+        schema_version=int(payload.get("schema_version", 1)),
         last_config=payload.get("last_config", "configs/palmetto_hpcnirc_fmri.yaml"),
         recent_configs=list(payload.get("recent_configs", [])),
         defaults=payload.get("defaults", OpsState().defaults),
@@ -104,6 +149,11 @@ def load_state(path: Path | None = None) -> OpsState:
         st.workflow_presets = {k: WorkflowPreset(**v) for k, v in raw_presets.items()}
     else:
         st.workflow_presets = default_presets()
+    raw_intents = payload.get("intent_profiles", {})
+    if raw_intents:
+        st.intent_profiles = {k: IntentProfile(**v) for k, v in raw_intents.items()}
+    else:
+        st.intent_profiles = default_intent_profiles()
     st.recent_jobs = [JobRecord(**r) for r in payload.get("recent_jobs", [])]
     return st
 
