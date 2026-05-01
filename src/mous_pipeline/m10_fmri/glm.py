@@ -12,7 +12,13 @@ from nilearn.maskers import NiftiLabelsMasker
 from .roi import _atlas_and_label
 
 
-def _trial_lss_design(events_df: pd.DataFrame, trial_idx: int, *, onset_shift_s: float = 0.0) -> pd.DataFrame:
+def _trial_lss_design(
+    events_df: pd.DataFrame,
+    trial_idx: int,
+    *,
+    onset_shift_s: float = 0.0,
+    target_label: str = "target_trial",
+) -> pd.DataFrame:
     events = events_df.reset_index(drop=True)
     rows: list[dict] = []
     for jdx, row_j in events.iterrows():
@@ -20,7 +26,7 @@ def _trial_lss_design(events_df: pd.DataFrame, trial_idx: int, *, onset_shift_s:
             {
                 "onset": float(row_j["onset"]) + float(onset_shift_s),
                 "duration": float(row_j.get("duration", 6.0)),
-                "trial_type": "target_trial" if trial_idx == jdx else "other_trials",
+                "trial_type": target_label if trial_idx == jdx else "other_trials",
             }
         )
     return pd.DataFrame(rows)
@@ -30,7 +36,12 @@ def _lss_design(events_df: pd.DataFrame, *, onset_shift_s: float = 0.0) -> pd.Da
     """Return stacked per-trial LSS designs (compatibility helper for tests/tools)."""
     return pd.concat(
         [
-            _trial_lss_design(events_df, idx, onset_shift_s=float(onset_shift_s))
+            _trial_lss_design(
+                events_df,
+                idx,
+                onset_shift_s=float(onset_shift_s),
+                target_label=f"trial_{idx}",
+            )
             for idx in range(len(events_df))
         ],
         ignore_index=True,

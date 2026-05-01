@@ -302,7 +302,9 @@ conda install -n mous-palmetto -c conda-forge r-base r-ggplot2 r-dplyr r-knitr r
 mous-pipeline check-quarto-env
 ```
 
-See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow.
+See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow and
+`docs/palmetto_workspace_map.md` for the Git-first laptop/Palmetto workspace
+map, path reference, and selected-result sync commands.
 
 SSH-first operations interface:
 
