@@ -1,7 +1,11 @@
+# Palmetto hpcnirc full-pipeline cohort config.
+# Note: A2003-A2012 inclusive is 10 subjects.
+
 data_root: "/scratch/jonathanwade/mous_data"
 derivatives_root: "/scratch/jonathanwade/mous_derivatives"
 
 subjects:
+  - "A2003"
   - "A2004"
   - "A2005"
   - "A2006"
@@ -11,8 +15,6 @@ subjects:
   - "A2010"
   - "A2011"
   - "A2012"
-  - "A2013"
-  - "A2014"
 
 rdr:
   collection_path: "dccn/DSC_3011020.09_236_v1"
@@ -44,7 +46,6 @@ source:
   use_fsaverage: false
   beamformer: "lcmv"
   spacing: "oct6"
-  # Keep fsaverage for template-space transform, or set a subject-specific trans path template.
   trans: "fsaverage"
   conductivity: [0.3]
   reg: 0.05
@@ -78,5 +79,6 @@ wave_validation:
   z_threshold: 1.645
 
 pipeline:
+  strict_stage_failures: true
   m10_reuse_fmriprep: true
   m11_allow_cached_joined: true

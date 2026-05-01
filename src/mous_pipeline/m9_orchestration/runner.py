@@ -786,7 +786,7 @@ def _run_subject_body(
             result.metrics["m4_trial_cache_hydrated_rows"] = int(len(cache_trial_df))
 
     # ── rest data (only needed when m6a requires fresh computation) ───────────
-    if not _m6a_hit and backend != "mne_bids_pipeline":
+    if not _m6a_hit and _stage_selected("m6a", only, skip) and backend != "mne_bids_pipeline":
         rest_raw = mne.io.read_raw_ctf(str(rest_path), preload=True, system_clock="truncate", verbose="WARNING")
         rest_raw.apply_gradient_compensation(3)
         rest_raw = apply_notch_and_resample(rest_raw, cfg)
@@ -814,6 +814,9 @@ def _run_subject_body(
     meg_picks: list[int] = []
     _m6a_data_available = False
     _m6a_alpha_available = False
+    dirs_z = dirs_w = dirs_r = np.array([])
+    dci_z = dci_w = dci_r = np.array([])
+    sliding_t = sliding_z = np.array([])
     alpha_dirs_z = alpha_dirs_w = alpha_dirs_r = np.array([])
     alpha_dci_z = alpha_dci_w = alpha_dci_r = np.array([])
     if _m6a_hit:
@@ -974,62 +977,73 @@ def _run_subject_body(
     else:
         result.skipped_stages.append("m6_extra")
 
-    _emit("start", "m7")
-    t0 = perf_counter()
-    _, p_sz = perm_test_dci(dci_z, dci_r)
-    _, p_wr = perm_test_dci(dci_w, dci_r)
-    _, p_zw = perm_test_dci(dci_z, dci_w)
-    result.metrics["p_task_vs_rest"] = p_sz
-    result.metrics["p_woorden_vs_rest"] = p_wr
-    result.metrics["p_zinnen_vs_woorden"] = p_zw
-    result.metrics["p_rayleigh_zinnen"] = rayleigh_p(dirs_z)
-    result.metrics["p_rayleigh_woorden"] = rayleigh_p(dirs_w)
-    result.metrics["dci_zinnen_pooled"] = directional_consistency_index(dirs_z)
-    result.metrics["dci_woorden_pooled"] = directional_consistency_index(dirs_w)
-    result.metrics["dci_rest_pooled"] = directional_consistency_index(dirs_r)
-    if _m6a_alpha_available:
-        _, p_alpha_sz = perm_test_dci(alpha_dci_z, alpha_dci_r)
-        _, p_alpha_wr = perm_test_dci(alpha_dci_w, alpha_dci_r)
-        _, p_alpha_zw = perm_test_dci(alpha_dci_z, alpha_dci_w)
-        result.metrics["alpha_p_task_vs_rest"] = p_alpha_sz
-        result.metrics["alpha_p_woorden_vs_rest"] = p_alpha_wr
-        result.metrics["alpha_p_zinnen_vs_woorden"] = p_alpha_zw
-        result.metrics["alpha_p_rayleigh_zinnen"] = rayleigh_p(alpha_dirs_z)
-        result.metrics["alpha_p_rayleigh_woorden"] = rayleigh_p(alpha_dirs_w)
-        result.metrics["alpha_dci_zinnen_pooled"] = directional_consistency_index(alpha_dirs_z)
-        result.metrics["alpha_dci_woorden_pooled"] = directional_consistency_index(alpha_dirs_w)
-        result.metrics["alpha_dci_rest_pooled"] = directional_consistency_index(alpha_dirs_r)
-    if {"dci_trial", "pos_in_block"}.issubset(trial_df.columns):
-        model_df = trial_df.dropna(subset=["dci_trial", "pos_in_block"]).copy()
-        model_df = add_first_trial_control_columns(model_df)
-        if not model_df.empty:
-            p_block, _ = lme_block_control(model_df, "dci_trial ~ C(condition) + pos_in_block")
-            result.metrics["aim1_dci_block_effect_p"] = p_block
-            p_block_first, _ = lme_block_control(
-                model_df,
-                "dci_trial ~ C(condition) + pos_in_block + is_first_in_block",
-                term="is_first_in_block",
+    if _stage_selected("m7", only, skip):
+        _emit("start", "m7")
+        t0 = perf_counter()
+        if _m6a_data_available:
+            _, p_sz = perm_test_dci(dci_z, dci_r)
+            _, p_wr = perm_test_dci(dci_w, dci_r)
+            _, p_zw = perm_test_dci(dci_z, dci_w)
+            result.metrics["p_task_vs_rest"] = p_sz
+            result.metrics["p_woorden_vs_rest"] = p_wr
+            result.metrics["p_zinnen_vs_woorden"] = p_zw
+            result.metrics["p_rayleigh_zinnen"] = rayleigh_p(dirs_z)
+            result.metrics["p_rayleigh_woorden"] = rayleigh_p(dirs_w)
+            result.metrics["dci_zinnen_pooled"] = directional_consistency_index(dirs_z)
+            result.metrics["dci_woorden_pooled"] = directional_consistency_index(dirs_w)
+            result.metrics["dci_rest_pooled"] = directional_consistency_index(dirs_r)
+            if _m6a_alpha_available:
+                _, p_alpha_sz = perm_test_dci(alpha_dci_z, alpha_dci_r)
+                _, p_alpha_wr = perm_test_dci(alpha_dci_w, alpha_dci_r)
+                _, p_alpha_zw = perm_test_dci(alpha_dci_z, alpha_dci_w)
+                result.metrics["alpha_p_task_vs_rest"] = p_alpha_sz
+                result.metrics["alpha_p_woorden_vs_rest"] = p_alpha_wr
+                result.metrics["alpha_p_zinnen_vs_woorden"] = p_alpha_zw
+                result.metrics["alpha_p_rayleigh_zinnen"] = rayleigh_p(alpha_dirs_z)
+                result.metrics["alpha_p_rayleigh_woorden"] = rayleigh_p(alpha_dirs_w)
+                result.metrics["alpha_dci_zinnen_pooled"] = directional_consistency_index(alpha_dirs_z)
+                result.metrics["alpha_dci_woorden_pooled"] = directional_consistency_index(alpha_dirs_w)
+                result.metrics["alpha_dci_rest_pooled"] = directional_consistency_index(alpha_dirs_r)
+            if {"dci_trial", "pos_in_block"}.issubset(trial_df.columns):
+                model_df = trial_df.dropna(subset=["dci_trial", "pos_in_block"]).copy()
+                model_df = add_first_trial_control_columns(model_df)
+                if not model_df.empty:
+                    p_block, _ = lme_block_control(model_df, "dci_trial ~ C(condition) + pos_in_block")
+                    result.metrics["aim1_dci_block_effect_p"] = p_block
+                    p_block_first, _ = lme_block_control(
+                        model_df,
+                        "dci_trial ~ C(condition) + pos_in_block + is_first_in_block",
+                        term="is_first_in_block",
+                    )
+                    result.metrics["aim1_dci_first_trial_effect_p"] = p_block_first
+        else:
+            result.metrics["m7_skipped_reason"] = (
+                "m6a outputs unavailable; run m6a first or provide cached m6a artifacts"
             )
-            result.metrics["aim1_dci_first_trial_effect_p"] = p_block_first
-    if {"prestim_beta", "pos_in_block"}.issubset(trial_df.columns):
-        prestim_model_df = trial_df.dropna(subset=["prestim_beta", "pos_in_block"]).copy()
-        prestim_model_df = add_first_trial_control_columns(prestim_model_df)
-        if not prestim_model_df.empty:
-            p_prestim_block, _ = lme_block_control(
-                prestim_model_df,
-                "prestim_beta ~ C(condition) + pos_in_block",
-            )
-            result.metrics["aim1_prestim_block_effect_p"] = p_prestim_block
-            p_prestim_first, _ = lme_block_control(
-                prestim_model_df,
-                "prestim_beta ~ C(condition) + pos_in_block + is_first_in_block",
-                term="is_first_in_block",
-            )
-            result.metrics["aim1_prestim_first_trial_effect_p"] = p_prestim_first
-    result.stage_timings_s["m7"] = perf_counter() - t0
-    _emit("done", "m7")
-    if progress_callback and _stage_selected("m7", only, skip):
-        progress_callback("m7")
+            result.skipped_stages.append("m7")
+            if result.status != "failed":
+                result.status = "completed_with_skips"
+        if {"prestim_beta", "pos_in_block"}.issubset(trial_df.columns):
+            prestim_model_df = trial_df.dropna(subset=["prestim_beta", "pos_in_block"]).copy()
+            prestim_model_df = add_first_trial_control_columns(prestim_model_df)
+            if not prestim_model_df.empty:
+                p_prestim_block, _ = lme_block_control(
+                    prestim_model_df,
+                    "prestim_beta ~ C(condition) + pos_in_block",
+                )
+                result.metrics["aim1_prestim_block_effect_p"] = p_prestim_block
+                p_prestim_first, _ = lme_block_control(
+                    prestim_model_df,
+                    "prestim_beta ~ C(condition) + pos_in_block + is_first_in_block",
+                    term="is_first_in_block",
+                )
+                result.metrics["aim1_prestim_first_trial_effect_p"] = p_prestim_first
+        result.stage_timings_s["m7"] = perf_counter() - t0
+        _emit("done", "m7")
+        if progress_callback:
+            progress_callback("m7")
+    else:
+        result.skipped_stages.append("m7")
 
     _emit("start", "m9")
     t0 = perf_counter()

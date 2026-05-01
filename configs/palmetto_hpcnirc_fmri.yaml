@@ -59,7 +59,7 @@ fmri:
   skip_fmriprep: false
   skip_bids_validation: false
   neurodesk_module: ""
-  fs_license_file: "/scratch/jonathanwade/MOUS/licenses/freesurfer/license.txt"
+  fs_license_file: "/scratch/jonathanwade/licenses/freesurfer/license.txt"
   onset_shift_s: 0.0
   hrf_lag_sweep_s: [4.0, 5.0, 6.0, 7.0, 8.0]
   # Optional: force a runtime. Leave empty to auto-detect apptainer->singularity.
@@ -69,7 +69,7 @@ fmri:
   container_binds:
     - "/scratch/jonathanwade:/scratch/jonathanwade"
     - "/scratch/jonathanwade/templateflow:/opt/templateflow"
-    - "/scratch/jonathanwade/MOUS/licenses:/scratch/jonathanwade/MOUS/licenses"
+    - "/scratch/jonathanwade/licenses:/scratch/jonathanwade/licenses"
 
 wave_validation:
   enabled: true

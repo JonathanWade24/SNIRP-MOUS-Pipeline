@@ -1,0 +1,26 @@
+{
+  "n_subjects": 2,
+  "subjects": [
+    "A2002",
+    "A2003"
+  ],
+  "dci_zinnen_mean": 0.017358340838970025,
+  "dci_woorden_mean": 0.01659098111664547,
+  "dci_rest_mean": 0.01636933639418784,
+  "dci_zinnen_range": [
+    0.016817317593234873,
+    0.017899364084705178
+  ],
+  "dci_woorden_range": [
+    0.016181262342509946,
+    0.01700069989078099
+  ],
+  "dci_rest_range": [
+    0.015864241151680798,
+    0.016874431636694887
+  ],
+  "p_task_vs_rest_median": 0.2317,
+  "p_task_vs_rest_above_0_1": 2,
+  "p_task_vs_rest_n": 2,
+  "p_zinnen_vs_woorden_median": 0.3222
+}

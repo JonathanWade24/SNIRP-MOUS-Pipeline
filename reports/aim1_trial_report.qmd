@@ -12,8 +12,8 @@ import pandas as pd
 from pathlib import Path
 import json
 
-subject    = params["subject"]
-export_dir = Path(params["export_dir"])
+subject    = r.params["subject"]
+export_dir = Path(r.params["export_dir"])
 trials     = pd.read_csv(export_dir / f"{subject}_trials.csv")
 metrics    = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 trials.head()

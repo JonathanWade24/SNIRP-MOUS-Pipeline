@@ -13,8 +13,8 @@ from pathlib import Path
 import pandas as pd
 from IPython.display import HTML
 
-subject = params["subject"]
-export_dir = Path(params["export_dir"])
+subject = r.params["subject"]
+export_dir = Path(r.params["export_dir"])
 metrics = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 
 directions_path = export_dir / f"{subject}_directions.csv"
