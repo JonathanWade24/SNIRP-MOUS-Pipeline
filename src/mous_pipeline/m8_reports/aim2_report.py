@@ -88,7 +88,6 @@ code {{ background: #f7f7f7; padding: 1px 4px; border-radius: 3px; }}
 <h2>Key Metrics</h2>
 <ul>
   <li>run_status: <strong>{_fmt(metrics.get("run_status"))}</strong></li>
-  <li>pilot_verdict: <strong>{_fmt(metrics.get("pilot_verdict"))}</strong></li>
   <li>aim3_two_dipole_z: <strong>{_fmt(metrics.get("aim3_two_dipole_z"))}</strong></li>
 </ul>
 </body></html>"""

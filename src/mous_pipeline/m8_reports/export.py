@@ -51,6 +51,26 @@ def export_subject_payload(
     if joined_df is not None and not joined_df.empty:
         joined_df.to_csv(out_dir / f"{subject}_trials_joined.csv", index=False)
 
+    qc_row = {
+        "subject_id": subject,
+        "n_trials_zinnen": metrics.get("n_zinnen"),
+        "n_trials_woorden": metrics.get("n_woorden"),
+        "mean_FD": metrics.get("m10_mean_fd"),
+        "n_motion_outliers": metrics.get("m10_n_motion_outliers"),
+        "ICA_components_removed": metrics.get("m2_ica_n_components_removed"),
+        "DCI_zinnen": metrics.get("dci_zinnen"),
+        "DCI_rest": metrics.get("dci_rest"),
+        "p_task_vs_rest": metrics.get("p_task_vs_rest"),
+        "prestim_beta_t": metrics.get("aim1_prestim_auc"),
+        "N400m_r": metrics.get("aim1_n400m_zinnen_vs_woorden_t"),
+        "MTG_spearman_r": (
+            (metrics.get("m11_coupling") or {}).get("zinnen_prestim_beta_vs_mtg", {}) or {}
+        ).get("r")
+        if isinstance(metrics.get("m11_coupling"), dict)
+        else None,
+    }
+    pd.DataFrame([qc_row]).to_csv(out_dir / f"{subject}_qc_summary.csv", index=False)
+
     # Optional m5 exports (when source reconstruction ran and wrote arrays).
     m5_dir = stage_output_dir(cfg, subject, "m5_source")
     source_dirs_path = m5_dir / f"sub-{subject}_source_dirs.npy"

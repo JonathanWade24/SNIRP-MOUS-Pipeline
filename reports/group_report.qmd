@@ -10,14 +10,49 @@ params:
 import json
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 summary = json.loads(Path(params["summary_json"]).read_text())
+derivatives_root = Path(params["summary_json"]).parent
 rows = []
 for metric, stats in summary.get("metrics", {}).items():
     rec = {"metric": metric}
     rec.update(stats)
     rows.append(rec)
 tbl = pd.DataFrame(rows)
+
+manifest_rows = []
+for mf in sorted(derivatives_root.glob("*/m9_orchestration/*_run_manifest.json")):
+    try:
+        payload = json.loads(mf.read_text())
+        metrics = payload.get("metrics", {}) or {}
+    except Exception:
+        continue
+    sid = mf.parent.parent.name.removeprefix("sub-")
+    manifest_rows.append(
+        {
+            "subject_id": sid,
+            "n_trials_zinnen": metrics.get("n_zinnen"),
+            "n_trials_woorden": metrics.get("n_woorden"),
+            "mean_FD": metrics.get("m10_mean_fd"),
+            "n_motion_outliers": metrics.get("m10_n_motion_outliers"),
+            "ICA_components_removed": metrics.get("m2_ica_n_components_removed"),
+            "DCI_zinnen": metrics.get("dci_zinnen"),
+            "DCI_rest": metrics.get("dci_rest"),
+            "p_task_vs_rest": metrics.get("p_task_vs_rest"),
+            "prestim_beta_t": metrics.get("aim1_prestim_auc"),
+            "N400m_r": metrics.get("aim1_n400m_zinnen_vs_woorden_t"),
+            "MTG_spearman_r": (
+                (metrics.get("m11_coupling") or {}).get("zinnen_prestim_beta_vs_mtg", {}) or {}
+            ).get("r")
+            if isinstance(metrics.get("m11_coupling"), dict)
+            else None,
+        }
+    )
+qc_tbl = pd.DataFrame(manifest_rows)
+
+group_trials_path = derivatives_root / "group_trials.csv"
+group_trials = pd.read_csv(group_trials_path) if group_trials_path.exists() else pd.DataFrame()
 ```
 
 ```{r}
@@ -41,6 +76,73 @@ theme_mous <- function(base_size = 13) {
 
 ```{python}
 tbl.style.format(precision=4)
+```
+
+## Integrated Aims Narrative
+
+This group report presents the three aims as a coherent chain: trial-level preparation effects (Aim 1), multimodal MTG coupling (Aim 2), and traveling-wave directionality constraints (Aim 3). Null outcomes are interpreted as boundary conditions, not failures.
+
+## Aim 1 - Group Readiness Signals
+
+```{python}
+aim1_metrics = [
+    "dci_zinnen",
+    "p_zinnen_vs_woorden",
+]
+if not tbl.empty:
+    aim1_tbl = tbl[tbl["metric"].isin(aim1_metrics)].copy()
+    aim1_tbl.style.format(precision=4) if not aim1_tbl.empty else print("No Aim 1 aggregate rows found.")
+else:
+    print("No group metric table available.")
+```
+
+```{r}
+#| label: fig-aim1-group-prestim
+#| fig-cap: "Group trial-level prestim beta by condition pooled across subjects."
+#| fig-width: 8
+#| fig-height: 4.5
+
+if (nrow(group_trials) > 0 && all(c("prestim_beta", "condition") %in% names(group_trials))) {
+  group_trials$condition <- factor(group_trials$condition)
+  ggplot(group_trials, aes(x = condition, y = prestim_beta, fill = condition)) +
+    geom_violin(trim = FALSE, alpha = 0.4, color = "white", linewidth = 0.2) +
+    geom_boxplot(width = 0.12, outlier.shape = NA, alpha = 0.8, linewidth = 0.6) +
+    scale_fill_manual(values = c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")) +
+    theme_mous() +
+    theme(legend.position = "none") +
+    labs(title = "Aim 1 cohort prestim beta contrast", x = NULL, y = "Pre-stim beta (a.u.)")
+}
+```
+
+## Aim 2 - Group MEG-fMRI Coupling
+
+```{python}
+m11 = summary.get("metrics", {}).get("m11_coupling", {})
+rows = []
+for key in ("zinnen_prestim_beta_vs_mtg", "woorden_prestim_beta_vs_mtg"):
+    stats = m11.get(key)
+    if isinstance(stats, dict):
+        rows.append(
+            {
+                "contrast": key,
+                "mean_r": stats.get("mean"),
+                "median_r": stats.get("median"),
+                "wilcoxon_p": stats.get("wilcoxon_p"),
+                "n_subjects": stats.get("n"),
+            }
+        )
+pd.DataFrame(rows).style.format(precision=4) if rows else print("No Aim 2 coupling summaries found.")
+```
+
+## Aim 3 - Group Traveling-Wave Constraints
+
+```{python}
+aim3_rows = []
+for key in ("dci_zinnen", "dci_rest", "p_task_vs_rest", "m12_wave_validation_z"):
+    stats = summary.get("metrics", {}).get(key)
+    if isinstance(stats, dict):
+        aim3_rows.append({"metric": key, "mean": stats.get("mean"), "median": stats.get("median"), "p": stats.get("wilcoxon_p")})
+pd.DataFrame(aim3_rows).style.format(precision=4) if aim3_rows else print("No Aim 3 summary rows found.")
 ```
 
 ## Group Means by Metric
@@ -77,6 +179,16 @@ if ("mean" %in% names(df)) {
 
   print(p)
 }
+```
+
+## Subject-Level QC Transparency Table
+
+```{python}
+if not qc_tbl.empty:
+    qc_tbl = qc_tbl.sort_values("subject_id").reset_index(drop=True)
+    qc_tbl.style.format(precision=4)
+else:
+    print("No manifest-derived QC rows available.")
 ```
 
 ## m11 Primary vs Exploratory and FDR

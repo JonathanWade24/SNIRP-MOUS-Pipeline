@@ -10,6 +10,8 @@ params:
 ```{python}
 import json
 from pathlib import Path
+import numpy as np
+import matplotlib.pyplot as plt
 
 subject    = params["subject"]
 export_dir = Path(params["export_dir"])
@@ -88,4 +90,24 @@ ggplot(dirs, aes(x = direction_rad, color = condition, fill = condition)) +
     subtitle = "Smoothed KDE overlaid across conditions",
     x = NULL, y = NULL
   )
+```
+
+## Two-dipole null comparison
+
+```{python}
+m12_dir = export_dir.parent.parent / "m12_wave_validation"
+null_path = m12_dir / f"sub-{subject}_null_dci.npy"
+obs = metrics.get("dci_zinnen")
+if null_path.exists():
+    null_dci = np.load(null_path)
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.hist(null_dci, bins=30, color="#cbd5e1", edgecolor="white")
+    if obs is not None:
+        ax.axvline(float(obs), color="#dc2626", linewidth=2, linestyle="--")
+    ax.set_title("Two-dipole null DCI distribution")
+    ax.set_xlabel("DCI")
+    ax.set_ylabel("Count")
+    plt.show()
+else:
+    print("No m12 null artifact available.")
 ```

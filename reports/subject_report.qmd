@@ -53,18 +53,12 @@ theme_mous <- function(base_size = 13) {
 COND_COLORS <- c("ZINNEN" = "#2563eb", "WOORDEN" = "#16a34a", "REST" = "#d97706")
 ```
 
-## Pilot Verdict
+## Run Snapshot
 
 ```{python}
 from IPython.display import HTML
 
-verdict = metrics.get("pilot_verdict", "unknown")
-color_map = {"GO": "#16a34a", "MARGINAL": "#d97706", "NO-GO": "#dc2626"}
-bg = color_map.get(str(verdict).upper(), "#475569")
-HTML(
-    f'<div class="verdict-badge" style="background:{bg};color:#fff;">'
-    f'Pilot verdict: {verdict}</div>'
-)
+HTML('<div style="color:#475569;">Decision status presentation removed from report output.</div>')
 ```
 
 ## Key Metrics

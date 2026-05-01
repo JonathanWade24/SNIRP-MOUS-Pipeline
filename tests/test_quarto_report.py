@@ -221,3 +221,26 @@ def test_subject_full_report_template_mentions_new_optional_metrics() -> None:
         "analysis_decisions_artifact",
     ]:
         assert key in template
+
+
+def test_subject_full_report_contains_integrated_aim_sections() -> None:
+    template = Path("reports/subject_full_report.qmd").read_text()
+    for section in [
+        "Integrated Aims Narrative",
+        "Aim 1 - Pre-stimulus Beta and N400m Link",
+        "Aim 2 - MEG-fMRI Correspondence at Left MTG",
+        "Aim 3 - Traveling-Wave Directionality",
+    ]:
+        assert section in template
+
+
+def test_group_report_contains_aim_sections_and_qc_table() -> None:
+    template = Path("reports/group_report.qmd").read_text()
+    for section in [
+        "Integrated Aims Narrative",
+        "Aim 1 - Group Readiness Signals",
+        "Aim 2 - Group MEG-fMRI Coupling",
+        "Aim 3 - Group Traveling-Wave Constraints",
+        "Subject-Level QC Transparency Table",
+    ]:
+        assert section in template

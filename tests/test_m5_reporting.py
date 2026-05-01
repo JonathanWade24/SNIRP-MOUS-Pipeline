@@ -1,8 +1,8 @@
 """Tests for m5 source-space integration with m8 reporting.
 
-Covers:
+ Covers:
 - export_subject_payload: m5 CSV and ROI summary generation
-- render_subject: verdict badge, m5 metrics, source rose section
+- render_subject: m5 metrics, source rose section
 - _verify_run_manifest: --require-m5 / --require-skip-m5 flag logic
 - CLI _collect_stage_warnings: m5_error and m5_skipped_reason surfacing
 """
@@ -57,7 +57,7 @@ def _write_m5_npy(cfg: PipelineConfig, subject: str, n_epochs: int = 10) -> dict
     }
 
 
-def _minimal_metrics(*, verdict: str = "GO") -> dict:
+def _minimal_metrics(*, verdict: str = "status_hidden") -> dict:
     return {
         "pilot_verdict": verdict,
         "run_status": "done",
@@ -98,6 +98,39 @@ class TestExportSubjectPayload:
         assert (export_dir / f"{subject}_directions.csv").exists()
         assert (export_dir / f"{subject}_sliding_dci.csv").exists()
         assert (export_dir / f"{subject}_metrics.json").exists()
+        assert (export_dir / f"{subject}_qc_summary.csv").exists()
+
+    def test_qc_summary_contains_required_columns(self, tmp_path):
+        import pandas as pd
+
+        cfg = _make_cfg(tmp_path)
+        subject = "A9001B"
+        export_dir = export_subject_payload(
+            subject,
+            cfg,
+            dirs_z=np.random.uniform(0, 2 * np.pi, 12),
+            dirs_w=np.random.uniform(0, 2 * np.pi, 12),
+            dirs_r=np.random.uniform(0, 2 * np.pi, 8),
+            sliding_t=np.linspace(0, 5, 30),
+            sliding_dci_z=np.random.uniform(0.4, 0.8, 30),
+            metrics=_minimal_metrics(),
+        )
+        qc = pd.read_csv(export_dir / f"{subject}_qc_summary.csv")
+        assert len(qc) == 1
+        assert set(qc.columns) == {
+            "subject_id",
+            "n_trials_zinnen",
+            "n_trials_woorden",
+            "mean_FD",
+            "n_motion_outliers",
+            "ICA_components_removed",
+            "DCI_zinnen",
+            "DCI_rest",
+            "p_task_vs_rest",
+            "prestim_beta_t",
+            "N400m_r",
+            "MTG_spearman_r",
+        }
 
     def test_m5_npy_exports_source_csvs(self, tmp_path):
         cfg = _make_cfg(tmp_path)
@@ -203,18 +236,11 @@ class TestRenderSubject:
         assert out_path.exists()
         assert out_path.suffix == ".html"
 
-    def test_verdict_badge_present_and_colored(self, tmp_path):
-        html = self._run_render(tmp_path, "A9011", metrics={**_minimal_metrics(), "pilot_verdict": "GO"})
-        assert "GO" in html
-        assert "#2e7d32" in html  # green
-
-    def test_verdict_no_go_uses_red(self, tmp_path):
-        html = self._run_render(tmp_path, "A9012", metrics={**_minimal_metrics(), "pilot_verdict": "NO-GO"})
-        assert "#b71c1c" in html
-
-    def test_verdict_marginal_uses_amber(self, tmp_path):
-        html = self._run_render(tmp_path, "A9013", metrics={**_minimal_metrics(), "pilot_verdict": "MARGINAL"})
-        assert "#e65100" in html
+    def test_verdict_keywords_not_rendered(self, tmp_path):
+        html = self._run_render(tmp_path, "A9011", metrics={**_minimal_metrics(), "pilot_verdict": "status_hidden"})
+        assert "Pilot verdict" not in html
+        assert "NO-GO" not in html
+        assert "MARGINAL" not in html
 
     def test_m5_metrics_appear_in_table(self, tmp_path):
         metrics = {

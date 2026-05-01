@@ -11,6 +11,9 @@ def test_group_command_writes_summary_and_calls_group_quarto(tmp_path, monkeypat
     mf = derivatives / "A2002" / "m9_orchestration" / "sub-A2002_run_manifest.json"
     mf.parent.mkdir(parents=True, exist_ok=True)
     mf.write_text(json.dumps({"metrics": {"dci_zinnen": 0.2}}))
+    qc = derivatives / "A2002" / "m8_reports" / "exports" / "A2002_qc_summary.csv"
+    qc.parent.mkdir(parents=True, exist_ok=True)
+    qc.write_text("subject_id,DCI_zinnen\nA2002,0.2\n")
 
     called: dict[str, object] = {}
 
@@ -25,5 +28,6 @@ def test_group_command_writes_summary_and_calls_group_quarto(tmp_path, monkeypat
     monkeypatch.setattr("mous_pipeline.cli.render_group_quarto", _fake_render_group_quarto)
     cli.main()
     assert (derivatives / "group_summary.json").exists()
+    assert (derivatives / "group_qc_summary.csv").exists()
     assert called["derivatives_root"] == derivatives
     assert called["summary_json"] == derivatives / "group_summary.json"

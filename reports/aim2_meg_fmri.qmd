@@ -10,10 +10,12 @@ params:
 ```{python}
 import pandas as pd
 from pathlib import Path
+import json
 
 subject    = params["subject"]
 export_dir = Path(params["export_dir"])
 joined     = pd.read_csv(export_dir / f"{subject}_trials_joined.csv")
+metrics    = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 joined.head()
 ```
 
@@ -77,4 +79,25 @@ ggplot(joined, aes(x = prestim_beta, y = mtg_beta, color = condition)) +
     x = "Pre-stim β power (MEG, a.u.)",
     y = "Left-MTG β weight (fMRI)"
   )
+```
+
+## HRF lag sweep diagnostics (if available)
+
+```{python}
+lag_rows = []
+lag = metrics.get("m11_coupling_hrf_lag_sweep", {})
+if isinstance(lag, dict):
+    for label, payload in sorted(lag.items()):
+        if not isinstance(payload, dict):
+            continue
+        z = payload.get("zinnen_prestim_beta_vs_mtg", {})
+        w = payload.get("woorden_prestim_beta_vs_mtg", {})
+        lag_rows.append(
+            {
+                "lag_label": label,
+                "zinnen_r": z.get("r") if isinstance(z, dict) else None,
+                "woorden_r": w.get("r") if isinstance(w, dict) else None,
+            }
+        )
+pd.DataFrame(lag_rows).style.format(precision=4) if lag_rows else print("No lag-sweep metrics found.")
 ```

@@ -62,16 +62,10 @@ export_dir <- params$export_dir
 
 # Pilot and Pipeline Summary
 
-## Pilot Verdict
+## Run Snapshot
 
 ```{python}
-verdict = metrics.get("pilot_verdict", "unknown")
-color_map = {"GO": "#16a34a", "MARGINAL": "#d97706", "NO-GO": "#dc2626"}
-bg = color_map.get(str(verdict).upper(), "#475569")
-HTML(
-    f'<div class="verdict-badge" style="background:{bg};color:#fff;">'
-    f'Pilot verdict: {verdict}</div>'
-)
+HTML('<div style="color:#475569;">Decision status presentation removed from report output.</div>')
 ```
 
 ## Key Metrics
@@ -406,4 +400,151 @@ if m5_rows:
     pd.DataFrame(m5_rows).style.hide(axis="index")
 else:
     print("m5 metrics not present (stage may have been skipped).")
+```
+
+# Integrated Aims Narrative
+
+This section ties the three aims into one analysis story: pre-stimulus preparation (Aim 1), multimodal validation in MTG (Aim 2), and traveling-wave boundary conditions (Aim 3). Each subsection reports expected direction, observed summary metrics, and interpretation-ready diagnostics.
+
+## Aim 1 - Pre-stimulus Beta and N400m Link
+
+```{r}
+#| label: fig-aim1-panel-c
+#| fig-cap: "Aim 1 panel C equivalent: trial-wise pre-stim beta versus N400m with Spearman trend."
+#| fig-width: 7.5
+#| fig-height: 4.8
+
+if (file.exists(trials_file)) {
+  trials <- read_csv(trials_file, show_col_types = FALSE)
+  req_cols <- c("prestim_beta", "n400m", "condition")
+  if (all(req_cols %in% names(trials))) {
+    trials <- trials[is.finite(trials$prestim_beta) & is.finite(trials$n400m), ]
+    if (nrow(trials) >= 5) {
+      cor_res <- suppressWarnings(cor.test(trials$prestim_beta, trials$n400m, method = "spearman"))
+      ann <- paste0("Spearman r = ", sprintf("%.3f", unname(cor_res$estimate)), ", p = ", format.pval(cor_res$p.value, digits = 3))
+      ggplot(trials, aes(x = prestim_beta, y = n400m, color = condition)) +
+        geom_point(alpha = 0.45, size = 1.7) +
+        geom_smooth(method = "lm", se = TRUE, linewidth = 0.9, alpha = 0.2) +
+        annotate("label", x = Inf, y = -Inf, hjust = 1.05, vjust = -0.5, label = ann, size = 3.5) +
+        scale_color_manual(values = COND_COLORS, name = "Condition") +
+        theme_mous() +
+        theme(legend.position = "right") +
+        labs(
+          title = paste("Aim 1: Pre-stim beta vs N400m -", subject),
+          subtitle = "More negative N400m is lower on the y-axis",
+          x = "Pre-stim beta power (a.u.)",
+          y = "N400m amplitude (a.u.)"
+        )
+    } else {
+      cat("Insufficient finite trials for Spearman summary.\n")
+    }
+  } else {
+    cat("Aim 1 correlation skipped (missing prestim_beta/n400m/condition).\n")
+  }
+} else {
+  cat("Trials CSV not available.\n")
+}
+```
+
+```{python}
+aim1_rows = []
+for key in (
+    "aim1_n400m_zinnen_vs_woorden_t",
+    "aim1_prestim_block_effect_p",
+    "aim1_prestim_first_trial_effect_p",
+    "aim1_prestim_auc",
+    "aim1_prestim_auc_guard_reason",
+):
+    if key in metrics:
+        aim1_rows.append({"Metric": key, "Value": _fmt(metrics[key])})
+pd.DataFrame(aim1_rows).style.hide(axis="index") if aim1_rows else print("No Aim 1 metrics available.")
+```
+
+## Aim 2 - MEG-fMRI Correspondence at Left MTG
+
+```{python}
+import numpy as np
+import matplotlib.pyplot as plt
+
+lag_coupling = metrics.get("m11_coupling_hrf_lag_sweep", {}) if isinstance(metrics.get("m11_coupling_hrf_lag_sweep"), dict) else {}
+if lag_coupling:
+    xs, ys = [], []
+    for label, row in lag_coupling.items():
+        try:
+            lag_val = float(str(label).replace("s", ""))
+        except Exception:
+            continue
+        z_row = row.get("zinnen_prestim_beta_vs_mtg", {}) if isinstance(row, dict) else {}
+        r = z_row.get("r")
+        if r is None:
+            continue
+        xs.append(lag_val)
+        ys.append(float(r))
+    if xs:
+        order = np.argsort(xs)
+        xs = np.asarray(xs)[order]
+        ys = np.asarray(ys)[order]
+        fig, ax = plt.subplots(figsize=(7.5, 4.0))
+        ax.plot(xs, ys, marker="o", linewidth=1.8, color="#2563eb")
+        ax.axhline(0, linestyle="--", linewidth=1.0, color="#94a3b8")
+        best_i = int(np.nanargmax(np.abs(ys)))
+        ax.scatter([xs[best_i]], [ys[best_i]], color="#dc2626", zorder=3)
+        ax.set_title("Aim 2 lag optimization (ZINNEN prestim-beta vs MTG)")
+        ax.set_xlabel("Assumed hemodynamic lag (s)")
+        ax.set_ylabel("Spearman r")
+        plt.show()
+    else:
+        print("Lag sweep metric present but no parseable lag entries.")
+else:
+    print("No HRF lag sweep coupling entries available.")
+```
+
+```{python}
+aim2_rows = []
+m11 = metrics.get("m11_coupling", {}) if isinstance(metrics.get("m11_coupling"), dict) else {}
+for key in ("zinnen_prestim_beta_vs_mtg", "woorden_prestim_beta_vs_mtg"):
+    row = m11.get(key, {})
+    if isinstance(row, dict):
+        aim2_rows.append({"Contrast": key, "r": row.get("r"), "p": row.get("p"), "p_fdr_bh": row.get("p_fdr_bh")})
+if aim2_rows:
+    pd.DataFrame(aim2_rows).style.format(precision=4)
+else:
+    print("No condition-specific coupling rows available in m11_coupling.")
+```
+
+## Aim 3 - Traveling-Wave Directionality
+
+```{python}
+import numpy as np
+
+m12_dir = export_dir.parent.parent / "m12_wave_validation"
+null_path = m12_dir / f"sub-{subject}_null_dci.npy"
+empirical = float(metrics.get("dci_zinnen", np.nan))
+if null_path.exists():
+    null_dci = np.load(null_path)
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.hist(null_dci, bins=30, color="#cbd5e1", edgecolor="white")
+    if np.isfinite(empirical):
+        ax.axvline(empirical, color="#dc2626", linewidth=2, linestyle="--")
+    ax.set_title("Aim 3 two-dipole null comparison (ZINNEN DCI)")
+    ax.set_xlabel("Null-model DCI")
+    ax.set_ylabel("Count")
+    plt.show()
+else:
+    print("Two-dipole null DCI artifact not found; histogram skipped.")
+```
+
+```{python}
+aim3_rows = []
+for key in (
+    "dci_zinnen",
+    "dci_rest",
+    "p_task_vs_rest",
+    "aim3_two_dipole_z",
+    "aim3_two_dipole_z_threshold",
+    "aim3_two_dipole_passes_threshold",
+):
+    if key in metrics:
+        aim3_rows.append({"Metric": key, "Value": _fmt(metrics[key])})
+pd.DataFrame(aim3_rows).style.hide(axis="index") if aim3_rows else print("No Aim 3 metrics available.")
 ```

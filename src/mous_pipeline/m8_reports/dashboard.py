@@ -30,7 +30,6 @@ def _fmt_metric(value) -> str:
 
 
 _METRIC_LABELS: dict[str, str] = {
-    "pilot_verdict":            "Pilot verdict",
     "run_status":               "Run status",
     "n_trials":                 "Total trials",
     "n_zinnen":                 "ZINNEN trials",
@@ -50,23 +49,6 @@ _METRIC_LABELS: dict[str, str] = {
     "m5_error":                 "m5 error",
     "m5_skipped_reason":        "m5 skipped reason",
 }
-
-_VERDICT_COLORS: dict[str, str] = {
-    "GO":       "#2e7d32",
-    "MARGINAL": "#e65100",
-    "NO-GO":    "#b71c1c",
-}
-
-
-def _verdict_badge_html(verdict: str) -> str:
-    upper = str(verdict).upper()
-    color = _VERDICT_COLORS.get(upper, "#455a64")
-    return (
-        f'<div style="display:inline-block;padding:10px 28px;border-radius:6px;'
-        f'background:{color};color:#fff;font-size:1.25em;font-weight:700;'
-        f'letter-spacing:0.04em;margin-bottom:8px;">'
-        f'Pilot verdict: {verdict or "—"}</div>'
-    )
 
 
 def _timing_bars_html(timings: dict[str, float]) -> str:
@@ -113,7 +95,11 @@ def render_subject(
 ) -> Path:
     out_dir = stage_output_dir(cfg, subject, "m8_reports")
     out_path = out_dir / f"{subject}_report.html"
-    pretty = json.dumps(payload, indent=2)
+    payload_for_display = dict(payload)
+    payload_metrics = dict(payload_for_display.get("metrics", {}) or {})
+    payload_metrics.pop("pilot_verdict", None)
+    payload_for_display["metrics"] = payload_metrics
+    pretty = json.dumps(payload_for_display, indent=2)
     metrics = payload.get("metrics", {})
     timings = payload.get("stage_timings_s", {})
     outputs = payload.get("outputs", [])
@@ -203,8 +189,6 @@ def render_subject(
         and k not in {"selected_stages", "strict_stage_failures", "skipped_stages"}
     )
 
-    verdict = str(metrics.get("pilot_verdict") or "")
-    verdict_badge = _verdict_badge_html(verdict)
     output_rows = "".join(f"<li><code>{o}</code></li>" for o in outputs)
     timing_html = _timing_bars_html(timings)
 
@@ -245,7 +229,6 @@ def render_subject(
         f"<title>Subject {subject} – MOUS Report</title>"
         f"<style>{css}</style></head><body>"
         f"<h1>Subject {subject}</h1>"
-        f"{verdict_badge}"
         f"{m5_banner}"
         f"<h2>Key metrics</h2>"
         f"<table><tr><th>Metric</th><th>Value</th></tr>{rows_html}{extra_rows}</table>"

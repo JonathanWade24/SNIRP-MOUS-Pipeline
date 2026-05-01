@@ -10,10 +10,12 @@ params:
 ```{python}
 import pandas as pd
 from pathlib import Path
+import json
 
 subject    = params["subject"]
 export_dir = Path(params["export_dir"])
 trials     = pd.read_csv(export_dir / f"{subject}_trials.csv")
+metrics    = json.loads((export_dir / f"{subject}_metrics.json").read_text())
 trials.head()
 ```
 
@@ -74,4 +76,42 @@ ggplot(trials, aes(x = condition, y = prestim_beta, fill = condition, color = co
     subtitle = "Mixed-effects model controls for position-in-block and block random effects",
     x = NULL, y = "Pre-stim β power (a.u.)"
   )
+```
+
+## Trial-wise pre-stim β vs N400m
+
+```{r}
+#| label: fig-prestim-n400m
+#| fig-cap: "Aim 1 panel C equivalent: trial-level coupling between pre-stim β and N400m."
+#| fig-width: 7.5
+#| fig-height: 4.8
+
+if (all(c("prestim_beta", "n400m", "condition") %in% names(trials))) {
+  keep <- is.finite(trials$prestim_beta) & is.finite(trials$n400m)
+  d <- trials[keep, ]
+  if (nrow(d) >= 5) {
+    cor_res <- suppressWarnings(cor.test(d$prestim_beta, d$n400m, method = "spearman"))
+    ann <- paste0("Spearman r = ", sprintf("%.3f", unname(cor_res$estimate)), ", p = ", format.pval(cor_res$p.value, digits = 3))
+    ggplot(d, aes(x = prestim_beta, y = n400m, color = condition)) +
+      geom_point(alpha = 0.45, size = 1.8) +
+      geom_smooth(method = "lm", se = TRUE, linewidth = 0.9, alpha = 0.2) +
+      annotate("label", x = Inf, y = -Inf, hjust = 1.05, vjust = -0.5, label = ann, size = 3.4) +
+      scale_color_manual(values = COND_COLORS) +
+      theme_mous() +
+      theme(legend.position = "right") +
+      labs(title = paste("Pre-stim β and N400m -", subject), x = "Pre-stim β power (a.u.)", y = "N400m amplitude (a.u.)")
+  }
+}
+```
+
+## Block-position control diagnostics
+
+```{python}
+pd.DataFrame(
+    [
+        {"metric": "aim1_prestim_block_effect_p", "value": metrics.get("aim1_prestim_block_effect_p")},
+        {"metric": "aim1_prestim_first_trial_effect_p", "value": metrics.get("aim1_prestim_first_trial_effect_p")},
+        {"metric": "aim1_n400m_zinnen_vs_woorden_t", "value": metrics.get("aim1_n400m_zinnen_vs_woorden_t")},
+    ]
+).style.hide(axis="index")
 ```

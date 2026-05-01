@@ -863,11 +863,14 @@ def main() -> None:
         root = Path(args.derivatives_root)
         metrics_list = []
         trial_tables = []
+        qc_tables = []
         for mf in root.glob("*/m9_orchestration/*_run_manifest.json"):
             try:
                 payload = json.loads(mf.read_text())
                 metrics = payload.get("metrics", {})
                 if metrics:
+                    metrics = dict(metrics)
+                    metrics.setdefault("subject_id", mf.parent.parent.name.removeprefix("sub-"))
                     metrics_list.append(metrics)
             except Exception:
                 continue
@@ -877,6 +880,13 @@ def main() -> None:
                 if not df.empty:
                     df["subject"] = tf.parts[-4].removeprefix("sub-")
                     trial_tables.append(df)
+            except Exception:
+                continue
+        for qf in root.glob("*/m8_reports/exports/*_qc_summary.csv"):
+            try:
+                qd = pd.read_csv(qf)
+                if not qd.empty:
+                    qc_tables.append(qd)
             except Exception:
                 continue
         if not metrics_list:
@@ -897,6 +907,11 @@ def main() -> None:
             trial_path = root / "group_trials.csv"
             group_trials.to_csv(trial_path, index=False)
             print(f"Wrote group trials: {trial_path}")
+        if qc_tables:
+            group_qc = pd.concat(qc_tables, ignore_index=True)
+            qc_path = root / "group_qc_summary.csv"
+            group_qc.to_csv(qc_path, index=False)
+            print(f"Wrote group QC summary: {qc_path}")
     elif args.cmd == "bids-convert":
         cfg = load_config(args.config)
         bids_paths = convert_subject_to_bids(args.subject, cfg)
