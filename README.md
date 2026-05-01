@@ -198,6 +198,18 @@ Override collection path if needed:
 mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
 ```
 
+Fetch every valid `sub-A####` subject advertised by the RDR collection and
+continue past missing/invalid entries:
+
+```bash
+mous-pipeline fetch-rdr \
+  --config configs/palmetto_hpcnirc_A2003_A2012.yaml \
+  --all-remote-subjects \
+  --manifest-out reports/rdr_subject_manifest.json \
+  --skip-invalid \
+  --execute
+```
+
 ### Cyberduck CLI (`duck`)
 
 ```bash

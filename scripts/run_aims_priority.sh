@@ -161,21 +161,43 @@ echo "[plan] data_root=$DATA_ROOT"
 echo "[plan] derivatives_root=$DERIV_ROOT"
 echo "[plan] subjects=${SUBJECTS[*]}"
 
+AVAILABLE_SUBJECTS=()
+SKIPPED_SUBJECTS=()
 for sub in "${SUBJECTS[@]}"; do
   if [[ ! -d "$DATA_ROOT/sub-$sub" ]]; then
     if [[ "$FETCH_MISSING" -eq 1 ]]; then
       if [[ "$DRY_RUN" -eq 1 ]]; then
-        echo "[dry-run][fetch] mous-pipeline fetch-rdr --config $CONFIG_ABS --subject $sub --execute"
+        echo "[dry-run][fetch] mous-pipeline fetch-rdr --config $CONFIG_ABS --subject $sub --execute --skip-invalid"
+        AVAILABLE_SUBJECTS+=("$sub")
         continue
       fi
       echo "[fetch] sub-$sub missing; fetching via RDR..."
-      mous-pipeline fetch-rdr --config "$CONFIG_ABS" --subject "$sub" --execute
+      if ! mous-pipeline fetch-rdr --config "$CONFIG_ABS" --subject "$sub" --execute --skip-invalid; then
+        echo "[fetch][skip] sub-$sub fetch failed; excluding from this run." >&2
+        SKIPPED_SUBJECTS+=("$sub")
+        continue
+      fi
+      if [[ ! -d "$DATA_ROOT/sub-$sub" ]]; then
+        echo "[fetch][skip] sub-$sub still missing after fetch; excluding from this run." >&2
+        SKIPPED_SUBJECTS+=("$sub")
+        continue
+      fi
     else
       echo "Missing subject directory: $DATA_ROOT/sub-$sub (use --fetch-missing to auto-fetch)" >&2
       exit 1
     fi
   fi
+  AVAILABLE_SUBJECTS+=("$sub")
 done
+SUBJECTS=("${AVAILABLE_SUBJECTS[@]}")
+if (( ${#SKIPPED_SUBJECTS[@]} > 0 )); then
+  echo "[fetch][warn] skipped subjects: ${SKIPPED_SUBJECTS[*]}" >&2
+fi
+if (( ${#SUBJECTS[@]} == 0 )); then
+  echo "No valid/fetched subject directories remain; aborting before SLURM submission." >&2
+  exit 1
+fi
+echo "[plan] runnable_subjects=${SUBJECTS[*]}"
 
 FIRST_SUBJECT="${SUBJECTS[0]}"
 echo "[meg-trial] Running MEG trial-metrics regression/QC audit for sub-$FIRST_SUBJECT"
