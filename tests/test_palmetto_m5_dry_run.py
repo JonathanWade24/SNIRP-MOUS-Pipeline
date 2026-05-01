@@ -14,7 +14,20 @@ def _write_fake_mous_pipeline(bin_dir: Path) -> None:
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
 
+def _write_fake_apptainer(bin_dir: Path) -> None:
+    fake = bin_dir / "apptainer"
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$@\" > \"$FAKE_APPTAINER_LOG\"\n"
+        "touch \"$FAKE_WS_DIR/${FAKE_SUBJECT}__inner_skull_surface\"\n"
+        "touch \"$FAKE_WS_DIR/${FAKE_SUBJECT}__outer_skull_surface\"\n"
+        "touch \"$FAKE_WS_DIR/${FAKE_SUBJECT}__outer_skin_surface\"\n"
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+
 def _write_minimal_config(cfg_path: Path, *, data_root: Path, derivatives_root: Path) -> None:
+    fs_license_file = derivatives_root / "license.txt"
     cfg_path.write_text(
         (
             f'data_root: "{data_root}"\n'
@@ -27,6 +40,7 @@ def _write_minimal_config(cfg_path: Path, *, data_root: Path, derivatives_root: 
             '  trans: "fsaverage"\n'
             "fmri:\n"
             '  fmriprep_output: "derivatives/fmriprep"\n'
+            f'  fs_license_file: "{fs_license_file}"\n'
             "  skip_fmriprep: true\n"
             '  neurodesk_module: ""\n'
         )
@@ -158,6 +172,7 @@ def test_palmetto_prep_bem_dry_run_uses_hpcnirc_and_array(tmp_path: Path):
     assert "--mem 16G" in proc.stdout
     assert "--cpus-per-task 2" in proc.stdout
     assert "--array 0-0" in proc.stdout
+    assert f"MOUS_FREESURFER_LICENSE={derivatives_root / 'license.txt'}" in proc.stdout
     assert "run_prep_bem_subject.sh" in proc.stdout
 
 
@@ -187,6 +202,55 @@ def test_run_prep_bem_subject_skips_when_surfaces_exist(tmp_path: Path):
         check=True,
     )
     assert "[bem] skip subject=sub-A2002" in proc.stdout
+
+
+def test_run_prep_bem_subject_passes_license_to_container(tmp_path: Path):
+    subjects_file = tmp_path / "subjects.txt"
+    subjects_file.write_text("A2002\n")
+    subjects_dir = tmp_path / "freesurfer"
+    (subjects_dir / "sub-A2002" / "mri").mkdir(parents=True)
+    (subjects_dir / "sub-A2002" / "mri" / "T1.mgz").write_text("t1")
+    ws_dir = subjects_dir / "sub-A2002" / "bem" / "watershed"
+    license_file = tmp_path / "license.txt"
+    license_file.write_text("license")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_fake_apptainer(fake_bin)
+    apptainer_log = tmp_path / "apptainer_args.txt"
+
+    env = {
+        **_base_env(fake_bin),
+        "SLURM_ARRAY_TASK_ID": "0",
+        "MOUS_FREESURFER_CONTAINER": str(tmp_path / "fmriprep.sif"),
+        "MOUS_FREESURFER_LICENSE": str(license_file),
+        "FAKE_APPTAINER_LOG": str(apptainer_log),
+        "FAKE_WS_DIR": str(ws_dir),
+        "FAKE_SUBJECT": "sub-A2002",
+    }
+
+    subprocess.run(
+        [
+            "bash",
+            "scripts/run_prep_bem_subject.sh",
+            "--subjects-file",
+            str(subjects_file),
+            "--subjects-dir",
+            str(subjects_dir),
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    args = apptainer_log.read_text()
+    assert f"{license_file.parent}:{license_file.parent}" in args
+    assert f"FS_LICENSE={license_file}" in args
+    assert (subjects_dir / "sub-A2002" / "bem" / "inner_skull.surf").exists()
+    assert (subjects_dir / "sub-A2002" / "bem" / "outer_skull.surf").exists()
+    assert (subjects_dir / "sub-A2002" / "bem" / "outer_skin.surf").exists()
 
 
 def test_run_aims_priority_dry_run_prints_dependent_fmri_stages_submit(tmp_path: Path):

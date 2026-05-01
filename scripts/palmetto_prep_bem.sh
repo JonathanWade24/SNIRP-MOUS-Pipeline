@@ -75,14 +75,17 @@ subjects = [s for s in subjects if s]
 if not subjects:
     raise SystemExit("No subjects resolved. Provide --subjects or set config subjects:.")
 fmriprep_container = ""
+fs_license_file = ""
 fmri = getattr(cfg, "fmri", None)
 if fmri:
     fmriprep_container = str(getattr(fmri, "fmriprep_container", "") or "")
+    fs_license_file = str(getattr(fmri, "fs_license_file", "") or "")
 payload = {
     "subjects": subjects,
     "derivatives_root": str(cfg.derivatives_root.expanduser().resolve()),
     "subjects_dir": str(Path(cfg.source.subjects_dir).expanduser().resolve()) if getattr(cfg.source, "subjects_dir", "") else "",
     "fmriprep_container": fmriprep_container,
+    "fs_license_file": str(Path(fs_license_file).expanduser().resolve()) if fs_license_file else "",
 }
 print(json.dumps(payload))
 PY
@@ -124,6 +127,18 @@ PY
   fi
 fi
 
+if [[ -z "${MOUS_FREESURFER_LICENSE:-}" ]]; then
+  _CFG_LICENSE="$(python - <<'PY' "$RESOLVED_JSON"
+import json,sys
+print(json.loads(sys.argv[1]).get("fs_license_file",""))
+PY
+)"
+  if [[ -n "$_CFG_LICENSE" ]]; then
+    export MOUS_FREESURFER_LICENSE="$_CFG_LICENSE"
+    echo "[plan] auto-detected freesurfer_license=$MOUS_FREESURFER_LICENSE"
+  fi
+fi
+
 SLURM_DIR="$DERIV_ROOT/slurm"
 ARRAY_MAX=$(( ${#SUBJECTS[@]} - 1 ))
 mkdir -p "$SLURM_DIR" "$FS_SUBJECTS_DIR"
@@ -148,7 +163,7 @@ echo "[plan] freesurfer_subjects_dir=$FS_SUBJECTS_DIR"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   EXTRA_STR="$(printf ' %q' "${SBATCH_EXTRA[@]}")"
-  echo "[dry-run][slurm] sbatch --job-name mous_bem --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR${EXTRA_STR} --export=ALL,MOUS_FREESURFER_MODULE=${MOUS_FREESURFER_MODULE:-},MOUS_FREESURFER_CONTAINER=${MOUS_FREESURFER_CONTAINER:-},MOUS_VENV_PATH=${MOUS_VENV_PATH:-} $REPO_ROOT/scripts/run_prep_bem_subject.sh --subjects-file $SUBJECTS_FILE --subjects-dir $FS_SUBJECTS_DIR"
+  echo "[dry-run][slurm] sbatch --job-name mous_bem --array 0-$ARRAY_MAX --output $SBATCH_OUTPUT --error $SBATCH_ERROR${EXTRA_STR} --export=ALL,MOUS_FREESURFER_MODULE=${MOUS_FREESURFER_MODULE:-},MOUS_FREESURFER_CONTAINER=${MOUS_FREESURFER_CONTAINER:-},MOUS_FREESURFER_LICENSE=${MOUS_FREESURFER_LICENSE:-},MOUS_VENV_PATH=${MOUS_VENV_PATH:-} $REPO_ROOT/scripts/run_prep_bem_subject.sh --subjects-file $SUBJECTS_FILE --subjects-dir $FS_SUBJECTS_DIR"
   exit 0
 fi
 
@@ -158,7 +173,7 @@ sbatch \
   --output "$SBATCH_OUTPUT" \
   --error "$SBATCH_ERROR" \
   "${SBATCH_EXTRA[@]}" \
-  --export=ALL,MOUS_FREESURFER_MODULE="${MOUS_FREESURFER_MODULE:-}",MOUS_FREESURFER_CONTAINER="${MOUS_FREESURFER_CONTAINER:-}",MOUS_VENV_PATH="${MOUS_VENV_PATH:-}" \
+  --export=ALL,MOUS_FREESURFER_MODULE="${MOUS_FREESURFER_MODULE:-}",MOUS_FREESURFER_CONTAINER="${MOUS_FREESURFER_CONTAINER:-}",MOUS_FREESURFER_LICENSE="${MOUS_FREESURFER_LICENSE:-}",MOUS_VENV_PATH="${MOUS_VENV_PATH:-}" \
   "$REPO_ROOT/scripts/run_prep_bem_subject.sh" \
   --subjects-file "$SUBJECTS_FILE" \
   --subjects-dir "$FS_SUBJECTS_DIR"
