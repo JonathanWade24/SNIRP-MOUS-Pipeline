@@ -8,7 +8,7 @@ cd MOUS
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[gui,bids,fmri]"   # trim extras to what you need
-pytest tests/ -v
+make test-quick
 ```
 
 Pipeline code belongs under `src/mous_pipeline/`. Configs live in `configs/`, tests in `tests/`.
@@ -26,7 +26,13 @@ Branch from `main`, run the checks below, and open a focused PR with clear test 
 ### Required pre-PR checks
 
 ```bash
-pytest tests/ -v
+make test-full
+```
+
+Parallel option (falls back to serial if `pytest-xdist` is missing):
+
+```bash
+make test-parallel
 ```
 
 For full-pipeline verification (without source reconstruction), run:

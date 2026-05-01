@@ -69,3 +69,10 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: tests that touch workspace data, scripts, or external-like paths",
+  "slow: tests with materially longer runtime",
+]

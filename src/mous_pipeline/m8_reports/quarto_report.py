@@ -1,4 +1,4 @@
-"""Optional Quarto rendering for subject reports."""
+"""Optional Quarto rendering for subject and group reports."""
 
 from __future__ import annotations
 
@@ -58,18 +58,18 @@ def _check_r_dependencies(out_dir: Path) -> bool:
     return False
 
 
-def render_quarto(subject: str, cfg) -> Path | None:
-    """Render the cumulative subject Quarto report when quarto is available."""
+def _render_quarto_template(
+    *,
+    qmd_path: Path,
+    out_dir: Path,
+    output_name: str,
+    params: dict[str, str],
+    log_context: str,
+) -> Path | None:
     if shutil.which("quarto") is None:
         return None
-    root = Path.cwd()
-    qmd_path = root / "reports" / "subject_full_report.qmd"
     if not qmd_path.exists():
         return None
-    out_dir = stage_output_dir(cfg, subject, "m8_reports")
-    exports_dir = out_dir / "exports"
-    output_name = f"{subject}_quarto_report.html"
-    out_html = out_dir / f"{subject}_quarto_report.html"
     if shutil.which("Rscript") is None:
         log_path = _write_quarto_log(
             out_dir,
@@ -80,24 +80,16 @@ def render_quarto(subject: str, cfg) -> Path | None:
                 f"Output directory: {out_dir}",
             ],
         )
-        _LOG.error("Quarto render failed for %s (missing Rscript). See %s", subject, log_path)
+        _LOG.error("Quarto render failed for %s (missing Rscript). See %s", log_context, log_path)
         return None
     if not _check_r_dependencies(out_dir):
         return None
-    cmd = [
-        "quarto",
-        "render",
-        str(qmd_path),
-        "-P",
-        f"subject:{subject}",
-        "-P",
-        f"export_dir:{exports_dir}",
-        "--output",
-        output_name,
-        "--output-dir",
-        str(out_dir),
-    ]
+    cmd = ["quarto", "render", str(qmd_path)]
+    for key, value in params.items():
+        cmd.extend(["-P", f"{key}:{value}"])
+    cmd.extend(["--output", output_name, "--output-dir", str(out_dir)])
     proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    out_html = out_dir / output_name
     if proc.returncode != 0:
         log_path = _write_quarto_log(
             out_dir,
@@ -112,8 +104,37 @@ def render_quarto(subject: str, cfg) -> Path | None:
                 proc.stdout.strip() or "<empty>",
             ],
         )
-        _LOG.error("Quarto render failed for %s. See %s", subject, log_path)
+        _LOG.error("Quarto render failed for %s. See %s", log_context, log_path)
     return out_html if out_html.exists() else None
+
+
+def render_quarto(subject: str, cfg) -> Path | None:
+    """Render the cumulative subject Quarto report when quarto is available."""
+    root = Path.cwd()
+    qmd_path = root / "reports" / "subject_full_report.qmd"
+    out_dir = stage_output_dir(cfg, subject, "m8_reports")
+    exports_dir = out_dir / "exports"
+    return _render_quarto_template(
+        qmd_path=qmd_path,
+        out_dir=out_dir,
+        output_name=f"{subject}_quarto_report.html",
+        params={"subject": subject, "export_dir": str(exports_dir)},
+        log_context=subject,
+    )
+
+
+def render_group_quarto(*, derivatives_root: Path, summary_json: Path) -> Path | None:
+    """Render the group Quarto report after group summary export."""
+    root = Path.cwd()
+    out_dir = derivatives_root / "group_reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return _render_quarto_template(
+        qmd_path=root / "reports" / "group_report.qmd",
+        out_dir=out_dir,
+        output_name="group_quarto_report.html",
+        params={"summary_json": str(summary_json)},
+        log_context="group",
+    )
 
 
 def render_quarto_suite(subject: str, cfg) -> list[Path]:

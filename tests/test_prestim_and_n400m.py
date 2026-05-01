@@ -42,6 +42,9 @@ def test_prestim_beta_and_n400m_shapes(repo_root):
     assert npz["prestim_beta_by_channel"].shape[0] == len(epochs)
     npz_n400 = np.load(repo_root / "derivatives" / "test_tmp" / "TEST" / "m4_features" / "TEST_n400m.npz")
     assert int(npz_n400["n_channels_used"]) == len(epochs.ch_names)
+    assert str(npz_n400["sensor_prefix"]) == "MLT"
+    assert float(npz_n400["tmin"]) == 0.3
+    assert float(npz_n400["tmax"]) == 0.5
 
 
 def test_n400m_accepts_topography_weights(repo_root):
@@ -58,6 +61,8 @@ def test_n400m_accepts_topography_weights(repo_root):
     weights = np.linspace(1.0, 2.0, len(epochs.ch_names))
     n400m = n400m_amplitude(epochs, "TEST", cfg, meta, topography_weights=weights)
     assert n400m.shape == (len(epochs),)
+    npz_n400 = np.load(repo_root / "derivatives" / "test_tmp" / "TEST" / "m4_features" / "TEST_n400m.npz")
+    assert bool(npz_n400["has_topography_weights"]) is True
 
 
 def test_trial_meta_must_match_epoch_count(repo_root):

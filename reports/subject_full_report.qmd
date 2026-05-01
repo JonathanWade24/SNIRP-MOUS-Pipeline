@@ -104,6 +104,8 @@ _labels = {
     "aim1_prestim_first_trial_effect_p": "Pre-stim first-trial effect p (Aim 1)",
     "aim1_prestim_distribution_artifact": "Pre-stim distribution artifact",
     "aim1_prestim_topography_artifact": "Pre-stim topography artifact",
+    "aim1_prestim_condition_contrast_artifact": "Pre-stim condition contrast artifact",
+    "aim1_n400m_spec": "N400m extraction spec",
     "alpha_dci_zinnen": "Alpha DCI - ZINNEN",
     "alpha_dci_woorden": "Alpha DCI - WOORDEN",
     "alpha_dci_rest": "Alpha DCI - REST",
@@ -112,6 +114,9 @@ _labels = {
     "m10_hrf_lag_sweep_tables": "HRF lag sweep tables",
     "m11_hrf_lag_sweep_ready": "HRF lag sweep-ready labels",
     "m11_coupling_hrf_lag_sweep": "m11 HRF lag sweep coupling",
+    "m10_hrf_lag_selection": "HRF lag selection provenance",
+    "aim1_source_spatial_summary": "Source-space spatial summary",
+    "analysis_decisions_artifact": "Analysis decisions artifact",
     "aim3_two_dipole_z_threshold": "Aim3 z-threshold",
     "aim3_two_dipole_passes_threshold": "Aim3 passes z-threshold",
     "aim3_two_dipole_z_margin": "Aim3 z-threshold margin",
@@ -143,6 +148,7 @@ diag_keys = [
     "m11_coupling_hrf_lag_sweep",
     "m12_null_summary",
     "m12_decision",
+    "analysis_decisions_artifact",
 ]
 diag_rows = [{"Key": k, "Value": _fmt(metrics[k])} for k in diag_keys if k in metrics]
 if diag_rows:
@@ -264,6 +270,31 @@ if (file.exists(trials_file)) {
 ```
 
 # Aim 2 - MEG-fMRI Coupling
+
+## m11 Governance (Primary vs Exploratory)
+
+```{python}
+m11 = metrics.get("m11_coupling", {}) if isinstance(metrics.get("m11_coupling"), dict) else {}
+rows = []
+for key, val in m11.items():
+    if not (isinstance(key, str) and key.endswith("_vs_mtg") and isinstance(val, dict)):
+        continue
+    feature = key.split("_vs_mtg")[0].split("_", 1)[1] if "_" in key else key
+    rows.append(
+        {
+            "contrast": key,
+            "feature": feature,
+            "role": (m11.get("feature_roles", {}) or {}).get(feature, "exploratory"),
+            "r": val.get("r"),
+            "p": val.get("p"),
+            "p_fdr_bh": val.get("p_fdr_bh"),
+        }
+    )
+if rows:
+    pd.DataFrame(rows).sort_values(["role", "contrast"]).style.format(precision=4)
+else:
+    print("No m11 per-feature coupling entries available.")
+```
 
 ```{r}
 #| code-fold: true

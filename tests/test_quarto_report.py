@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from mous_pipeline.m8_reports.quarto_report import render_quarto, render_quarto_suite
+from mous_pipeline.m8_reports.quarto_report import render_group_quarto, render_quarto, render_quarto_suite
 
 
 def _cfg(tmp_path: Path) -> SimpleNamespace:
@@ -165,6 +165,36 @@ def test_render_quarto_writes_log_when_r_packages_missing(tmp_path, monkeypatch)
     assert "Missing required R packages: lmerTest,readr." in log_text
 
 
+def test_render_group_quarto_writes_group_html(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    qmd = tmp_path / "reports" / "group_report.qmd"
+    qmd.parent.mkdir(parents=True, exist_ok=True)
+    qmd.write_text("---\ntitle: test\n---\n")
+    summary_json = tmp_path / "derivatives" / "group_summary.json"
+    summary_json.parent.mkdir(parents=True, exist_ok=True)
+    summary_json.write_text("{}")
+
+    monkeypatch.setattr(
+        "mous_pipeline.m8_reports.quarto_report.shutil.which",
+        lambda exe: "/usr/bin/tool" if exe in {"quarto", "Rscript"} else None,
+    )
+
+    def _fake_run(cmd: list[str], check: bool, capture_output: bool, text: bool):
+        if cmd[0] == "Rscript":
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        out_idx = cmd.index("--output") + 1
+        out_dir_idx = cmd.index("--output-dir") + 1
+        out_path = Path(cmd[out_dir_idx]) / cmd[out_idx]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("<html>ok</html>")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("mous_pipeline.m8_reports.quarto_report.subprocess.run", _fake_run)
+    out = render_group_quarto(derivatives_root=tmp_path / "derivatives", summary_json=summary_json)
+    assert out is not None
+    assert out.exists()
+
+
 def test_subject_full_report_template_has_backcompat_guards() -> None:
     template = Path("reports/subject_full_report.qmd").read_text()
 
@@ -181,10 +211,13 @@ def test_subject_full_report_template_mentions_new_optional_metrics() -> None:
         "aim1_prestim_auc_guard_reason",
         "alpha_dci_zinnen",
         "m10_hrf_lag_sweep_tables",
+        "m10_hrf_lag_selection",
         "m11_coupling_hrf_lag_sweep",
         "aim3_two_dipole_z_threshold",
         "aim3_two_dipole_passes_threshold",
         "m12_decision",
         "aim1_prestim_topography_artifact",
+        "aim1_prestim_condition_contrast_artifact",
+        "analysis_decisions_artifact",
     ]:
         assert key in template

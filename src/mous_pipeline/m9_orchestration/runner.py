@@ -41,7 +41,12 @@ from ..m6_waves.flow_field import FlowFieldDetector
 from ..m6_waves.rotational import RotationalDetector
 from ..m7_stats.circular import rayleigh_p
 from ..m7_stats.permutation import perm_test_dci
-from ..m7_stats.trialwise import lme_block_control, logreg_condition_from_prestim, n400m_condition_t
+from ..m7_stats.trialwise import (
+    add_first_trial_control_columns,
+    lme_block_control,
+    logreg_condition_from_prestim,
+    n400m_condition_t,
+)
 from ..m8_reports.quarto_report import render_quarto
 from ..m8_reports.dashboard import render_subject
 from ..m8_reports.aim2_report import render_aim2_group, render_aim2_subject
@@ -495,6 +500,7 @@ def _run_subject_body(
     # ── Per-stage output file paths (cont.) ──────────────────────────────────
     _m10_out_dir    = stage_output_dir(cfg, subject, "m10_fmri")
     _m10_joined_csv = _m10_out_dir / f"{subject}_trials_joined.csv"
+    _analysis_decisions_path = out_dir / f"sub-{subject}_analysis_decisions.json"
 
     # ── Per-stage cache flags (all invalidated by force=True) ─────────────────
     _m10_hit     = not force and _m10_joined_csv.exists()
@@ -610,7 +616,25 @@ def _run_subject_body(
         else:
             assert epochs is not None
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta_aligned)
-            n400m        = n400m_amplitude(epochs, subject, cfg, trial_meta_aligned)
+            n400_window = tuple(getattr(cfg.features, "n400m_window_s", (0.3, 0.5)))
+            n400_prefix = str(getattr(cfg.features, "n400m_sensor_prefix", "MLT"))
+            n400_weights_path = str(getattr(cfg.features, "n400m_topography_weights_path", "")).strip()
+            n400_weights = np.load(Path(n400_weights_path)) if n400_weights_path else None
+            n400m = n400m_amplitude(
+                epochs,
+                subject,
+                cfg,
+                trial_meta_aligned,
+                sensor_prefix=n400_prefix,
+                tmin=float(n400_window[0]),
+                tmax=float(n400_window[1]),
+                topography_weights=n400_weights,
+            )
+            result.metrics["aim1_n400m_spec"] = {
+                "window_s": [float(n400_window[0]), float(n400_window[1])],
+                "sensor_prefix": n400_prefix,
+                "topography_weights_path": n400_weights_path or None,
+            }
         y = (trial_meta_aligned["condition"] == "ZINNEN").to_numpy(dtype=int)
         auc_value, auc_guard_reason, prestim_diag = _guarded_prestim_auc(prestim_beta, y)
         result.metrics["aim1_prestim_auc"] = auc_value
@@ -694,6 +718,8 @@ def _run_subject_body(
         result.metrics.setdefault("aim1_prestim_distribution_artifact", str(_m4t_prestim_dist))
     if _m4t_prestim_topo.exists():
         result.metrics.setdefault("aim1_prestim_topography_artifact", str(_m4t_prestim_topo))
+    if _m4t_prestim.exists():
+        result.metrics.setdefault("aim1_prestim_condition_contrast_artifact", str(_m4t_prestim))
 
     if _m4trial_cache is not None:
         prestim_beta_cached, n400m_cached, cached_trial_ids = _m4trial_cache
@@ -848,10 +874,16 @@ def _run_subject_body(
                     m5_out = stage_output_dir(cfg, subject, "m5_source")
                     np.save(m5_out / f"sub-{subject}_source_dirs.npy", source_dirs)
                     np.save(m5_out / f"sub-{subject}_source_dci.npy", source_dci)
+                    source_dirs_path = m5_out / f"sub-{subject}_source_dirs.npy"
+                    source_dci_path = m5_out / f"sub-{subject}_source_dci.npy"
                     result.outputs += [
-                        m5_out / f"sub-{subject}_source_dirs.npy",
-                        m5_out / f"sub-{subject}_source_dci.npy",
+                        source_dirs_path,
+                        source_dci_path,
                     ]
+                    result.metrics["aim1_source_spatial_summary"] = {
+                        "source_dirs_path": str(source_dirs_path),
+                        "source_dci_path": str(source_dci_path),
+                    }
                     # Save ROI timeseries for downstream export and QA.
                     if roi_ts:
                         roi_labels = list(roi_ts.keys())
@@ -923,20 +955,20 @@ def _run_subject_body(
         result.metrics["alpha_dci_rest_pooled"] = directional_consistency_index(alpha_dirs_r)
     if {"dci_trial", "pos_in_block"}.issubset(trial_df.columns):
         model_df = trial_df.dropna(subset=["dci_trial", "pos_in_block"]).copy()
+        model_df = add_first_trial_control_columns(model_df)
         if not model_df.empty:
-            model_df["first_trial"] = (model_df["pos_in_block"] == 1).astype(int)
             p_block, _ = lme_block_control(model_df, "dci_trial ~ C(condition) + pos_in_block")
             result.metrics["aim1_dci_block_effect_p"] = p_block
             p_block_first, _ = lme_block_control(
                 model_df,
-                "dci_trial ~ C(condition) + pos_in_block + first_trial",
-                term="first_trial",
+                "dci_trial ~ C(condition) + pos_in_block + is_first_in_block",
+                term="is_first_in_block",
             )
             result.metrics["aim1_dci_first_trial_effect_p"] = p_block_first
     if {"prestim_beta", "pos_in_block"}.issubset(trial_df.columns):
         prestim_model_df = trial_df.dropna(subset=["prestim_beta", "pos_in_block"]).copy()
+        prestim_model_df = add_first_trial_control_columns(prestim_model_df)
         if not prestim_model_df.empty:
-            prestim_model_df["first_trial"] = (prestim_model_df["pos_in_block"] == 1).astype(int)
             p_prestim_block, _ = lme_block_control(
                 prestim_model_df,
                 "prestim_beta ~ C(condition) + pos_in_block",
@@ -944,8 +976,8 @@ def _run_subject_body(
             result.metrics["aim1_prestim_block_effect_p"] = p_prestim_block
             p_prestim_first, _ = lme_block_control(
                 prestim_model_df,
-                "prestim_beta ~ C(condition) + pos_in_block + first_trial",
-                term="first_trial",
+                "prestim_beta ~ C(condition) + pos_in_block + is_first_in_block",
+                term="is_first_in_block",
             )
             result.metrics["aim1_prestim_first_trial_effect_p"] = p_prestim_first
     result.stage_timings_s["m7"] = perf_counter() - t0
@@ -1078,9 +1110,14 @@ def _run_subject_body(
                     lag_tables[f"{lag_s:+.3f}s"] = str(lag_csv)
                     lag_model_inputs[f"{lag_s:+.3f}s"] = lag_joined
                     result.outputs.append(lag_csv)
+                lag_ready = sorted(lag_model_inputs.keys())
                 result.metrics["m10_hrf_lag_sweep_tables"] = lag_tables
                 result.metrics["m10_hrf_lag_sweep_s"] = lag_sweep_vals
-                result.metrics["m11_hrf_lag_sweep_ready"] = list(lag_model_inputs.keys())
+                result.metrics["m11_hrf_lag_sweep_ready"] = lag_ready
+                result.metrics["m10_hrf_lag_selection"] = {
+                    "strategy": "max_abs_condition_prestim_correlation",
+                    "candidate_labels": lag_ready,
+                }
         except Exception as exc:
             result.metrics["m10_error"] = str(exc)
             if not strict_stage_failures:
@@ -1155,7 +1192,8 @@ def _run_subject_body(
                     result.metrics["m11_trials_rows"] = joined_df.to_dict(orient="records")
                     if lag_model_inputs:
                         lag_coupling: dict[str, dict] = {}
-                        for lag_label, lag_df in lag_model_inputs.items():
+                        for lag_label in sorted(lag_model_inputs.keys()):
+                            lag_df = lag_model_inputs[lag_label]
                             if lag_df is not None and not lag_df.empty:
                                 lag_coupling[lag_label] = run_coupling_models(lag_df)
                         if lag_coupling:
@@ -1172,6 +1210,12 @@ def _run_subject_body(
                                             best_lag = lag_label
                             if best_lag is not None:
                                 result.metrics["m10_best_hrf_lag_s"] = best_lag
+                                result.metrics["m10_hrf_lag_selection"] = {
+                                    "strategy": "max_abs_condition_prestim_correlation",
+                                    "candidate_labels": sorted(lag_coupling.keys()),
+                                    "selected_label": best_lag,
+                                    "selected_from": "m11_coupling_hrf_lag_sweep",
+                                }
                 except Exception as exc:
                     result.metrics["m11_error"] = str(exc)
                     if not strict_stage_failures:
@@ -1340,6 +1384,20 @@ def _run_subject_body(
             progress_callback("m8")
     else:
         result.skipped_stages.append("m8")
+
+    analysis_decisions = {
+        "first_trial_indexing": {
+            "column": "is_first_in_block",
+            "derivation": "minimum_pos_in_block_per_block",
+        },
+        "hrf_lag_selection": result.metrics.get("m10_hrf_lag_selection", {"strategy": "none"}),
+        "n400m_spec": result.metrics.get("aim1_n400m_spec", {}),
+        "m11_correction_mode": "feature_roles_with_bh_fdr",
+        "m12_threshold": result.metrics.get("aim3_two_dipole_z_threshold"),
+    }
+    _analysis_decisions_path.write_text(json.dumps(analysis_decisions, indent=2))
+    result.metrics["analysis_decisions_artifact"] = str(_analysis_decisions_path)
+    result.outputs.append(_analysis_decisions_path)
 
     if result.status not in {"failed", "completed_with_skips"}:
         result.status = "done"

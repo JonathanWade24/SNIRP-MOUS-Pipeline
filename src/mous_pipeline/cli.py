@@ -26,6 +26,7 @@ from .m0_intake.repocli_rdr import (
     repocli_available,
 )
 from .m7_stats.group import run_group_model
+from .m8_reports.quarto_report import render_group_quarto
 from .m9_orchestration.parallelization_plan import (
     dag_parallelism_report,
     intra_subject_pilot_protocol,
@@ -885,6 +886,12 @@ def main() -> None:
         out_path = root / "group_summary.json"
         out_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote group summary: {out_path}")
+        try:
+            group_report = render_group_quarto(derivatives_root=root, summary_json=out_path)
+            if group_report is not None:
+                print(f"Wrote group report: {group_report}")
+        except Exception as exc:
+            print(f"Group Quarto report render failed (non-fatal): {exc}", file=sys.stderr)
         if trial_tables:
             group_trials = pd.concat(trial_tables, ignore_index=True)
             trial_path = root / "group_trials.csv"

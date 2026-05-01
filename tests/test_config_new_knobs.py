@@ -16,6 +16,10 @@ def test_load_config_reads_hrf_lag_sweep_and_m12_threshold(tmp_path):
                 "fmri:",
                 "  hrf_lag_sweep_s: [-2.0, 0.0, 2.0]",
                 "  onset_shift_s: 1.0",
+                "features:",
+                "  n400m_window_s: [0.25, 0.55]",
+                "  n400m_sensor_prefix: 'MLT'",
+                "  n400m_topography_weights_path: 'weights.npy'",
                 "wave_validation:",
                 "  z_threshold: 2.5",
             ]
@@ -24,6 +28,9 @@ def test_load_config_reads_hrf_lag_sweep_and_m12_threshold(tmp_path):
     cfg = load_config(cfg_path)
     assert cfg.fmri.hrf_lag_sweep_s == [-2.0, 0.0, 2.0]
     assert cfg.fmri.onset_shift_s == 1.0
+    assert cfg.features.n400m_window_s == (0.25, 0.55)
+    assert cfg.features.n400m_sensor_prefix == "MLT"
+    assert cfg.features.n400m_topography_weights_path == "weights.npy"
     assert cfg.wave_validation.z_threshold == 2.5
 
 

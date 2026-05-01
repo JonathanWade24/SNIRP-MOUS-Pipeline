@@ -11,12 +11,25 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 
 
-def add_first_trial_control_columns(df: pd.DataFrame, *, pos_col: str = "pos_in_block") -> pd.DataFrame:
-    """Return a copy with first-trial vs subsequent-trial control columns."""
+def add_first_trial_control_columns(
+    df: pd.DataFrame,
+    *,
+    pos_col: str = "pos_in_block",
+    block_col: str = "block_id",
+) -> pd.DataFrame:
+    """Return a copy with first-trial vs subsequent-trial control columns.
+
+    First-trial detection is derived from the minimum ``pos_col`` value inside
+    each block when ``block_col`` is present (works for 0-based and 1-based
+    indexing). When block ids are unavailable, falls back to global minimum.
+    """
     out = df.copy()
-    pos = out[pos_col].to_numpy()
-    out["is_first_in_block"] = (pos == 1).astype(int)
-    out["is_subsequent_in_block"] = (pos > 1).astype(int)
+    if block_col in out.columns:
+        first_pos = out.groupby(block_col)[pos_col].transform("min")
+    else:
+        first_pos = out[pos_col].min()
+    out["is_first_in_block"] = (out[pos_col] == first_pos).astype(int)
+    out["is_subsequent_in_block"] = (out["is_first_in_block"] == 0).astype(int)
     return out
 
 

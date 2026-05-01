@@ -20,7 +20,7 @@ def test_block_position_covariate_controls_confound():
 
 
 def test_add_first_trial_control_columns():
-    df = pd.DataFrame({"pos_in_block": [1, 2, 1, 4]})
+    df = pd.DataFrame({"block_id": [0, 0, 1, 1], "pos_in_block": [0, 1, 1, 2]})
     out = add_first_trial_control_columns(df)
     assert list(out["is_first_in_block"]) == [1, 0, 1, 0]
     assert list(out["is_subsequent_in_block"]) == [0, 1, 0, 1]

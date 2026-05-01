@@ -96,3 +96,9 @@ def test_m10_cache_hit_still_generates_hrf_lag_sweep_tables(tmp_path, monkeypatc
     assert set(lag_tables.keys()) == {"-2.000s", "+0.000s", "+2.000s"}
     for lag_path in lag_tables.values():
         assert Path(lag_path).exists()
+    lag_sel = result.metrics.get("m10_hrf_lag_selection")
+    assert isinstance(lag_sel, dict)
+    assert lag_sel.get("strategy") == "max_abs_condition_prestim_correlation"
+    assert lag_sel.get("candidate_labels") == ["+0.000s", "+2.000s", "-2.000s"]
+    analysis_artifact = Path(result.metrics["analysis_decisions_artifact"])
+    assert analysis_artifact.exists()

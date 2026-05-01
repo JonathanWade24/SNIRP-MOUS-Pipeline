@@ -339,8 +339,21 @@ The `tests/` directory contains pytest-based tests covering stages, CLI commands
 
 ```bash
 pip install -e .  # pytest is included in base dependencies
-pytest tests/
+make test-quick                 # default smoke path (excludes integration/slow)
+make test-full                  # full suite (serial)
+make test-parallel              # full suite with xdist if installed, else serial fallback
+make test-quick-parallel        # quick smoke + xdist if installed
 pytest tests/test_m1_events.py -v  # run specific test
+```
+
+`integration` and `slow` markers are assigned in `tests/conftest.py`. Quick runs use
+`-m "not integration and not slow"` to keep local feedback fast while preserving full
+assertion coverage in `test-full`/CI runs.
+
+For parallel execution, install xdist once:
+
+```bash
+pip install pytest-xdist
 ```
 
 Tests use fixtures in `tests/conftest.py` for sample data and configs.

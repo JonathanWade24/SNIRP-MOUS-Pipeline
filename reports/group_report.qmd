@@ -78,3 +78,26 @@ if ("mean" %in% names(df)) {
   print(p)
 }
 ```
+
+## m11 Primary vs Exploratory and FDR
+
+```{python}
+m11 = summary.get("metrics", {}).get("m11_coupling", {})
+rows = []
+for key, stats in m11.items():
+    if not (isinstance(key, str) and key.endswith("_vs_mtg") and isinstance(stats, dict)):
+        continue
+    rows.append(
+        {
+            "contrast": key,
+            "mean_r": stats.get("mean"),
+            "wilcoxon_p": stats.get("wilcoxon_p"),
+            "n_subjects": stats.get("n"),
+            "feature_role": "primary" if "prestim_beta" in key else "exploratory",
+        }
+    )
+if rows:
+    pd.DataFrame(rows).sort_values(["feature_role", "contrast"]).style.format(precision=4)
+else:
+    print("No m11 coupling summaries present in group summary.")
+```

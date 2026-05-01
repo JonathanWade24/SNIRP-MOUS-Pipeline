@@ -41,14 +41,14 @@ def test_lme_block_control_can_report_non_default_term():
             "dci_trial": rng.normal(size=80),
             "condition": np.where(np.arange(80) % 2 == 0, "ZINNEN", "WOORDEN"),
             "pos_in_block": np.tile(np.arange(10), 8),
-            "first_trial": np.tile([1] + [0] * 9, 8),
+            "is_first_in_block": np.tile([1] + [0] * 9, 8),
             "block_id": np.repeat(np.arange(8), 10),
         }
     )
     pval, tidy = lme_block_control(
         df,
-        "dci_trial ~ C(condition) + pos_in_block + first_trial",
-        term="first_trial",
+        "dci_trial ~ C(condition) + pos_in_block + is_first_in_block",
+        term="is_first_in_block",
     )
     assert pval is None or np.isfinite(pval)
     assert "term" in tidy.columns

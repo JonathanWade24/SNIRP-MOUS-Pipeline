@@ -38,6 +38,9 @@ class FeatureConfig:
             "gamma": (30.0, 80.0),
         }
     )
+    n400m_window_s: tuple[float, float] = (0.3, 0.5)
+    n400m_sensor_prefix: str = "MLT"
+    n400m_topography_weights_path: str = ""
 
 
 @dataclass
@@ -164,7 +167,12 @@ def load_config(path: str | Path) -> PipelineConfig:
 
     feat_raw = raw.get("features", {})
     bands = _to_tuple_bands(feat_raw.get("bands", FeatureConfig().bands))
-    features = FeatureConfig(bands=bands)
+    features = FeatureConfig(
+        bands=bands,
+        n400m_window_s=tuple(float(v) for v in feat_raw.get("n400m_window_s", [0.3, 0.5])),
+        n400m_sensor_prefix=str(feat_raw.get("n400m_sensor_prefix", "MLT")),
+        n400m_topography_weights_path=str(feat_raw.get("n400m_topography_weights_path", "")),
+    )
 
     rdr_raw = raw.get("rdr", {})
     rdr = RdrConfig(
