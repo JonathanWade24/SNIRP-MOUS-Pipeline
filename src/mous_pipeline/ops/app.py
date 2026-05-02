@@ -947,9 +947,10 @@ class PipelineScreen(Screen):
         with Horizontal(classes="frow"):
             yield Button("Full MEG", id="preset-meg", variant="default")
             yield Button("MEG + fMRI", id="preset-meg-fmri", variant="default")
+            yield Button("Full Cohort", id="preset-cohort", variant="warning")
             yield Button("Stats + reports", id="preset-stats", variant="default")
             yield Button("Recover failed", id="preset-recover", variant="default")
-            yield Button("Group (Quarto)", id="preset-group", variant="warning")
+            yield Button("Group reports", id="preset-group", variant="default")
             yield Button("Clear", id="preset-clear", variant="default")
         yield Checkbox("Force recompute (ignore cached artifacts; passes --force)", id="cb-force-recompute")
         yield Label("  Stages", classes="section-title")
@@ -995,7 +996,7 @@ class PipelineScreen(Screen):
         self.query_one("#cb-force-recompute", Checkbox).value = bool(getattr(self.app, "wizard_force", False))
         notice = self.query_one("#pipeline-group-notice", Static)
         if getattr(self.app, "wizard_group_mode", False):
-            notice.update("[yellow]Group (Quarto) mode — subject stages below are ignored.[/yellow]")
+            notice.update("[yellow]Group reports mode — subject stages below are ignored.[/yellow]")
         else:
             notice.update("")
         self._sync_checkboxes_from_app()
@@ -1141,19 +1142,46 @@ class PipelineScreen(Screen):
         self._refresh_cache_labels()
         self._refresh_preview()
 
+    def _optional_stages_from_config(self) -> list[str]:
+        """Config-aware optional stages: m5 (FreeSurfer), m12 (wave validation)."""
+        extra: list[str] = []
+        try:
+            cfg = load_config(Path(self.app.wizard_config).expanduser().resolve())
+        except Exception:
+            return extra
+        if getattr(getattr(cfg, "source", None), "subjects_dir", ""):
+            extra.append("m5")
+        if getattr(getattr(cfg, "wave_validation", None), "enabled", False):
+            extra.append("m12")
+        return extra
+
+    def _augment_with_optional(self, stages: list[str]) -> list[str]:
+        for s in self._optional_stages_from_config():
+            if s not in stages:
+                stages.append(s)
+        return stages
+
     @on(Button.Pressed, "#preset-meg")
     def _preset_meg(self, _event: Button.Pressed) -> None:
         self.app.wizard_group_mode = False
         fs = self.app.state.intent_profiles.get("full_subject")
         stages = [s for s in fs.requested_stages if s not in ("m10", "m11")] if fs else []
-        self._apply_stages(stages)
+        self._apply_stages(self._augment_with_optional(stages))
 
     @on(Button.Pressed, "#preset-meg-fmri")
     def _preset_meg_fmri(self, _event: Button.Pressed) -> None:
         self.app.wizard_group_mode = False
         fs = self.app.state.intent_profiles.get("full_subject")
         stages = list(fs.requested_stages) if fs else []
-        self._apply_stages(stages)
+        self._apply_stages(self._augment_with_optional(stages))
+
+    @on(Button.Pressed, "#preset-cohort")
+    def _preset_cohort(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        fc = self.app.state.intent_profiles.get("full_cohort")
+        stages = list(fc.requested_stages) if fc else []
+        self.app.wizard_flags["fetch_missing"] = True
+        self._apply_stages(self._augment_with_optional(stages))
 
     @on(Button.Pressed, "#preset-stats")
     def _preset_stats(self, _event: Button.Pressed) -> None:
@@ -1165,14 +1193,15 @@ class PipelineScreen(Screen):
         self.app.wizard_group_mode = False
         fs = self.app.state.intent_profiles.get("recover_failed")
         stages = list(fs.requested_stages) if fs else []
-        self._apply_stages(stages)
+        self.app.wizard_flags["fetch_missing"] = True
+        self._apply_stages(self._augment_with_optional(stages))
 
     @on(Button.Pressed, "#preset-group")
     def _preset_group(self, _event: Button.Pressed) -> None:
         self.app.wizard_group_mode = True
         self.app.wizard_pipeline_stages = []
         self.query_one("#pipeline-group-notice", Static).update(
-            "[yellow]Group (Quarto) mode — Next opens the group workflow.[/yellow]"
+            "[yellow]Group reports mode — Next opens the cohort aggregation + Quarto workflow.[/yellow]"
         )
         for st in _PIPELINE_STAGE_IDS:
             try:
@@ -1336,11 +1365,23 @@ class LaunchScreen(Screen):
         )
         save_state(self.app.state)
 
+    _FLAG_TO_CHECKBOX_ID: dict[str, str] = {
+        "fetch_missing": "#launch-fetch",
+        "dry_run": "#launch-dry",
+    }
+
     def _ro(self, plan: IntentExecutionPlan | None, flag: str, ui_val: bool) -> bool:
-        if plan is None:
-            return bool(self.app.wizard_flags.get(flag, False))
-        if not plan.resolved_flags.get(flag, True):
-            return False
+        # UI value wins for user-settable runtime flags (fetch_missing, dry_run).
+        # Capability gating (e.g. repocli unavailable) disables the checkbox in
+        # on_mount, so a checked UI value here is trusted.
+        cb_id = self._FLAG_TO_CHECKBOX_ID.get(flag)
+        if cb_id is not None:
+            try:
+                cb = self.query_one(cb_id, Checkbox)
+                if getattr(cb, "disabled", False):
+                    return False
+            except Exception:
+                pass
         return bool(ui_val)
 
     def _build(self) -> list[str]:
