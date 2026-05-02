@@ -24,12 +24,15 @@ from textual.widgets import (
 )
 
 from ..config import RuntimeOverrides, load_config
+from ..stage_dependencies import STAGE_ORDER
 from .actions import (
     MODE_TO_PRESET_DEFAULTS,
     build_bem_submit_cmd,
     build_recon_submit_cmd,
     compile_intent_plan,
     compute_undownloaded_subjects,
+    custom_intent_profile_from_stages,
+    detect_intent_capabilities,
     discover_remote_subjects,
     build_bids_convert_cmd,
     build_bids_validate_cmd,
@@ -37,11 +40,13 @@ from .actions import (
     build_group_cmd,
     build_submit_cmd,
     discover_subjects,
-    intent_profile_from_legacy_preset,
+    get_stage_cache_counts,
+    get_subject_cache_summary,
     merge_subject_ids,
     recommend_resources,
     submit_detached_driver,
     submit_detached_wrap,
+    validate_config_path,
 )
 from .env import run_env_preflight
 from .models import IntentExecutionPlan, SubjectSet
@@ -207,18 +212,8 @@ Button { margin: 0 1; }
 #log-output { border: round $primary-darken-2; margin: 0 2; height: 1fr; }
 """
 
-RUN_OPTIONS_HELP = """[bold]What this step does[/bold]
-Pick an [bold]Intent[/bold] (what you want to accomplish), [bold]Scope[/bold] (single subject vs cohort), and a [bold]Constraint[/bold] (how aggressively to trim work for resources). The preview below is the command after Slurm settings on the next screen.
-
-[bold]Intent[/bold] — Compiles a concrete stage plan; yellow text lists compatibility or capability caveats.
-
-[bold]Scope[/bold] — Changes how subjects flow through the compiled command.
-
-[bold]Fetch / m5 / Dry run[/bold] — Runtime toggles. If the compiler disabled a flag for this environment, the checkbox cannot override that (see warnings).
-
-[bold]Explain plan[/bold] — Shows dependency notes for the current compiled plan in a notification.
-
-[dim]Tip: ← Back changes subjects. Next configures Slurm account, partition, time, and memory, then Submit.[/dim]"""
+# Stages shown in the Pipeline step (canonical pipeline order).
+_PIPELINE_STAGE_IDS = list(STAGE_ORDER)
 
 
 def _wrap_preview_tokens(tokens: list[str], *, width: int = 96) -> str:
@@ -336,12 +331,14 @@ MODE_LABELS: dict[str, str] = {
 
 
 def _intent_label(app: "OpsApp") -> str:
+    if app.wizard_intent_id == "custom":
+        return "Custom stages"
     profile = app.state.intent_profiles.get(app.wizard_intent_id)
     if profile is not None:
         return profile.label
     if app.wizard_intent_id.startswith("legacy:"):
         return f"Legacy preset ({app.wizard_intent_id.split(':', 1)[1]})"
-    return app.wizard_intent_id or "Legacy intent"
+    return app.wizard_intent_id or "Pipeline"
 
 
 FAILURE_HINTS: dict[str, str] = {
@@ -467,7 +464,14 @@ class DashboardScreen(Screen):
                 status_str = j.status
             t.add_row(j.submitted_at[:16], j.job_id, j.job_name, subs, status_str)
 
-    def action_new_run(self)  -> None: self.app.push_screen(ConfigPickerScreen())
+    def action_new_run(self) -> None:
+        raw = (self.app.wizard_config or self.app.state.last_config or "").strip()
+        ok, msg = validate_config_path(raw) if raw else (False, "")
+        if ok:
+            self.app.wizard_config = msg
+            self.app.push_screen(SubjectsScreen())
+        else:
+            self.app.push_screen(ConfigPickerScreen())
     def action_group_analysis(self) -> None: self.app.push_screen(GroupScreen())
     def action_rerun_last(self) -> None:
         if not self.app.state.recent_jobs:
@@ -479,20 +483,34 @@ class DashboardScreen(Screen):
         self.app.wizard_mode = "full_pipeline"
         self.app.wizard_saved_preset = ""
         self.app.wizard_intent_id = "recover_failed"
-        self.app.wizard_scope = "single" if len(self.app.wizard_subjects) <= 1 else "cohort"
-        self.app.wizard_constraint = "balanced"
-        self.app.wizard_intent_plan = None
-        self.app.wizard_flags.update(
-            {
-                "fetch_missing": False,
-                "include_m5": False,
-                "bids_convert": False,
-                "bids_validate": False,
-                "dry_run": False,
-            }
-        )
-        self.notify(f"Loaded last job {last.job_id} into resources screen")
-        self.app.push_screen(ResourcesScreen())
+        self.app.wizard_force = False
+        self.app.wizard_group_mode = False
+        recover = self.app.state.intent_profiles.get("recover_failed")
+        self.app.wizard_pipeline_stages = list(recover.requested_stages) if recover else []
+        if recover and self.app.wizard_config:
+            subs = self.app.wizard_subjects or ["A2002"]
+            plan = compile_intent_plan(
+                recover,
+                config_path=self.app.wizard_config,
+                subjects=subs,
+                preferred_constraint="balanced",
+            )
+            self.app.wizard_intent_plan = plan
+            self.app.wizard_saved_preset = plan.base_preset_name
+            self.app.wizard_flags = dict(plan.resolved_flags)
+        else:
+            self.app.wizard_intent_plan = None
+            self.app.wizard_flags.update(
+                {
+                    "fetch_missing": False,
+                    "include_m5": False,
+                    "bids_convert": False,
+                    "bids_validate": False,
+                    "dry_run": False,
+                }
+            )
+        self.notify(f"Loaded last job {last.job_id} — review launch options")
+        self.app.push_screen(LaunchScreen())
     def action_prep_source(self) -> None: self.app.push_screen(PrepSourceScreen())
     def action_redownload(self) -> None: self.app.push_screen(RedownloadScreen())
     def action_run_results(self) -> None: self.app.push_screen(RunResultsScreen())
@@ -542,7 +560,7 @@ class ConfigPickerScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 1 / 4  ›  Choose Config", classes="wizard-header")
+        yield Static("  New Run  ›  Pipeline config", classes="wizard-header")
         with Horizontal(classes="frow"):
             yield Label("Recent:", classes="flabel")
             yield Select([], id="config-recent-select", allow_blank=True)
@@ -614,6 +632,7 @@ class ConfigPickerScreen(Screen):
     @on(Button.Pressed, "#btn-back")
     def action_back(self) -> None:
         self.app.pop_screen()
+        _propagate_ctx_refresh(self.app)
 
     @on(Button.Pressed, "#btn-next")
     def _on_next(self, _) -> None:
@@ -632,13 +651,107 @@ class ConfigPickerScreen(Screen):
         self.app.push_screen(SubjectsScreen())
 
 
+def _propagate_ctx_refresh(app: "OpsApp") -> None:
+    screen = app.screen
+    fn = getattr(screen, "_refresh_wizard_context", None)
+    if callable(fn):
+        fn()
+
+
+class WizardContextStrip(Horizontal):
+    """Persistent config + HPC summary row for wizard screens."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("", id="ctx-cfg-line")
+        yield Button("Change", id="wizard-change-config", variant="default")
+        yield Static("  ")
+        yield Static("", id="ctx-hpc-line")
+        yield Button("Edit", id="wizard-edit-hpc", variant="default")
+
+    def on_mount(self) -> None:
+        self.refresh_labels()
+
+    def refresh_labels(self) -> None:
+        app = self.app
+        cfg = getattr(app, "wizard_config", "") or app.state.last_config
+        short = Path(cfg).name if cfg else "(no config)"
+        d = app.state.defaults
+        hpc = (
+            f"{d.get('partition', 'hpcnirc')} / {d.get('mem', '256G')} / "
+            f"{d.get('time', '12:00:00')} / {d.get('cpus_per_task', '8')} CPU"
+        )
+        self.query_one("#ctx-cfg-line", Static).update(f"[dim]Config[/dim]  [bold]{short}[/bold]")
+        acct = (d.get("account") or "").strip()
+        acct_note = f"  acct={acct}" if acct else "  [yellow]acct unset[/yellow]"
+        self.query_one("#ctx-hpc-line", Static).update(f"[dim]HPC[/dim]  [bold]{hpc}[/bold]{acct_note}")
+
+    @on(Button.Pressed, "#wizard-change-config")
+    def _change_config(self, _event: Button.Pressed) -> None:
+        self.app.push_screen(ConfigPickerScreen())
+
+    @on(Button.Pressed, "#wizard-edit-hpc")
+    def _edit_hpc(self, _event: Button.Pressed) -> None:
+        self.app.push_screen(HpcEditScreen())
+
+
+class HpcEditScreen(Screen):
+    """Quick edit for persisted Slurm defaults."""
+
+    BINDINGS = [Binding("escape", "action_cancel", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        yield Static("  Edit default Slurm resources", classes="wizard-header")
+        d = self.app.state.defaults
+        with Horizontal(classes="frow"):
+            yield Label("Account:", classes="flabel")
+            yield Input(value=d.get("account", ""), id="hpc-edit-account", placeholder="Slurm account")
+        with Horizontal(classes="frow"):
+            yield Label("Partition:", classes="flabel")
+            yield Input(value=d.get("partition", "hpcnirc"), id="hpc-edit-partition")
+            yield Label("Time:", classes="flabel")
+            yield Input(value=d.get("time", "12:00:00"), id="hpc-edit-time")
+        with Horizontal(classes="frow"):
+            yield Label("Mem:", classes="flabel")
+            yield Input(value=d.get("mem", "256G"), id="hpc-edit-mem")
+            yield Label("CPUs:", classes="flabel")
+            yield Input(value=d.get("cpus_per_task", "8"), id="hpc-edit-cpus")
+        with Horizontal(classes="nav-bar"):
+            yield Button("Cancel", id="hpc-edit-cancel", variant="default")
+            yield Button("Save", id="hpc-edit-save", variant="success")
+        yield Footer()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+    @on(Button.Pressed, "#hpc-edit-cancel")
+    def _on_cancel(self, _event: Button.Pressed) -> None:
+        self.action_cancel()
+
+    @on(Button.Pressed, "#hpc-edit-save")
+    def _on_save(self, _event: Button.Pressed) -> None:
+        self.app.state.defaults.update(
+            {
+                "account": self.query_one("#hpc-edit-account", Input).value.strip(),
+                "partition": self.query_one("#hpc-edit-partition", Input).value.strip(),
+                "time": self.query_one("#hpc-edit-time", Input).value.strip(),
+                "mem": self.query_one("#hpc-edit-mem", Input).value.strip(),
+                "cpus_per_task": self.query_one("#hpc-edit-cpus", Input).value.strip(),
+            }
+        )
+        save_state(self.app.state)
+        self.app.notify("Defaults saved")
+        self.app.pop_screen()
+        _propagate_ctx_refresh(self.app)
+
+
 class SubjectsScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 2 / 4  ›  Select Subjects", classes="wizard-header")
-        yield Static(f"[dim]Config:[/dim] [bold]{self.app.wizard_config}[/bold]")
+        yield Static("  New Run  ›  Step 1 / 3  ›  Select Subjects", classes="wizard-header")
+        yield WizardContextStrip(id="wizard-ctx")
         yield Static("[dim]Data root is read from the selected config file.[/dim]")
 
         with Horizontal(classes="frow"):
@@ -666,9 +779,15 @@ class SubjectsScreen(Screen):
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",          id="btn-back", variant="default")
-            yield Button("Next: Run Options →",  id="btn-next", variant="primary")
+            yield Button("Next: Pipeline →",  id="btn-next", variant="primary")
 
         yield Footer()
+
+    def _refresh_wizard_context(self) -> None:
+        try:
+            self.query_one("#wizard-ctx", WizardContextStrip).refresh_labels()
+        except Exception:
+            pass
 
     def on_mount(self) -> None:
         self._populate_set_dropdown()
@@ -680,6 +799,13 @@ class SubjectsScreen(Screen):
             [(n, n) for n in names] or [("(no saved sets)", "")]
         )
 
+    def _derivatives_root(self) -> str:
+        try:
+            cfg = load_config(Path(self.app.wizard_config).expanduser().resolve())
+            return str(cfg.derivatives_root)
+        except Exception:
+            return self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+
     def _load_subjects(self) -> None:
         cfg = self.app.wizard_config
         subjects = discover_subjects(cfg)
@@ -687,8 +813,11 @@ class SubjectsScreen(Screen):
         sl.clear_options()
         prev = set(self.app.wizard_subjects)
         all_ids = merge_subject_ids(subjects, list(prev))
+        dr = self._derivatives_root()
         for s in all_ids:
-            sl.add_option((f"sub-{s}", s, s in prev))
+            cache_tag = get_subject_cache_summary(dr, s)
+            label = f"sub-{s}  [dim]({cache_tag})[/dim]"
+            sl.add_option((label, s, s in prev))
         self._local_subjects = all_ids
         if not all_ids:
             self.notify("No subjects found — check config data_root and subjects.", severity="warning")
@@ -775,117 +904,188 @@ class SubjectsScreen(Screen):
             self.notify("Select at least one subject", severity="warning")
             return
         self.app.wizard_subjects = selected
-        self.app.push_screen(RunOptionsScreen())
+        self.app.push_screen(PipelineScreen())
 
 
-# ── Step 3: Run Options ───────────────────────────────────────────────────────
+# ── Step 2: Pipeline (stages + presets) ───────────────────────────────────────
 
-class RunOptionsScreen(Screen):
+_STAGE_SECTIONS: list[tuple[str, list[str]]] = [
+    ("MEG preprocessing", ["m1", "m2", "m3"]),
+    ("MEG analysis", ["m4", "m4_trial", "m6a", "m6_extra", "m12"]),
+    ("Source modeling (FreeSurfer)", ["m5"]),
+    ("fMRI integration", ["m10", "m11"]),
+    ("Stats, reports, pilot gate", ["m7", "m8", "m9"]),
+]
+
+_STAGE_HELP: dict[str, str] = {
+    "m1": "m1 — Parse events TSV",
+    "m2": "m2 — CTF preprocess, ICA",
+    "m3": "m3 — Task epochs",
+    "m4": "m4 — Beta analytic + PSD",
+    "m4_trial": "m4_trial — Prestim / N400m trial table",
+    "m5": "m5 — Forward / inverse source",
+    "m6a": "m6a — Phase-gradient DCI",
+    "m6_extra": "m6_extra — CFC / flow / 2D FFT",
+    "m10": "m10 — fMRIPrep + trial GLM",
+    "m11": "m11 — MEG–fMRI coupling",
+    "m12": "m12 — Wave validation",
+    "m7": "m7 — Stats / LME",
+    "m8": "m8 — Reports + HTML",
+    "m9": "m9 — Pilot gate + manifest",
+}
+
+
+class PipelineScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 3 / 4  ›  Run Options", classes="wizard-header")
-
+        yield Static("  New Run  ›  Step 2 / 3  ›  Pipeline", classes="wizard-header")
+        yield WizardContextStrip(id="wizard-ctx")
+        yield Static("", id="pipeline-group-notice")
+        yield Static("[dim]Presets fill stage checkboxes; adjust before launch.[/dim]")
         with Horizontal(classes="frow"):
-            yield Label("Intent:", classes="flabel")
-            options = [(p.label, p.intent_id) for p in self.app.state.intent_profiles.values()]
-            options += [(f"Legacy preset: {name}", f"legacy:{name}") for name in sorted(self.app.state.workflow_presets.keys())]
-            valid_ids = {value for _, value in options}
-            default_intent = self.app.wizard_intent_id if self.app.wizard_intent_id in valid_ids else (options[0][1] if options else "")
-            yield Select(options or [("(none)", "")], value=default_intent, id="intent-select", allow_blank=False)
-            yield Label("Scope:", classes="flabel")
-            yield Select([("Single subject", "single"), ("Cohort", "cohort")], value=self.app.wizard_scope, id="scope-select")
-        with Horizontal(classes="frow"):
-            yield Label("Constraint:", classes="flabel")
-            yield Select(
-                [("Balanced", "balanced"), ("Fastest", "fastest"), ("Safest", "safest")],
-                value=self.app.wizard_constraint,
-                id="constraint-select",
-            )
-            yield Checkbox("Fetch missing subjects", value=self.app.wizard_flags.get("fetch_missing", False), id="flag-fetch")
-            yield Checkbox("Include source models (m5)", value=self.app.wizard_flags.get("include_m5", False), id="flag-m5")
-            yield Checkbox("Dry run", value=self.app.wizard_flags.get("dry_run", False), id="flag-dry")
-
-        yield Label("  Subjects selected for this run:", classes="section-title")
+            yield Button("Full MEG", id="preset-meg", variant="default")
+            yield Button("MEG + fMRI", id="preset-meg-fmri", variant="default")
+            yield Button("Stats + reports", id="preset-stats", variant="default")
+            yield Button("Recover failed", id="preset-recover", variant="default")
+            yield Button("Group (Quarto)", id="preset-group", variant="warning")
+            yield Button("Clear", id="preset-clear", variant="default")
+        yield Checkbox("Force recompute (ignore cached artifacts; passes --force)", id="cb-force-recompute")
+        yield Label("  Stages", classes="section-title")
+        with ScrollableContainer(id="pipeline-stages-scroll", classes="run-options-body"):
+            for title, stages in _STAGE_SECTIONS:
+                yield Static(f"[bold]{title}[/bold]", classes="section-title")
+                for st in stages:
+                    if st not in _PIPELINE_STAGE_IDS:
+                        continue
+                    with Horizontal(classes="frow"):
+                        yield Checkbox(False, id=f"cb-stage-{st}")
+                        yield Static(_STAGE_HELP.get(st, st), id=f"lbl-stage-{st}")
+                        yield Static("", id=f"cache-stage-{st}")
+        yield Label("  Subjects", classes="section-title")
         subs = self.app.wizard_subjects
         yield Static(
-            "  " + "  ·  ".join(f"sub-{s}" for s in subs) if subs else "[dim](none — go back and select subjects)[/dim]",
+            "  " + "  ·  ".join(f"sub-{s}" for s in subs) if subs else "[dim](none)[/dim]",
             id="subjects-summary",
         )
-        with Vertical(id="run-options-body"):
-            yield Static(RUN_OPTIONS_HELP, id="run-options-help")
-            yield Static("", id="intent-desc")
-            yield Static("", id="intent-warnings")
-            yield Static("", id="run-options-preview")
-
+        yield Static("", id="pipeline-dep-notes")
+        yield Static("", id="pipeline-warnings")
+        yield Static("", id="pipeline-preview")
         with Horizontal(classes="nav-bar"):
-            yield Button("← Back",            id="btn-back", variant="default")
-            yield Button("Explain plan",      id="btn-explain", variant="default")
-            yield Button("Next: Resources →",  id="btn-next", variant="primary")
-
+            yield Button("← Back", id="btn-back", variant="default")
+            yield Button("Explain plan", id="btn-explain", variant="default")
+            yield Button("Next: Launch →", id="btn-next", variant="primary")
         yield Footer()
 
+    def _refresh_wizard_context(self) -> None:
+        try:
+            self.query_one("#wizard-ctx", WizardContextStrip).refresh_labels()
+        except Exception:
+            pass
+
+    def _derivatives_root(self) -> str:
+        try:
+            cfg = load_config(Path(self.app.wizard_config).expanduser().resolve())
+            return str(cfg.derivatives_root)
+        except Exception:
+            return self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+
     def on_mount(self) -> None:
-        self._sync_intent_defaults()
+        self.query_one("#cb-force-recompute", Checkbox).value = bool(getattr(self.app, "wizard_force", False))
+        notice = self.query_one("#pipeline-group-notice", Static)
+        if getattr(self.app, "wizard_group_mode", False):
+            notice.update("[yellow]Group (Quarto) mode — subject stages below are ignored.[/yellow]")
+        else:
+            notice.update("")
+        self._sync_checkboxes_from_app()
+        self._refresh_cache_labels()
         self._refresh_preview()
 
-    def _selected_profile(self):
-        selected = self.query_one("#intent-select", Select).value
-        if selected is Select.BLANK:
-            return None
-        selected_str = str(selected)
-        profile = self.app.state.intent_profiles.get(selected_str)
-        if profile is not None:
-            return profile
-        if not selected_str.startswith("legacy:"):
-            return None
-        preset_name = selected_str.split(":", 1)[1]
-        preset = self.app.state.workflow_presets.get(preset_name)
-        if preset is None:
-            return None
-        legacy_profile, _ = intent_profile_from_legacy_preset(preset)
-        return legacy_profile
+    def _sync_checkboxes_from_app(self) -> None:
+        want = list(getattr(self.app, "wizard_pipeline_stages", []) or [])
+        if not want and not getattr(self.app, "wizard_group_mode", False):
+            qq = self.app.state.intent_profiles.get("quick_qc")
+            want = list(qq.requested_stages) if qq else []
+        sel = set(want)
+        for st in _PIPELINE_STAGE_IDS:
+            try:
+                self.query_one(f"#cb-stage-{st}", Checkbox).value = st in sel
+            except Exception:
+                pass
+        for st in _PIPELINE_STAGE_IDS:
+            try:
+                cb = self.query_one(f"#cb-stage-{st}", Checkbox)
+                cb.disabled = bool(getattr(self.app, "wizard_group_mode", False))
+            except Exception:
+                pass
 
-    def _sync_intent_defaults(self) -> None:
-        profile = self._selected_profile()
-        if profile is None:
-            return
-        self.query_one("#flag-fetch", Checkbox).value = bool(profile.default_fetch_missing)
-        self.query_one("#flag-m5", Checkbox).value = bool(profile.default_include_m5)
-        self.query_one("#flag-dry", Checkbox).value = bool(profile.default_dry_run)
-        self.query_one("#intent-desc", Static).update(f"[dim]{profile.description}[/dim]")
+    def _selected_stages(self) -> list[str]:
+        out: list[str] = []
+        for st in _PIPELINE_STAGE_IDS:
+            try:
+                if self.query_one(f"#cb-stage-{st}", Checkbox).value:
+                    out.append(st)
+            except Exception:
+                pass
+        return out
 
-    def _current_constraint(self) -> str:
-        value = self.query_one("#constraint-select", Select).value
-        if value is Select.BLANK:
-            return "balanced"
-        return str(value)
+    def _refresh_cache_labels(self) -> None:
+        dr = self._derivatives_root()
+        subs = self.app.wizard_subjects or []
+        for st in ("m4", "m4_trial", "m6a", "m10"):
+            try:
+                lbl = self.query_one(f"#cache-stage-{st}", Static)
+            except Exception:
+                continue
+            if not subs:
+                lbl.update("")
+                continue
+            n, t = get_stage_cache_counts(dr, subs, st)
+            lbl.update(f"[dim]cached {n}/{t}[/dim]" if t else "")
+
+    def _current_profile(self):
+        if getattr(self.app, "wizard_group_mode", False):
+            return self.app.state.intent_profiles.get("group_reports_only")
+        stages = self._selected_stages()
+        if not stages:
+            return None
+        return custom_intent_profile_from_stages(
+            stages,
+            intent_id="custom",
+            label="Custom",
+            description="Custom stage selection.",
+            default_fetch_missing=False,
+            default_include_m5=("m5" in stages),
+            default_dry_run=False,
+            legacy_preset_name="full_submit",
+            target="submit",
+        )
 
     def _refresh_preview(self) -> None:
-        profile = self._selected_profile()
+        profile = self._current_profile()
         if profile is None:
-            self.query_one("#run-options-preview", Static).update("[red]No intent profile selected.[/red]")
+            self.query_one("#pipeline-preview", Static).update("[red]Select at least one stage, or choose a preset.[/red]")
+            self.query_one("#pipeline-warnings", Static).update("")
+            self.query_one("#pipeline-dep-notes", Static).update("")
             return
         plan = compile_intent_plan(
             profile,
             config_path=self.app.wizard_config,
             subjects=self.app.wizard_subjects or ["A2002"],
-            preferred_constraint=self._current_constraint(),
+            preferred_constraint="balanced",
         )
-        # Apply checkbox overrides only for flags the compiler left enabled.
-        # If compile_intent_plan() downgraded a flag to False (capability warning),
-        # the checkbox cannot silently re-enable it and produce a command that
-        # contradicts the warning.
-        _checkbox_overrides = {
-            "fetch_missing": self.query_one("#flag-fetch", Checkbox).value,
-            "include_m5": self.query_one("#flag-m5", Checkbox).value,
-            "dry_run": self.query_one("#flag-dry", Checkbox).value,
-        }
-        for _flag, _cb_val in _checkbox_overrides.items():
-            if plan.resolved_flags.get(_flag, True):
-                plan.resolved_flags[_flag] = _cb_val
         self.app.wizard_intent_plan = plan
+        notes = "; ".join(plan.dependency_notes) if plan.dependency_notes else "No extra dependencies beyond closure."
+        self.query_one("#pipeline-dep-notes", Static).update(f"[dim]Dependencies:[/dim] {notes}")
+        warnings = []
+        if plan.legacy_translation_note:
+            warnings.append(plan.legacy_translation_note)
+        warnings.extend(plan.warnings)
+        if warnings:
+            self.query_one("#pipeline-warnings", Static).update("[yellow]" + " | ".join(warnings) + "[/yellow]")
+        else:
+            self.query_one("#pipeline-warnings", Static).update("[dim]No compatibility warnings.[/dim]")
         defaults = self.app.state.defaults
         base = self.app.state.workflow_presets.get(plan.base_preset_name, MODE_TO_PRESET_DEFAULTS["full_pipeline"])
         preview_cmd = build_submit_cmd(
@@ -903,6 +1103,7 @@ class RunOptionsScreen(Screen):
                 dry_run=plan.resolved_flags["dry_run"],
             ),
             extra_runtime_args=plan.runtime_args,
+            force=bool(getattr(self.app, "wizard_force", False)),
         )
         if plan.command_kind == "group":
             preview_cmd = build_group_cmd(
@@ -910,51 +1111,92 @@ class RunOptionsScreen(Screen):
                 subjects=self.app.wizard_subjects,
                 quarto_only=True,
             )
-        warnings = []
-        if plan.legacy_translation_note:
-            warnings.append(plan.legacy_translation_note)
-        warnings.extend(plan.warnings)
-        if warnings:
-            self.query_one("#intent-warnings", Static).update("[yellow]" + " | ".join(warnings) + "[/yellow]")
-        else:
-            self.query_one("#intent-warnings", Static).update("[dim]No compatibility warnings.[/dim]")
         wrapped = _wrap_preview_tokens(preview_cmd)
-        self.query_one("#run-options-preview", Static).update(
+        self.query_one("#pipeline-preview", Static).update(
             "[dim]Resolved stages:[/dim] " + ", ".join(plan.resolved_stages) + "\n"
-            + "[bold green]Preview[/bold green] [dim](wraps; scroll if needed)[/dim]\n"
+            + "[bold green]Preview[/bold green] [dim](Slurm account on next screen)[/dim]\n"
             + wrapped
         )
 
-    @on(Select.Changed, "#intent-select")
-    def _on_intent_changed(self, event: Select.Changed) -> None:
-        if event.value is Select.BLANK:
+    @on(Checkbox.Changed)
+    def _on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        ctrl = getattr(event, "control", None) or getattr(event, "checkbox", None)
+        cid = str(getattr(ctrl, "id", None) or "")
+        if cid == "cb-force-recompute":
+            self.app.wizard_force = bool(event.value)
+            self._refresh_preview()
             return
-        self._sync_intent_defaults()
-        self.app.wizard_intent_id = str(event.value)
+        if not cid.startswith("cb-stage-"):
+            return
+        if getattr(self.app, "wizard_group_mode", False):
+            return
+        self.app.wizard_group_mode = False
+        self.query_one("#pipeline-group-notice", Static).update("")
+        for st in _PIPELINE_STAGE_IDS:
+            try:
+                self.query_one(f"#cb-stage-{st}", Checkbox).disabled = False
+            except Exception:
+                pass
+        self.app.wizard_pipeline_stages = self._selected_stages()
+        self._refresh_cache_labels()
         self._refresh_preview()
 
-    @on(Select.Changed, "#scope-select")
-    def _on_scope_changed(self, event: Select.Changed) -> None:
-        if event.value is Select.BLANK:
-            return
-        self.app.wizard_scope = str(event.value)
+    @on(Button.Pressed, "#preset-meg")
+    def _preset_meg(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        fs = self.app.state.intent_profiles.get("full_subject")
+        stages = [s for s in fs.requested_stages if s not in ("m10", "m11")] if fs else []
+        self._apply_stages(stages)
+
+    @on(Button.Pressed, "#preset-meg-fmri")
+    def _preset_meg_fmri(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        fs = self.app.state.intent_profiles.get("full_subject")
+        stages = list(fs.requested_stages) if fs else []
+        self._apply_stages(stages)
+
+    @on(Button.Pressed, "#preset-stats")
+    def _preset_stats(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        self._apply_stages(["m7", "m8", "m9"])
+
+    @on(Button.Pressed, "#preset-recover")
+    def _preset_recover(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        fs = self.app.state.intent_profiles.get("recover_failed")
+        stages = list(fs.requested_stages) if fs else []
+        self._apply_stages(stages)
+
+    @on(Button.Pressed, "#preset-group")
+    def _preset_group(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = True
+        self.app.wizard_pipeline_stages = []
+        self.query_one("#pipeline-group-notice", Static).update(
+            "[yellow]Group (Quarto) mode — Next opens the group workflow.[/yellow]"
+        )
+        for st in _PIPELINE_STAGE_IDS:
+            try:
+                cb = self.query_one(f"#cb-stage-{st}", Checkbox)
+                cb.value = False
+                cb.disabled = True
+            except Exception:
+                pass
         self._refresh_preview()
 
-    @on(Select.Changed, "#constraint-select")
-    def _on_constraint_changed(self, event: Select.Changed) -> None:
-        if event.value is Select.BLANK:
-            return
-        self.app.wizard_constraint = str(event.value)
-        self._refresh_preview()
+    @on(Button.Pressed, "#preset-clear")
+    def _preset_clear(self, _event: Button.Pressed) -> None:
+        self.app.wizard_group_mode = False
+        self.query_one("#pipeline-group-notice", Static).update("")
+        self._apply_stages([])
 
-    @on(Checkbox.Changed, "#flag-fetch")
-    @on(Checkbox.Changed, "#flag-m5")
-    @on(Checkbox.Changed, "#flag-dry")
-    def _on_flag_changed(self, _: Checkbox.Changed) -> None:
+    def _apply_stages(self, stages: list[str]) -> None:
+        self.app.wizard_pipeline_stages = list(stages)
+        self._sync_checkboxes_from_app()
+        self._refresh_cache_labels()
         self._refresh_preview()
 
     @on(Button.Pressed, "#btn-explain")
-    def _on_explain(self, _) -> None:
+    def _on_explain(self, _event: Button.Pressed) -> None:
         plan = self.app.wizard_intent_plan
         if plan is None:
             self._refresh_preview()
@@ -965,103 +1207,158 @@ class RunOptionsScreen(Screen):
         self.notify(notes)
 
     @on(Button.Pressed, "#btn-back")
-    def action_back(self) -> None: self.app.pop_screen()
+    def action_back(self) -> None:
+        self.app.pop_screen()
 
     @on(Button.Pressed, "#btn-next")
-    def _on_next(self, _) -> None:
-        profile = self._selected_profile()
-        if profile is None:
-            self.notify("Choose an intent profile first", severity="warning")
-            return
+    def _on_next(self, _event: Button.Pressed) -> None:
+        self.app.wizard_force = bool(self.query_one("#cb-force-recompute", Checkbox).value)
         self._refresh_preview()
         plan = self.app.wizard_intent_plan
         if plan is None:
-            self.notify("Unable to compile intent plan", severity="error")
+            self.notify("Could not compile pipeline plan", severity="error")
             return
-        selected = self.query_one("#intent-select", Select).value
-        self.app.wizard_intent_id = str(selected) if selected is not Select.BLANK else profile.intent_id
+        if getattr(self.app, "wizard_group_mode", False):
+            self.app.wizard_intent_id = "group_reports_only"
+            self.app.wizard_flags = dict(plan.resolved_flags)
+            self.app.wizard_saved_preset = plan.base_preset_name
+            self.app.push_screen(GroupScreen())
+            return
+        stages = self._selected_stages()
+        if not stages:
+            self.notify("Select at least one stage", severity="warning")
+            return
+        self.app.wizard_pipeline_stages = stages
+        self.app.wizard_intent_id = "custom"
         self.app.wizard_flags = dict(plan.resolved_flags)
         self.app.wizard_mode = "full_pipeline"
         self.app.wizard_saved_preset = plan.base_preset_name
-        if plan.command_kind == "group":
-            self.app.push_screen(GroupScreen())
-        else:
-            self.app.push_screen(ResourcesScreen())
+        self.app.push_screen(LaunchScreen())
 
 
-# ── Step 4: Resources + Submit ────────────────────────────────────────────────
+# ── Step 3: Launch (flags + Slurm + submit) ───────────────────────────────────
 
-class ResourcesScreen(Screen):
+
+class LaunchScreen(Screen):
     BINDINGS = [Binding("escape", "action_back", "Back")]
 
     def compose(self) -> ComposeResult:
         d = self.app.state.defaults
         yield Header(show_clock=True)
-        yield Static("  New Run  ›  Step 4 / 4  ›  Resources & Submit", classes="wizard-header")
-
-        with Horizontal(classes="frow"):
-            yield Label("Account:", classes="flabel")
-            yield Input(value=d.get("account", ""), id="account-input", placeholder="your_slurm_account")
-            yield Label("Partition:", classes="flabel")
-            yield Input(value=d.get("partition", "hpcnirc"), id="partition-input")
-
-        with Horizontal(classes="frow"):
-            yield Label("Time:", classes="flabel")
-            yield Input(value=d.get("time", "12:00:00"), id="time-input")
-            yield Label("Mem:", classes="flabel")
-            yield Input(value=d.get("mem", "256G"), id="mem-input")
-            yield Label("CPUs:", classes="flabel")
-            yield Input(value=d.get("cpus_per_task", "8"), id="cpus-input")
-
+        yield Static("  New Run  ›  Step 3 / 3  ›  Launch", classes="wizard-header")
+        yield WizardContextStrip(id="wizard-ctx")
         yield Static(
-            f"[dim]Intent:[/dim] [bold]{_intent_label(self.app)}[/bold]  "
+            f"[dim]Pipeline:[/dim] [bold]{_intent_label(self.app)}[/bold]  "
             f"[dim]Subjects:[/dim] [bold]{', '.join('sub-' + s for s in self.app.wizard_subjects)}[/bold]",
-            id="run-summary",
+            id="launch-run-summary",
         )
-
+        yield Checkbox("Fetch missing subjects via RDR (before driver)", id="launch-fetch")
+        yield Checkbox("Dry run (print commands; no sbatch / no mous-pipeline run)", id="launch-dry")
+        yield Checkbox("Force recompute (pass --force; ignore cached artifacts)", id="launch-force")
+        yield Static("", id="launch-fetch-hint")
+        yield Static("", id="hpc-summary-line")
+        yield Button("▸ Show Slurm resource fields", id="btn-hpc-toggle", variant="default")
+        with Vertical(id="hpc-details"):
+            with Horizontal(classes="frow"):
+                yield Label("Account:", classes="flabel")
+                yield Input(value=d.get("account", ""), id="account-input", placeholder="your_slurm_account")
+                yield Label("Partition:", classes="flabel")
+                yield Input(value=d.get("partition", "hpcnirc"), id="partition-input")
+            with Horizontal(classes="frow"):
+                yield Label("Time:", classes="flabel")
+                yield Input(value=d.get("time", "12:00:00"), id="time-input")
+                yield Label("Mem:", classes="flabel")
+                yield Input(value=d.get("mem", "256G"), id="mem-input")
+                yield Label("CPUs:", classes="flabel")
+                yield Input(value=d.get("cpus_per_task", "8"), id="cpus-input")
         yield Static(
             "[dim]Submit launches a detached Multimodal Driver job (safe for SSH disconnects). "
             "fMRI preprocessing may continue in separate mous_fmriprep array jobs after the driver exits.[/dim]",
-            id="cmd-preview",
+            id="launch-cmd-preview",
         )
-        yield Static("[dim]Resource suggestions can be computed from current partition capacity.[/dim]", id="resource-hint")
-
+        yield Static("[dim]Resource suggestions use partition capacity + manifest RSS.[/dim]", id="resource-hint")
         with Horizontal(classes="nav-bar"):
-            yield Button("← Back",       id="btn-back",    variant="default")
+            yield Button("← Back", id="btn-back", variant="default")
             yield Button("Suggest resources", id="btn-suggest-resources", variant="default")
-            yield Button("Preview",       id="btn-preview", variant="default")
-            yield Button("▶  Submit",     id="btn-submit",  variant="success")
-
+            yield Button("Preview", id="btn-preview", variant="default")
+            yield Button("▶  Submit", id="btn-submit", variant="success")
         yield Footer()
+
+    def _refresh_wizard_context(self) -> None:
+        try:
+            self.query_one("#wizard-ctx", WizardContextStrip).refresh_labels()
+        except Exception:
+            pass
+
+    def on_mount(self) -> None:
+        plan = self.app.wizard_intent_plan
+        caps = detect_intent_capabilities(self.app.wizard_config)
+        fetch_cb = self.query_one("#launch-fetch", Checkbox)
+        dry_cb = self.query_one("#launch-dry", Checkbox)
+        force_cb = self.query_one("#launch-force", Checkbox)
+        fetch_cb.value = bool(self.app.wizard_flags.get("fetch_missing", False))
+        dry_cb.value = bool(self.app.wizard_flags.get("dry_run", False))
+        force_cb.value = bool(getattr(self.app, "wizard_force", False))
+        hint = self.query_one("#launch-fetch-hint", Static)
+        if not caps.get("has_repocli"):
+            fetch_cb.disabled = True
+            hint.update("[yellow]repocli not on PATH — fetch disabled at compile time.[/yellow]")
+        else:
+            hint.update("[dim]Uses mous-pipeline fetch-rdr when local sub-* is missing.[/dim]")
+        hpc_detail = self.query_one("#hpc-details", Vertical)
+        hpc_detail.display = False
+        self._refresh_hpc_summary()
+        self._refresh_cmd_preview()
+
+    def _refresh_hpc_summary(self) -> None:
+        r = self._collect()
+        line = f"[dim]Slurm:[/dim] {r['partition']} / {r['mem']} / {r['time_limit']} / {r['cpus_per_task']} CPUs"
+        self.query_one("#hpc-summary-line", Static).update(line)
 
     def _collect(self) -> dict:
         return dict(
-            account      = self.query_one("#account-input",   Input).value.strip(),
-            partition    = self.query_one("#partition-input",  Input).value.strip(),
-            time_limit   = self.query_one("#time-input",       Input).value.strip(),
-            mem          = self.query_one("#mem-input",         Input).value.strip(),
-            cpus_per_task= self.query_one("#cpus-input",       Input).value.strip(),
+            account=self.query_one("#account-input", Input).value.strip(),
+            partition=self.query_one("#partition-input", Input).value.strip(),
+            time_limit=self.query_one("#time-input", Input).value.strip(),
+            mem=self.query_one("#mem-input", Input).value.strip(),
+            cpus_per_task=self.query_one("#cpus-input", Input).value.strip(),
         )
 
     def _save_defaults(self, r: dict) -> None:
-        self.app.state.defaults.update({
-            "account":      r["account"],
-            "partition":    r["partition"],
-            "time":         r["time_limit"],
-            "mem":          r["mem"],
-            "cpus_per_task":r["cpus_per_task"],
-        })
+        self.app.state.defaults.update(
+            {
+                "account": r["account"],
+                "partition": r["partition"],
+                "time": r["time_limit"],
+                "mem": r["mem"],
+                "cpus_per_task": r["cpus_per_task"],
+            }
+        )
         save_state(self.app.state)
+
+    def _ro(self, plan: IntentExecutionPlan | None, flag: str, ui_val: bool) -> bool:
+        if plan is None:
+            return bool(self.app.wizard_flags.get(flag, False))
+        if not plan.resolved_flags.get(flag, True):
+            return False
+        return bool(ui_val)
 
     def _build(self) -> list[str]:
         default_preset = MODE_TO_PRESET_DEFAULTS["full_pipeline"]
         plan = self.app.wizard_intent_plan
         preset_name = plan.base_preset_name if plan is not None else self.app.wizard_saved_preset
         preset = self.app.state.workflow_presets.get(preset_name, default_preset)
+        fetch_ui = bool(self.query_one("#launch-fetch", Checkbox).value)
+        dry_ui = bool(self.query_one("#launch-dry", Checkbox).value)
+        self.app.wizard_force = bool(self.query_one("#launch-force", Checkbox).value)
         overrides = RuntimeOverrides(
-            fetch_missing=(plan.resolved_flags.get("fetch_missing") if plan is not None else self.app.wizard_flags.get("fetch_missing")),
-            include_m5=(plan.resolved_flags.get("include_m5") if plan is not None else self.app.wizard_flags.get("include_m5")),
-            dry_run=(plan.resolved_flags.get("dry_run") if plan is not None else self.app.wizard_flags.get("dry_run")),
+            fetch_missing=self._ro(plan, "fetch_missing", fetch_ui),
+            include_m5=(
+                bool(plan.resolved_flags.get("include_m5"))
+                if plan is not None
+                else bool(self.app.wizard_flags.get("include_m5"))
+            ),
+            dry_run=self._ro(plan, "dry_run", dry_ui),
         )
         r = self._collect()
         return build_submit_cmd(
@@ -1070,21 +1367,52 @@ class ResourcesScreen(Screen):
             subjects=self.app.wizard_subjects,
             overrides=overrides,
             extra_runtime_args=(plan.runtime_args if plan is not None else None),
+            force=self.app.wizard_force,
             **r,
         )
 
-    @on(Button.Pressed, "#btn-back")
-    def action_back(self) -> None: self.app.pop_screen()
+    @on(Button.Pressed, "#btn-hpc-toggle")
+    def _toggle_hpc(self, _event: Button.Pressed) -> None:
+        box = self.query_one("#hpc-details", Vertical)
+        box.display = not box.display
+        btn = self.query_one("#btn-hpc-toggle", Button)
+        btn.label = "▾ Hide Slurm resource fields" if box.display else "▸ Show Slurm resource fields"
+        self._refresh_hpc_summary()
 
-    @on(Button.Pressed, "#btn-preview")
-    def _on_preview(self, _) -> None:
+    @on(Checkbox.Changed, "#launch-fetch")
+    @on(Checkbox.Changed, "#launch-dry")
+    @on(Checkbox.Changed, "#launch-force")
+    def _on_launch_flag_changed(self, _event: Checkbox.Changed) -> None:
+        self.app.wizard_flags["fetch_missing"] = bool(self.query_one("#launch-fetch", Checkbox).value)
+        self.app.wizard_flags["dry_run"] = bool(self.query_one("#launch-dry", Checkbox).value)
+        self.app.wizard_force = bool(self.query_one("#launch-force", Checkbox).value)
+        self._refresh_cmd_preview()
+
+    @on(Input.Changed, "#account-input")
+    @on(Input.Changed, "#partition-input")
+    @on(Input.Changed, "#time-input")
+    @on(Input.Changed, "#mem-input")
+    @on(Input.Changed, "#cpus-input")
+    def _on_hpc_input_changed(self, _event: Input.Changed) -> None:
+        self._refresh_hpc_summary()
+        self._refresh_cmd_preview()
+
+    @on(Button.Pressed, "#btn-back")
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def _refresh_cmd_preview(self) -> None:
         cmd = self._build()
-        self.query_one("#cmd-preview", Static).update(
+        self.query_one("#launch-cmd-preview", Static).update(
             "[bold]Command preview:[/bold]\n" + " ".join(cmd)
         )
 
+    @on(Button.Pressed, "#btn-preview")
+    def _on_preview(self, _event: Button.Pressed) -> None:
+        self._refresh_cmd_preview()
+
     @on(Button.Pressed, "#btn-suggest-resources")
-    def _on_suggest_resources(self, _) -> None:
+    def _on_suggest_resources(self, _event: Button.Pressed) -> None:
         partition = self.query_one("#partition-input", Input).value.strip()
         info = sinfo_partition(partition)
         if not info:
@@ -1104,22 +1432,26 @@ class ResourcesScreen(Screen):
         self.query_one("#mem-input", Input).value = str(recommendation["suggested_mem"])
         self.query_one("#cpus-input", Input).value = str(recommendation["suggested_cpus_per_task"])
         self.query_one("#time-input", Input).value = str(recommendation["suggested_time"])
+        self.query_one("#hpc-details", Vertical).display = True
+        self.query_one("#btn-hpc-toggle", Button).label = "▾ Hide Slurm resource fields"
         self.query_one("#resource-hint", Static).update(
             "[green]Suggested[/green] "
             f"mem={recommendation['suggested_mem']} cpus={recommendation['suggested_cpus_per_task']} "
             f"time={recommendation['suggested_time']} "
             f"(peak_rss≈{recommendation['peak_rss_gb']:.1f}GB, parallel_subjects={recommendation['suggested_parallel_subjects']})"
         )
+        self._refresh_hpc_summary()
+        self._refresh_cmd_preview()
 
     @on(Button.Pressed, "#btn-submit")
-    def _on_submit(self, _) -> None:
+    def _on_submit(self, _event: Button.Pressed) -> None:
         r = self._collect()
         if not r["account"]:
             self.notify("Account is required before submitting", severity="error")
             return
         self._save_defaults(r)
         cmd = self._build()
-        self.query_one("#cmd-preview", Static).update(
+        self.query_one("#launch-cmd-preview", Static).update(
             "[bold]Submitting detached driver:[/bold]\n" + " ".join(cmd) + "\n\n[dim]Submitting via sbatch --wrap…[/dim]"
         )
         job, proc = submit_detached_driver(
@@ -1138,7 +1470,7 @@ class ResourcesScreen(Screen):
         out = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             self.notify(f"Submit failed (rc={proc.returncode})", severity="error")
-            self.query_one("#cmd-preview", Static).update(
+            self.query_one("#launch-cmd-preview", Static).update(
                 "[bold red]Submit error:[/bold red]\n" + out[-3000:]
             )
             return
@@ -1149,7 +1481,7 @@ class ResourcesScreen(Screen):
             self.notify(f"✓  Submitted — Job ID {job.job_id}")
         else:
             self.notify("Submitted (no job ID captured)")
-        self.query_one("#cmd-preview", Static).update(
+        self.query_one("#launch-cmd-preview", Static).update(
             "[bold green]Submitted:[/bold green]\n" + out[-3000:]
         )
 
@@ -1791,14 +2123,12 @@ class OpsApp(App[None]):
         super().__init__()
         self.state = load_state()
         # Wizard state shared across wizard screens
-        self.wizard_config:      str       = self.state.last_config
-        self.wizard_subjects:    list[str] = []
-        self.wizard_mode:        str       = "full_pipeline"
-        self.wizard_intent_id:   str       = "quick_qc"
-        self.wizard_scope:       str       = "single"
-        self.wizard_constraint:  str       = "balanced"
+        self.wizard_config: str = self.state.last_config
+        self.wizard_subjects: list[str] = []
+        self.wizard_mode: str = "full_pipeline"
+        self.wizard_intent_id: str = "quick_qc"
         self.wizard_intent_plan: IntentExecutionPlan | None = None
-        self.wizard_flags:       dict[str, bool] = {
+        self.wizard_flags: dict[str, bool] = {
             "fetch_missing": False,
             "include_m5": False,
             "bids_convert": False,
@@ -1806,6 +2136,9 @@ class OpsApp(App[None]):
             "dry_run": False,
         }
         self.wizard_saved_preset: str = ""
+        self.wizard_force: bool = False
+        self.wizard_pipeline_stages: list[str] = []
+        self.wizard_group_mode: bool = False
 
     def on_mount(self) -> None:
         self.push_screen(DashboardScreen())

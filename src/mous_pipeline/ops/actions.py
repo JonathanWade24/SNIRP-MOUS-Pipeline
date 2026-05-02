@@ -307,6 +307,7 @@ def build_submit_cmd(
     cpus_per_task: str,
     overrides: RuntimeOverrides | None = None,
     extra_runtime_args: list[str] | None = None,
+    force: bool = False,
 ) -> list[str]:
     preset_overrides = RuntimeOverrides(
         fetch_missing=preset.fetch_missing,
@@ -337,10 +338,116 @@ def build_submit_cmd(
         cmd.append("--include-m5")
     if resolved.dry_run:
         cmd.append("--dry-run")
+    if force:
+        cmd.append("--force")
     cmd.extend(preset.extra_args)
     if extra_runtime_args:
         cmd.extend(extra_runtime_args)
     return cmd
+
+
+def validate_config_path(raw_path: str) -> tuple[bool, str]:
+    """Return (ok, absolute_path_or_error_message) for a pipeline YAML."""
+    p = Path(raw_path).expanduser()
+    if not p.is_absolute():
+        p = (Path.cwd() / p).resolve()
+    if not p.exists():
+        return False, f"Config not found: {p}"
+    try:
+        load_config(p)
+    except Exception as exc:
+        return False, f"Invalid config: {exc}"
+    return True, str(p)
+
+
+def _m6a_cache_paths(m9_dir: Path, subject: str) -> list[Path]:
+    """Paths that must exist for m6a cache hit (matches runner heuristic)."""
+    s = subject.removeprefix("sub-")
+    keys = [
+        ("dirs_z", f"sub-{s}_dirs_zinnen.npy"),
+        ("dirs_w", f"sub-{s}_dirs_woorden.npy"),
+        ("dirs_r", f"sub-{s}_dirs_rest.npy"),
+        ("sliding_z", f"sub-{s}_sliding_dci_zinnen.npy"),
+        ("dci_z", f"sub-{s}_dci_zinnen.npy"),
+        ("dci_w", f"sub-{s}_dci_woorden.npy"),
+        ("dci_r", f"sub-{s}_dci_rest.npy"),
+        ("sliding_t", f"sub-{s}_sliding_t.npy"),
+    ]
+    paths = [m9_dir / name for _, name in keys]
+    paths.append(m9_dir / f"sub-{s}_sensor_xy.npy")
+    paths.append(m9_dir / f"sub-{s}_epoch_shape.npz")
+    alpha = [
+        f"sub-{s}_alpha_dirs_zinnen.npy",
+        f"sub-{s}_alpha_dirs_woorden.npy",
+        f"sub-{s}_alpha_dirs_rest.npy",
+        f"sub-{s}_alpha_dci_zinnen.npy",
+        f"sub-{s}_alpha_dci_woorden.npy",
+        f"sub-{s}_alpha_dci_rest.npy",
+    ]
+    paths.extend(m9_dir / n for n in alpha)
+    return paths
+
+
+def subject_stage_cache_hit(derivatives_root: str, subject: str, stage: str) -> bool:
+    """Best-effort artifact presence check (file existence; m4_trial skips npz alignment check)."""
+    s = subject.removeprefix("sub-")
+    root = Path(derivatives_root).expanduser()
+    m4_dir = root / f"sub-{s}" / "m4_features"
+    m9_dir = root / f"sub-{s}" / "m9_orchestration"
+    m10_dir = root / f"sub-{s}" / "m10_fmri"
+    if stage == "m4":
+        return (m4_dir / f"{s}_beta_analytic.npz").is_file() and (m4_dir / f"{s}_beta_psd.npz").is_file()
+    if stage == "m4_trial":
+        return (m4_dir / f"{s}_prestim_beta.npz").is_file() and (m4_dir / f"{s}_n400m.npz").is_file()
+    if stage == "m6a":
+        return m9_dir.is_dir() and all(p.is_file() for p in _m6a_cache_paths(m9_dir, s))
+    if stage == "m10":
+        return (m10_dir / f"{s}_trials_joined.csv").is_file()
+    return False
+
+
+def get_stage_cache_counts(derivatives_root: str, subjects: list[str], stage: str) -> tuple[int, int]:
+    """Return (n_cached, n_total) for a cacheable stage."""
+    clean = [x.removeprefix("sub-") for x in subjects if x.strip()]
+    if not clean:
+        return 0, 0
+    hits = sum(1 for s in clean if subject_stage_cache_hit(derivatives_root, s, stage))
+    return hits, len(clean)
+
+
+def get_subject_cache_summary(derivatives_root: str, subject: str) -> str:
+    """Compact cache line for subject rows (m4 / m6a / m10 only — main cost centers)."""
+    parts: list[str] = []
+    for label, st in (("m4", "m4"), ("m6a", "m6a"), ("m10", "m10")):
+        hit = subject_stage_cache_hit(derivatives_root, subject, st)
+        parts.append(f"{label}{'✓' if hit else '·'}")
+    return " ".join(parts)
+
+
+def custom_intent_profile_from_stages(
+    requested_stages: list[str],
+    *,
+    intent_id: str = "custom",
+    label: str = "Custom",
+    description: str = "Custom stage selection from Ops UI.",
+    default_fetch_missing: bool = False,
+    default_include_m5: bool = False,
+    default_dry_run: bool = False,
+    legacy_preset_name: str = "full_submit",
+    target: str = "submit",
+) -> IntentProfile:
+    """Build an IntentProfile for arbitrary stage selection (compile_intent_plan applies closure)."""
+    return IntentProfile(
+        intent_id=intent_id,
+        label=label,
+        description=description,
+        target=target,
+        requested_stages=list(requested_stages),
+        default_fetch_missing=default_fetch_missing,
+        default_include_m5=default_include_m5,
+        default_dry_run=default_dry_run,
+        legacy_preset_name=legacy_preset_name,
+    )
 
 
 def build_download_cmd(config: str, subject: str) -> list[str]:
