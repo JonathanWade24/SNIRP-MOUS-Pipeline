@@ -824,6 +824,7 @@ class RunOptionsScreen(Screen):
                 include_m5=plan.resolved_flags["include_m5"],
                 dry_run=plan.resolved_flags["dry_run"],
             ),
+            extra_runtime_args=plan.runtime_args,
         )
         if plan.command_kind == "group":
             preview_cmd = build_group_cmd(
@@ -988,6 +989,7 @@ class ResourcesScreen(Screen):
             config=self.app.wizard_config,
             subjects=self.app.wizard_subjects,
             overrides=overrides,
+            extra_runtime_args=(plan.runtime_args if plan is not None else None),
             **r,
         )
 

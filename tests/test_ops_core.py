@@ -67,6 +67,24 @@ def test_build_submit_cmd_for_m5_preset() -> None:
     assert cmd[0] == "scripts/palmetto_submit.sh"
 
 
+def test_build_submit_cmd_includes_extra_runtime_args() -> None:
+    preset = WorkflowPreset(name="full_submit", description="", mode="submit")
+    cmd = build_submit_cmd(
+        preset,
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="256G",
+        cpus_per_task="8",
+        extra_runtime_args=["--meg-skip", "m5,m10,m11", "--skip-fmriprep-submit"],
+    )
+    assert "--meg-skip" in cmd
+    assert "m5,m10,m11" in cmd
+    assert "--skip-fmriprep-submit" in cmd
+
+
 def test_parse_sbatch_job_id_and_failure_classification() -> None:
     assert parse_sbatch_job_id("Submitted batch job 123456") == "123456"
     assert classify_failure("slurmstepd: error: Detected 1 oom-kill event") == "oom"
@@ -159,7 +177,17 @@ def test_state_migration_seeds_recent_configs_and_defaults(tmp_path: Path) -> No
 
 def test_submit_flag_contract_with_palmetto_wrapper() -> None:
     script = Path("scripts/palmetto_submit.sh").read_text()
-    expected_flags = ["--fetch-missing", "--include-m5", "--dry-run"]
+    expected_flags = [
+        "--fetch-missing",
+        "--include-m5",
+        "--dry-run",
+        "--skip-m5",
+        "--meg-skip",
+        "--skip-fmriprep-submit",
+        "--skip-fmri-stages-submit",
+        "--skip-group",
+        "--skip-aim1-audit",
+    ]
     for flag in expected_flags:
         assert flag in script
 
@@ -373,6 +401,8 @@ def test_compile_intent_plan_dependency_closure(tmp_path: Path) -> None:
     assert "m1" in plan.resolved_stages
     assert "m3" in plan.resolved_stages
     assert plan.command_kind == "submit"
+    assert "--skip-fmriprep-submit" in plan.runtime_args
+    assert "--meg-skip" in plan.runtime_args
 
 
 def test_detect_intent_capabilities_graceful_on_bad_config(tmp_path: Path) -> None:

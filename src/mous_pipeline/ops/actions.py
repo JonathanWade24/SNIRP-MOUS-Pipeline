@@ -133,12 +133,28 @@ def compile_intent_plan(
     base_preset_name = profile.legacy_preset_name or "full_submit"
     if base_preset_name == "bids_convert_validate":
         base_preset_name = "full_submit"
+    runtime_args: list[str] = []
+    selected = set(resolved_stages)
+    # Encode intent-resolved behavior into runtime args consumed by palmetto wrappers.
+    if "m10" not in selected and "m11" not in selected:
+        runtime_args.extend(["--skip-fmriprep-submit", "--skip-fmri-stages-submit"])
+    if "m5" not in selected:
+        runtime_args.append("--skip-m5")
+    meg_subject_stages = {"m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m7", "m8", "m9", "m12"}
+    meg_skip = [s for s in STAGE_ORDER if s in meg_subject_stages and s not in selected]
+    if meg_skip:
+        runtime_args.extend(["--meg-skip", ",".join(meg_skip)])
+    if "m8" not in selected and "m9" not in selected:
+        runtime_args.append("--skip-group")
+    if "m4_trial" not in selected:
+        runtime_args.append("--skip-aim1-audit")
     return IntentExecutionPlan(
         intent_id=profile.intent_id,
         command_kind=profile.target,
         base_preset_name=base_preset_name,
         resolved_stages=resolved_stages,
         resolved_flags=resolved_flags,
+        runtime_args=runtime_args,
         dependency_notes=dep_notes,
         warnings=warnings,
         legacy_translation_note=(
@@ -290,6 +306,7 @@ def build_submit_cmd(
     mem: str,
     cpus_per_task: str,
     overrides: RuntimeOverrides | None = None,
+    extra_runtime_args: list[str] | None = None,
 ) -> list[str]:
     preset_overrides = RuntimeOverrides(
         fetch_missing=preset.fetch_missing,
@@ -321,6 +338,8 @@ def build_submit_cmd(
     if resolved.dry_run:
         cmd.append("--dry-run")
     cmd.extend(preset.extra_args)
+    if extra_runtime_args:
+        cmd.extend(extra_runtime_args)
     return cmd
 
 

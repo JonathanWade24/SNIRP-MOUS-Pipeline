@@ -50,6 +50,7 @@ class IntentExecutionPlan:
     base_preset_name: str
     resolved_stages: list[str] = field(default_factory=list)
     resolved_flags: dict[str, bool] = field(default_factory=dict)
+    runtime_args: list[str] = field(default_factory=list)
     dependency_notes: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     legacy_translation_note: str = ""
