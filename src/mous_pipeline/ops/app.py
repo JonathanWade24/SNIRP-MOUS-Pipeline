@@ -139,13 +139,47 @@ Button { margin: 0 1; }
 
 /* ── Run Options ─────────────────────────────────────── */
 #mode-select { margin: 1 2; }
-#run-options-desc {
+
+#run-options-body {
+    height: 1fr;
+    min-height: 14;
+    margin: 0 2;
+}
+
+#run-options-help {
+    border: round $primary-darken-3;
+    background: $boost;
+    padding: 1;
+    margin-bottom: 1;
+    color: $text;
+    height: auto;
+}
+
+#intent-desc {
     border: round $primary-darken-2;
     background: $surface;
-    height: 5;
     padding: 1;
-    margin: 0 2;
+    margin-bottom: 1;
+    height: auto;
     color: $text-muted;
+}
+
+#intent-warnings {
+    padding: 1;
+    margin-bottom: 1;
+    min-height: 2;
+    height: auto;
+}
+
+#run-options-preview {
+    border: round $success;
+    background: $surface;
+    padding: 1;
+    height: 1fr;
+    min-height: 8;
+    overflow-y: auto;
+    overflow-x: auto;
+    color: $text;
 }
 
 /* ── Resources ───────────────────────────────────────── */
@@ -172,6 +206,40 @@ Button { margin: 0 1; }
 }
 #log-output { border: round $primary-darken-2; margin: 0 2; height: 1fr; }
 """
+
+RUN_OPTIONS_HELP = """[bold]What this step does[/bold]
+Pick an [bold]Intent[/bold] (what you want to accomplish), [bold]Scope[/bold] (single subject vs cohort), and a [bold]Constraint[/bold] (how aggressively to trim work for resources). The preview below is the command after Slurm settings on the next screen.
+
+[bold]Intent[/bold] — Compiles a concrete stage plan; yellow text lists compatibility or capability caveats.
+
+[bold]Scope[/bold] — Changes how subjects flow through the compiled command.
+
+[bold]Fetch / m5 / Dry run[/bold] — Runtime toggles. If the compiler disabled a flag for this environment, the checkbox cannot override that (see warnings).
+
+[bold]Explain plan[/bold] — Shows dependency notes for the current compiled plan in a notification.
+
+[dim]Tip: ← Back changes subjects. Next configures Slurm account, partition, time, and memory, then Submit.[/dim]"""
+
+
+def _wrap_preview_tokens(tokens: list[str], *, width: int = 96) -> str:
+    """Break a argv-style token list into readable lines for the TUI preview."""
+    if not tokens:
+        return ""
+    lines: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for t in tokens:
+        extra = (1 if cur else 0) + len(t)
+        if cur and cur_len + extra > width:
+            lines.append(" ".join(cur))
+            cur = [t]
+            cur_len = len(t)
+        else:
+            cur.append(t)
+            cur_len += extra
+    if cur:
+        lines.append(" ".join(cur))
+    return "\n".join(lines)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -745,9 +813,11 @@ class RunOptionsScreen(Screen):
             "  " + "  ·  ".join(f"sub-{s}" for s in subs) if subs else "[dim](none — go back and select subjects)[/dim]",
             id="subjects-summary",
         )
-        yield Static("", id="intent-desc")
-        yield Static("", id="intent-warnings")
-        yield Static("", id="run-options-preview")
+        with Vertical(id="run-options-body"):
+            yield Static(RUN_OPTIONS_HELP, id="run-options-help")
+            yield Static("", id="intent-desc")
+            yield Static("", id="intent-warnings")
+            yield Static("", id="run-options-preview")
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",            id="btn-back", variant="default")
@@ -848,9 +918,11 @@ class RunOptionsScreen(Screen):
             self.query_one("#intent-warnings", Static).update("[yellow]" + " | ".join(warnings) + "[/yellow]")
         else:
             self.query_one("#intent-warnings", Static).update("[dim]No compatibility warnings.[/dim]")
+        wrapped = _wrap_preview_tokens(preview_cmd)
         self.query_one("#run-options-preview", Static).update(
             "[dim]Resolved stages:[/dim] " + ", ".join(plan.resolved_stages) + "\n"
-            + "[dim]Preview:[/dim] " + " ".join(preview_cmd)
+            + "[bold green]Preview[/bold green] [dim](wraps; scroll if needed)[/dim]\n"
+            + wrapped
         )
 
     @on(Select.Changed, "#intent-select")
