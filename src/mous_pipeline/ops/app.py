@@ -133,13 +133,41 @@ Button { margin: 0 1; }
 
 /* ── Run Options ─────────────────────────────────────── */
 #mode-select { margin: 1 2; }
+
+#run-options-body {
+    height: 1fr;
+    min-height: 14;
+    margin: 0 2;
+}
+
+#run-options-help {
+    border: round $primary-darken-3;
+    background: $boost;
+    padding: 1;
+    margin-bottom: 1;
+    color: $text;
+    height: auto;
+}
+
 #run-options-desc {
     border: round $primary-darken-2;
     background: $surface;
-    height: 5;
+    height: auto;
+    min-height: 2;
     padding: 1;
-    margin: 0 2;
+    margin-bottom: 1;
     color: $text-muted;
+}
+
+#run-options-preview {
+    border: round $success;
+    background: $surface;
+    padding: 1;
+    height: 1fr;
+    min-height: 8;
+    overflow-y: auto;
+    overflow-x: auto;
+    color: $text;
 }
 
 /* ── Resources ───────────────────────────────────────── */
@@ -166,6 +194,44 @@ Button { margin: 0 1; }
 }
 #log-output { border: round $primary-darken-2; margin: 0 2; height: 1fr; }
 """
+
+RUN_OPTIONS_HELP = """[bold]What this step does[/bold]
+Choose how the run is grouped ([bold]Mode[/bold]), optional [bold]saved presets[/bold], and [bold]runtime flags[/bold] below. The green box is the exact command that will run after you set Slurm resources on the next screen.
+
+[bold]Mode[/bold] — Pipeline grouping (full MEG path, fMRI-only, download-only, etc.). Changing mode resets the checkboxes to that mode's defaults.
+
+[bold]Presets[/bold] — Save or load a named combination of mode + flags for repeat runs.
+
+[bold]Fetch missing[/bold] — Submit script may pull missing subjects before processing.
+
+[bold]Include m5[/bold] — Source reconstruction (slower; needs FreeSurfer / BEM setup).
+
+[bold]BIDS convert / validate[/bold] — Run BIDS conversion or validation when your workflow uses those paths.
+
+[bold]Dry run[/bold] — Print planned commands without executing Slurm or the pipeline.
+
+[dim]Tip: Use ← Back to change subjects. Next opens Resources (account, partition, time, memory) then Submit.[/dim]"""
+
+
+def _wrap_preview_tokens(tokens: list[str], *, width: int = 96) -> str:
+    """Break a argv-style token list into readable lines for the TUI preview."""
+    if not tokens:
+        return ""
+    lines: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for t in tokens:
+        extra = (1 if cur else 0) + len(t)
+        if cur and cur_len + extra > width:
+            lines.append(" ".join(cur))
+            cur = [t]
+            cur_len = len(t)
+        else:
+            cur.append(t)
+            cur_len += extra
+    if cur:
+        lines.append(" ".join(cur))
+    return "\n".join(lines)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -652,8 +718,10 @@ class RunOptionsScreen(Screen):
             "  " + "  ·  ".join(f"sub-{s}" for s in subs) if subs else "[dim](none — go back and select subjects)[/dim]",
             id="subjects-summary",
         )
-        yield Static("", id="run-options-desc")
-        yield Static("", id="run-options-preview")
+        with Vertical(id="run-options-body"):
+            yield Static(RUN_OPTIONS_HELP, id="run-options-help")
+            yield Static("", id="run-options-desc")
+            yield Static("", id="run-options-preview")
 
         with Horizontal(classes="nav-bar"):
             yield Button("← Back",            id="btn-back", variant="default")
@@ -675,7 +743,6 @@ class RunOptionsScreen(Screen):
         self.query_one("#flag-dry", Checkbox).value = bool(base.dry_run)
         self.query_one("#flag-bids-convert", Checkbox).value = bool(base.bids_convert)
         self.query_one("#flag-bids-validate", Checkbox).value = bool(base.bids_validate)
-        self.query_one("#run-options-desc", Static).update(f"[dim]Mode default: {MODE_LABELS.get(mode, mode)}[/dim]")
 
     def _mode_from_preset(self, preset: WorkflowPreset) -> str:
         if preset.mode in MODE_LABELS:
@@ -700,6 +767,11 @@ class RunOptionsScreen(Screen):
     def _refresh_preview(self) -> None:
         flags = self._current_flags()
         mode = str(self.query_one("#mode-select", Select).value)
+        self.query_one("#run-options-desc", Static).update(
+            f"[bold]Current mode:[/bold] {MODE_LABELS.get(mode, mode)}\n"
+            f"[dim]Changing [bold]Mode[/bold] reapplies its default flags. "
+            f"Toggling checkboxes updates the preview immediately.[/dim]"
+        )
         defaults = self.app.state.defaults
         base = MODE_TO_PRESET_DEFAULTS.get(mode, MODE_TO_PRESET_DEFAULTS["full_pipeline"])
         preview_cmd = build_submit_cmd(
@@ -717,8 +789,9 @@ class RunOptionsScreen(Screen):
                 dry_run=flags["dry_run"],
             ),
         )
+        wrapped = _wrap_preview_tokens(preview_cmd)
         self.query_one("#run-options-preview", Static).update(
-            "[dim]Preview:[/dim] " + " ".join(preview_cmd)
+            "[bold green]Preview command[/bold green] [dim](wraps; scroll if needed)[/dim]\n" + wrapped
         )
 
     def _preset_from_form(self, name: str) -> WorkflowPreset:
