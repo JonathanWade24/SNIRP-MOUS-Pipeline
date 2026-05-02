@@ -11,7 +11,7 @@ Usage:
                                [--time 08:00:00] [--mem 32G] [--cpus-per-task 8]
                                [--include-m5] [--skip-m5] [--meg-skip m10,m11]
                                [--skip-fmriprep-submit] [--skip-fmri-stages-submit]
-                               [--skip-group] [--skip-aim1-audit]
+                               [--skip-group] [--skip-aim1-audit] [--force]
 
 Behavior:
   1) Resolve subjects from config `subjects:` or --subjects override.
@@ -40,6 +40,7 @@ SKIP_FMRIPREP_SUBMIT=0
 SKIP_FMRI_STAGES_SUBMIT=0
 SKIP_GROUP=0
 SKIP_AIM1_AUDIT=0
+FORCE_PIPELINE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -109,6 +110,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-aim1-audit)
       SKIP_AIM1_AUDIT=1
+      shift
+      ;;
+    --force)
+      FORCE_PIPELINE=1
       shift
       ;;
     -h|--help)
@@ -324,10 +329,16 @@ for sub in "${SUBJECTS[@]}"; do
     MEG_SKIP="$MEG_SKIP_OVERRIDE"
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "[dry-run][meg-subject] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP"
+    _force_arg=""
+    if [[ "$FORCE_PIPELINE" -eq 1 ]]; then _force_arg=" --force"; fi
+    echo "[dry-run][meg-subject] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP${_force_arg}"
     continue
   fi
-  mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP"
+  if [[ "$FORCE_PIPELINE" -eq 1 ]]; then
+    mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP" --force
+  else
+    mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP"
+  fi
 done
 
 if [[ "$SKIP_GROUP" -eq 1 ]]; then
@@ -392,6 +403,10 @@ if [[ -n "${FMRIPREP_JOB_ID:-}" ]]; then
 fi
 
 submit_fmri_stages() {
+  local -a fmri_extra=()
+  if [[ "$FORCE_PIPELINE" -eq 1 ]]; then
+    fmri_extra+=(--force)
+  fi
   sbatch \
     --job-name "mous_fmri_stages" \
     --output "$FMRI_STAGES_OUTPUT" \
@@ -401,7 +416,8 @@ submit_fmri_stages() {
     "$REPO_ROOT/scripts/run_fmri_stages.sh" \
     --config "$CONFIG_ABS" \
     --subjects-file "$SUBJECTS_FILE" \
-    --deriv-root "$DERIV_ROOT"
+    --deriv-root "$DERIV_ROOT" \
+    "${fmri_extra[@]}"
 }
 
 set +e

@@ -85,6 +85,34 @@ def test_build_submit_cmd_includes_extra_runtime_args() -> None:
     assert "--skip-fmriprep-submit" in cmd
 
 
+def test_build_submit_cmd_includes_force_flag() -> None:
+    preset = WorkflowPreset(name="full_submit", description="", mode="submit")
+    cmd = build_submit_cmd(
+        preset,
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="256G",
+        cpus_per_task="8",
+        force=True,
+    )
+    assert "--force" in cmd
+
+
+def test_subject_stage_cache_hit_m4_files(tmp_path: Path) -> None:
+    deriv = tmp_path / "deriv"
+    m4 = deriv / "sub-S1" / "m4_features"
+    m4.mkdir(parents=True)
+    (m4 / "S1_beta_analytic.npz").write_bytes(b"")
+    (m4 / "S1_beta_psd.npz").write_bytes(b"")
+    assert actions.subject_stage_cache_hit(str(deriv), "S1", "m4") is True
+    assert actions.subject_stage_cache_hit(str(deriv), "S1", "m10") is False
+    n, tot = actions.get_stage_cache_counts(str(deriv), ["S1", "S2"], "m4")
+    assert (n, tot) == (1, 2)
+
+
 def test_parse_sbatch_job_id_and_failure_classification() -> None:
     assert parse_sbatch_job_id("Submitted batch job 123456") == "123456"
     assert classify_failure("slurmstepd: error: Detected 1 oom-kill event") == "oom"
@@ -181,6 +209,7 @@ def test_submit_flag_contract_with_palmetto_wrapper() -> None:
         "--fetch-missing",
         "--include-m5",
         "--dry-run",
+        "--force",
         "--skip-m5",
         "--meg-skip",
         "--skip-fmriprep-submit",

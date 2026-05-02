@@ -19,6 +19,7 @@ Options:
   --skip-fmri-stages-submit
   --skip-group
   --skip-aim1-audit
+  --force                  Pass through to mous-pipeline run (ignore cached artifacts)
   --partition <name>       (default: hpcnirc)
   --account <account>
   --qos <qos>
@@ -42,6 +43,7 @@ SKIP_FMRIPREP_SUBMIT=0
 SKIP_FMRI_STAGES_SUBMIT=0
 SKIP_GROUP=0
 SKIP_AIM1_AUDIT=0
+FORCE_PIPELINE=0
 PARTITION="${MOUS_PARTITION:-hpcnirc}"
 ACCOUNT="${MOUS_ACCOUNT:-}"
 QOS="${MOUS_QOS:-}"
@@ -96,6 +98,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-aim1-audit)
       SKIP_AIM1_AUDIT=1
+      shift
+      ;;
+    --force)
+      FORCE_PIPELINE=1
       shift
       ;;
     --partition)
@@ -193,6 +199,9 @@ if [[ "$SKIP_GROUP" -eq 1 ]]; then
 fi
 if [[ "$SKIP_AIM1_AUDIT" -eq 1 ]]; then
   CMD+=(--skip-aim1-audit)
+fi
+if [[ "$FORCE_PIPELINE" -eq 1 ]]; then
+  CMD+=(--force)
 fi
 if [[ -n "$ACCOUNT" ]]; then
   CMD+=(--account "$ACCOUNT")

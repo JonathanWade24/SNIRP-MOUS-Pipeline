@@ -6,7 +6,7 @@ usage() {
 Run fMRI-dependent stages (m8,m10,m11,m12) per subject, then group aggregation.
 
 Usage:
-  run_fmri_stages.sh --config <config.yaml> --subjects-file <path> --deriv-root <path> [--dry-run]
+  run_fmri_stages.sh --config <config.yaml> --subjects-file <path> --deriv-root <path> [--dry-run] [--force]
 
 Environment:
   MOUS_R_MODULE  R module to load when Rscript is not already on PATH
@@ -18,6 +18,7 @@ CONFIG=""
 SUBJECTS_FILE=""
 DERIV_ROOT=""
 DRY_RUN=0
+FORCE_PIPELINE=0
 R_MODULE="${MOUS_R_MODULE:-r/4.5.0}"
 
 while [[ $# -gt 0 ]]; do
@@ -36,6 +37,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --force)
+      FORCE_PIPELINE=1
       shift
       ;;
     -h|--help)
@@ -122,6 +127,9 @@ run_subject_cmd() {
     --assume-upstream-done
     --preflight-quarto-env
   )
+  if [[ "$FORCE_PIPELINE" -eq 1 ]]; then
+    cmd+=(--force)
+  fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     cmd+=(--dry-run)
     echo "[dry-run][fmri-stages][subject] ${cmd[*]}"
