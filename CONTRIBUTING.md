@@ -64,11 +64,23 @@ This is a fast-forward only — it will fail if `HPC` has diverged from `main`, 
 
 ### Cluster sync
 
-Jobs auto-sync via `run_mous_driver.sbatch`. To sync manually from a Palmetto login node:
+To sync the cluster working tree to the latest `HPC` branch from a Palmetto login node:
 
 ```bash
-mousupdate   # git fetch + reset --hard origin/HPC
+mousupdate          # aborts if working tree is dirty
+mousupdate --force  # skips dirty-tree check
 ```
+
+Slurm jobs do **not** auto-sync by default. To opt a job into syncing at startup, export
+`MOUS_SYNC_ON_START=1` before submitting — the job will abort if the tree is dirty rather than
+silently discarding changes:
+
+```bash
+MOUS_SYNC_ON_START=1 sbatch scripts/run_mous_driver.sbatch
+```
+
+Only use `MOUS_SYNC_ON_START` when the cluster checkout is a dedicated clean deploy tree.
+If you share `/scratch/jonathanwade/MOUS` with active development, use `mousupdate` manually instead.
 
 ### One-time: protect main on GitHub
 
