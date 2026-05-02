@@ -10,7 +10,13 @@
 
 set -euo pipefail
 cd /scratch/jonathanwade/MOUS
-source "$HOME/.venvs/mous-palmetto/bin/activate"
+
+MOUS_CONDA_MODULE="${MOUS_CONDA_MODULE:-miniforge3/24.3.0-0}"
+MOUS_CONDA_ENV_NAME="${MOUS_CONDA_ENV_NAME:-mous-palmetto}"
+
+module load "$MOUS_CONDA_MODULE"
+eval "$(conda shell.bash hook)"
+conda activate "$MOUS_CONDA_ENV_NAME"
 
 scripts/palmetto_submit.sh \
   --config configs/palmetto_hpcnirc_fmri.yaml \
