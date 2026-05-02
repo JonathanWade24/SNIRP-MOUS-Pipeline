@@ -57,3 +57,23 @@ mousq() {
 mousstat() {
   git -C "$MOUS_REPO" status --short --branch "$@"
 }
+
+# Pull the latest HPC deploy branch into the cluster working tree.
+# Run this before submitting a job when you promoted main → HPC from local.
+mousupdate() {
+  git -C "$MOUS_REPO" fetch origin
+  git -C "$MOUS_REPO" reset --hard origin/HPC
+  echo "[mous] cluster repo now at: $(git -C "$MOUS_REPO" log -1 --oneline)"
+}
+
+# Promote main → HPC deploy branch and push.
+# Run from local (or a Palmetto login node with GitHub access) after merging to main.
+mousdeploy() {
+  local _prev
+  _prev="$(git -C "$MOUS_REPO" symbolic-ref --short HEAD 2>/dev/null || echo "(detached)")"
+  git -C "$MOUS_REPO" switch HPC
+  git -C "$MOUS_REPO" merge --ff-only main
+  git -C "$MOUS_REPO" push origin HPC
+  git -C "$MOUS_REPO" switch "$_prev"
+  echo "[mous] HPC branch promoted: $(git -C "$MOUS_REPO" log -1 --oneline origin/HPC)"
+}

@@ -10,6 +10,12 @@
 
 set -euo pipefail
 cd /scratch/jonathanwade/MOUS
+
+echo "[sync] Fetching origin/HPC..."
+git fetch origin
+git reset --hard origin/HPC
+echo "[sync] Running at: $(git log -1 --oneline)"
+
 source "$HOME/.venvs/mous-palmetto/bin/activate"
 
 scripts/palmetto_submit.sh \
