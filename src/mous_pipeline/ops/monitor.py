@@ -71,6 +71,44 @@ def squeue_jobs() -> list[SlurmJobStatus]:
     return rows
 
 
+def sinfo_partition(partition: str) -> dict[str, int | str] | None:
+    part = partition.strip()
+    if not part:
+        return None
+    try:
+        out = _run_text(["sinfo", "--noheader", "-o", "%n|%C|%m", "-p", part])
+    except Exception:
+        return None
+    if not out.strip():
+        return None
+    max_mem_gb = 0
+    max_cpus = 0
+    nodes = 0
+    for line in out.splitlines():
+        fields = line.split("|")
+        if len(fields) < 3:
+            continue
+        cpu_fields = fields[1].split("/")
+        if len(cpu_fields) != 4:
+            continue
+        try:
+            total_cpus = int(cpu_fields[3])
+            mem_mb = int(fields[2].strip())
+        except ValueError:
+            continue
+        nodes += 1
+        max_cpus = max(max_cpus, total_cpus)
+        max_mem_gb = max(max_mem_gb, int(mem_mb / 1024))
+    if nodes == 0 or max_mem_gb <= 0 or max_cpus <= 0:
+        return None
+    return {
+        "partition": part,
+        "nodes": nodes,
+        "max_node_mem_gb": max_mem_gb,
+        "max_node_cpus": max_cpus,
+    }
+
+
 def classify_failure(log_text: str) -> str:
     msg = log_text.lower()
     if "out of memory" in msg or "oom" in msg:

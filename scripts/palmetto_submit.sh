@@ -13,6 +13,12 @@ Options:
   --fetch-missing
   --dry-run
   --include-m5
+  --skip-m5
+  --meg-skip <csv>
+  --skip-fmriprep-submit
+  --skip-fmri-stages-submit
+  --skip-group
+  --skip-aim1-audit
   --partition <name>       (default: hpcnirc)
   --account <account>
   --qos <qos>
@@ -30,6 +36,12 @@ SUBJECTS=""
 FETCH_MISSING=0
 DRY_RUN=0
 INCLUDE_M5=0
+SKIP_M5=0
+MEG_SKIP_OVERRIDE=""
+SKIP_FMRIPREP_SUBMIT=0
+SKIP_FMRI_STAGES_SUBMIT=0
+SKIP_GROUP=0
+SKIP_AIM1_AUDIT=0
 PARTITION="${MOUS_PARTITION:-hpcnirc}"
 ACCOUNT="${MOUS_ACCOUNT:-}"
 QOS="${MOUS_QOS:-}"
@@ -60,6 +72,30 @@ while [[ $# -gt 0 ]]; do
       ;;
     --include-m5)
       INCLUDE_M5=1
+      shift
+      ;;
+    --skip-m5)
+      SKIP_M5=1
+      shift
+      ;;
+    --meg-skip)
+      MEG_SKIP_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --skip-fmriprep-submit)
+      SKIP_FMRIPREP_SUBMIT=1
+      shift
+      ;;
+    --skip-fmri-stages-submit)
+      SKIP_FMRI_STAGES_SUBMIT=1
+      shift
+      ;;
+    --skip-group)
+      SKIP_GROUP=1
+      shift
+      ;;
+    --skip-aim1-audit)
+      SKIP_AIM1_AUDIT=1
       shift
       ;;
     --partition)
@@ -139,6 +175,24 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 fi
 if [[ "$INCLUDE_M5" -eq 1 ]]; then
   CMD+=(--include-m5)
+fi
+if [[ "$SKIP_M5" -eq 1 ]]; then
+  CMD+=(--skip-m5)
+fi
+if [[ -n "$MEG_SKIP_OVERRIDE" ]]; then
+  CMD+=(--meg-skip "$MEG_SKIP_OVERRIDE")
+fi
+if [[ "$SKIP_FMRIPREP_SUBMIT" -eq 1 ]]; then
+  CMD+=(--skip-fmriprep-submit)
+fi
+if [[ "$SKIP_FMRI_STAGES_SUBMIT" -eq 1 ]]; then
+  CMD+=(--skip-fmri-stages-submit)
+fi
+if [[ "$SKIP_GROUP" -eq 1 ]]; then
+  CMD+=(--skip-group)
+fi
+if [[ "$SKIP_AIM1_AUDIT" -eq 1 ]]; then
+  CMD+=(--skip-aim1-audit)
 fi
 if [[ -n "$ACCOUNT" ]]; then
   CMD+=(--account "$ACCOUNT")

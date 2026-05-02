@@ -9,7 +9,9 @@ Usage:
   scripts/run_aims_priority.sh --config <config.yaml> [--subjects A2002,A2003] [--fetch-missing] [--dry-run]
                                [--partition hpcnirc] [--account acct] [--qos qos]
                                [--time 08:00:00] [--mem 32G] [--cpus-per-task 8]
-                               [--include-m5]
+                               [--include-m5] [--skip-m5] [--meg-skip m10,m11]
+                               [--skip-fmriprep-submit] [--skip-fmri-stages-submit]
+                               [--skip-group] [--skip-aim1-audit]
 
 Behavior:
   1) Resolve subjects from config `subjects:` or --subjects override.
@@ -32,6 +34,12 @@ TIME_LIMIT=""
 MEMORY=""
 CPUS_PER_TASK=""
 INCLUDE_M5=0
+SKIP_M5=0
+MEG_SKIP_OVERRIDE=""
+SKIP_FMRIPREP_SUBMIT=0
+SKIP_FMRI_STAGES_SUBMIT=0
+SKIP_GROUP=0
+SKIP_AIM1_AUDIT=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -77,6 +85,30 @@ while [[ $# -gt 0 ]]; do
       ;;
     --include-m5)
       INCLUDE_M5=1
+      shift
+      ;;
+    --skip-m5)
+      SKIP_M5=1
+      shift
+      ;;
+    --meg-skip)
+      MEG_SKIP_OVERRIDE="${2:-}"
+      shift 2
+      ;;
+    --skip-fmriprep-submit)
+      SKIP_FMRIPREP_SUBMIT=1
+      shift
+      ;;
+    --skip-fmri-stages-submit)
+      SKIP_FMRI_STAGES_SUBMIT=1
+      shift
+      ;;
+    --skip-group)
+      SKIP_GROUP=1
+      shift
+      ;;
+    --skip-aim1-audit)
+      SKIP_AIM1_AUDIT=1
       shift
       ;;
     -h|--help)
@@ -200,11 +232,15 @@ fi
 echo "[plan] runnable_subjects=${SUBJECTS[*]}"
 
 FIRST_SUBJECT="${SUBJECTS[0]}"
-echo "[meg-trial] Running MEG trial-metrics regression/QC audit for sub-$FIRST_SUBJECT"
-if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "[dry-run][audit] python $REPO_ROOT/scripts/aim1_audit.py --config $CONFIG_ABS --subject $FIRST_SUBJECT"
+if [[ "$SKIP_AIM1_AUDIT" -eq 1 ]]; then
+  echo "[meg-trial] Skipping Aim1 regression/QC audit by request"
 else
-python "$REPO_ROOT/scripts/aim1_audit.py" --config "$CONFIG_ABS" --subject "$FIRST_SUBJECT"
+  echo "[meg-trial] Running MEG trial-metrics regression/QC audit for sub-$FIRST_SUBJECT"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[dry-run][audit] python $REPO_ROOT/scripts/aim1_audit.py --config $CONFIG_ABS --subject $FIRST_SUBJECT"
+  else
+    python "$REPO_ROOT/scripts/aim1_audit.py" --config "$CONFIG_ABS" --subject "$FIRST_SUBJECT"
+  fi
 fi
 
 SLURM_DIR="$DERIV_ROOT/slurm"
@@ -217,10 +253,8 @@ else
   printf "%s\n" "${SUBJECTS[@]}" > "$SUBJECTS_FILE"
 fi
 
-echo "[fmri] submitting fMRI preprocessing array: 0-$ARRAY_MAX"
-SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
-SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
-SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
+# Build shared SBATCH flags once; used by both the fMRIPrep array submission
+# and the downstream fMRI-stages job so neither path hits nounset on SBATCH_EXTRA.
 SBATCH_EXTRA=()
 if [[ -n "$PARTITION" ]]; then
   SBATCH_EXTRA+=(--partition "$PARTITION")
@@ -240,6 +274,15 @@ fi
 if [[ -n "$CPUS_PER_TASK" ]]; then
   SBATCH_EXTRA+=(--cpus-per-task "$CPUS_PER_TASK")
 fi
+
+if [[ "$SKIP_FMRIPREP_SUBMIT" -eq 1 ]]; then
+  echo "[fmri] Skipping fMRIPrep array submission by request"
+  FMRIPREP_JOB_ID=""
+else
+echo "[fmri] submitting fMRI preprocessing array: 0-$ARRAY_MAX"
+SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
+SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
+SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   FMRIPREP_JOB_ID="<fmriprep_job_id>"
@@ -266,12 +309,19 @@ else
   fi
   echo "[fmri] note: fMRI preprocessing may continue after mous_driver exits."
 fi
+fi
 
 for sub in "${SUBJECTS[@]}"; do
   echo "[meg-subject] Running subject MEG outputs for sub-$sub"
   MEG_SKIP="m5,m10,m11"
   if [[ "$INCLUDE_M5" -eq 1 ]]; then
     MEG_SKIP="m10,m11"
+  fi
+  if [[ "$SKIP_M5" -eq 1 ]]; then
+    MEG_SKIP="m5,m10,m11"
+  fi
+  if [[ -n "$MEG_SKIP_OVERRIDE" ]]; then
+    MEG_SKIP="$MEG_SKIP_OVERRIDE"
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[dry-run][meg-subject] mous-pipeline run --config $CONFIG_ABS --subject $sub --skip $MEG_SKIP"
@@ -280,10 +330,30 @@ for sub in "${SUBJECTS[@]}"; do
   mous-pipeline run --config "$CONFIG_ABS" --subject "$sub" --skip "$MEG_SKIP"
 done
 
-echo "[meg-group] Running MEG group aggregation"
-if [[ "$DRY_RUN" -eq 1 ]]; then
+if [[ "$SKIP_GROUP" -eq 1 ]]; then
+  echo "[meg-group] Skipping MEG group aggregation by request"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "[meg-group] Running MEG group aggregation"
   echo "[dry-run][meg-group] mous-pipeline group --derivatives-root $DERIV_ROOT"
   echo "[dry-run][meg-group] python $REPO_ROOT/scripts/aim3_null_summary.py --derivatives-root $DERIV_ROOT --out-md $REPO_ROOT/reports/aim3_null_summary.md --out-json $REPO_ROOT/reports/aim3_null_summary.json"
+else
+  echo "[meg-group] Running MEG group aggregation"
+  mous-pipeline group --derivatives-root "$DERIV_ROOT"
+
+  echo "[meg-group] Writing group summary/null artifacts"
+  python "$REPO_ROOT/scripts/aim3_null_summary.py" \
+    --derivatives-root "$DERIV_ROOT" \
+    --out-md "$REPO_ROOT/reports/aim3_null_summary.md" \
+    --out-json "$REPO_ROOT/reports/aim3_null_summary.json"
+fi
+
+if [[ "$SKIP_FMRI_STAGES_SUBMIT" -eq 1 ]]; then
+  echo "[fmri-stages] Skipping dependent m10/m11/m12 + group job submission by request"
+  echo "[done] Priority order complete."
+  exit 0
+fi
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[fmri-stages] submitting dependent m10/m11/m12 + group job"
   FMRI_STAGES_OUTPUT="$SLURM_DIR/fmri_stages_%A.out"
   FMRI_STAGES_ERROR="$SLURM_DIR/fmri_stages_%A.err"
@@ -307,13 +377,6 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[done] Dry run complete."
   exit 0
 fi
-mous-pipeline group --derivatives-root "$DERIV_ROOT"
-
-echo "[meg-group] Writing group summary/null artifacts"
-python "$REPO_ROOT/scripts/aim3_null_summary.py" \
-  --derivatives-root "$DERIV_ROOT" \
-  --out-md "$REPO_ROOT/reports/aim3_null_summary.md" \
-  --out-json "$REPO_ROOT/reports/aim3_null_summary.json"
 
 echo "[fmri-stages] submitting dependent m10/m11/m12 + group job"
 FMRI_STAGES_OUTPUT="$SLURM_DIR/fmri_stages_%A.out"

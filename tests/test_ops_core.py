@@ -11,16 +11,23 @@ import mous_pipeline.ops.actions as actions
 from mous_pipeline.ops.actions import (
     MODE_TO_PRESET_DEFAULTS,
     build_bem_submit_cmd,
+    build_group_cmd,
     build_recon_submit_cmd,
     build_submit_cmd,
+    compile_intent_plan,
     compute_undownloaded_subjects,
+    detect_intent_capabilities,
+    intent_profile_from_legacy_preset,
+    merge_subject_ids,
+    recommend_resources,
     resolve_repo_root,
     parse_sbatch_job_id,
 )
+from mous_pipeline.ops.monitor import sinfo_partition
 from mous_pipeline.config import RuntimeOverrides
 from mous_pipeline.ops.models import OpsState, WorkflowPreset
 from mous_pipeline.ops.monitor import classify_failure
-from mous_pipeline.ops.state import default_presets, load_state, preset_from_run_options, save_state
+from mous_pipeline.ops.state import default_intent_profiles, default_presets, load_state, preset_from_run_options, save_state
 
 
 def test_state_persistence_round_trip(tmp_path: Path) -> None:
@@ -58,6 +65,24 @@ def test_build_submit_cmd_for_m5_preset() -> None:
     )
     assert "--include-m5" in cmd
     assert cmd[0] == "scripts/palmetto_submit.sh"
+
+
+def test_build_submit_cmd_includes_extra_runtime_args() -> None:
+    preset = WorkflowPreset(name="full_submit", description="", mode="submit")
+    cmd = build_submit_cmd(
+        preset,
+        config="configs/palmetto_hpcnirc_fmri.yaml",
+        subjects=["A2002"],
+        account="abc123",
+        partition="hpcnirc",
+        time_limit="12:00:00",
+        mem="256G",
+        cpus_per_task="8",
+        extra_runtime_args=["--meg-skip", "m5,m10,m11", "--skip-fmriprep-submit"],
+    )
+    assert "--meg-skip" in cmd
+    assert "m5,m10,m11" in cmd
+    assert "--skip-fmriprep-submit" in cmd
 
 
 def test_parse_sbatch_job_id_and_failure_classification() -> None:
@@ -152,7 +177,17 @@ def test_state_migration_seeds_recent_configs_and_defaults(tmp_path: Path) -> No
 
 def test_submit_flag_contract_with_palmetto_wrapper() -> None:
     script = Path("scripts/palmetto_submit.sh").read_text()
-    expected_flags = ["--fetch-missing", "--include-m5", "--dry-run"]
+    expected_flags = [
+        "--fetch-missing",
+        "--include-m5",
+        "--dry-run",
+        "--skip-m5",
+        "--meg-skip",
+        "--skip-fmriprep-submit",
+        "--skip-fmri-stages-submit",
+        "--skip-group",
+        "--skip-aim1-audit",
+    ]
     for flag in expected_flags:
         assert flag in script
 
@@ -197,6 +232,39 @@ def test_compute_undownloaded_subjects() -> None:
         remote_subjects=["A2002", "A2003", "sub-A2004"],
     )
     assert missing == ["A2003", "A2004"]
+
+
+def test_add_undownloaded_survives_reload_merge() -> None:
+    merged = merge_subject_ids(["A2002"], ["A2002", "A2003"])
+    assert merged == ["A2002", "A2003"]
+
+
+def test_build_group_cmd_defaults() -> None:
+    cmd = build_group_cmd(derivatives_root="derivatives/mous_pipeline", subjects=["A2002", "sub-A2003"])
+    assert cmd[:3] == ["mous-pipeline", "group", "--derivatives-root"]
+    assert "--subjects" in cmd
+    assert "A2002,A2003" in cmd
+
+
+def test_build_group_cmd_quarto_only() -> None:
+    cmd = build_group_cmd(derivatives_root="derivatives/mous_pipeline", quarto_only=True)
+    assert "--quarto-only" in cmd
+
+
+def test_sinfo_partition_missing_sinfo_returns_none(monkeypatch) -> None:
+    monkeypatch.setattr("mous_pipeline.ops.monitor._run_text", lambda _cmd: "")
+    assert sinfo_partition("hpcnirc") is None
+
+
+def test_recommend_resources_from_partition_info() -> None:
+    rec = recommend_resources(
+        n_subjects=5,
+        partition_info={"partition": "hpcnirc", "max_node_mem_gb": 256, "max_node_cpus": 32},
+        peak_rss_gb=12.0,
+    )
+    assert rec["suggested_mem"].endswith("G")
+    assert int(rec["suggested_cpus_per_task"]) >= 1
+    assert rec["suggested_parallel_subjects"] >= 1
 
 
 def _fake_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -310,3 +378,35 @@ def test_detached_driver_anchors_script_without_moving_logs(tmp_path: Path, monk
     assert sbatch_cmd[sbatch_cmd.index("--error") + 1] == str(
         derivatives_root / "slurm" / "mous_driver_%j.err"
     )
+
+
+def test_default_intent_profiles_present() -> None:
+    intents = default_intent_profiles()
+    assert {"quick_qc", "full_subject", "full_cohort", "group_reports_only", "recover_failed"} <= set(intents)
+
+
+def test_intent_profile_from_legacy_preset() -> None:
+    preset = WorkflowPreset(name="legacy_full", description="legacy", mode="submit", include_m5=True)
+    profile, note = intent_profile_from_legacy_preset(preset)
+    assert profile.intent_id == "legacy_legacy_full"
+    assert profile.default_include_m5 is True
+    assert "Legacy preset translated" in note
+
+
+def test_compile_intent_plan_dependency_closure(tmp_path: Path) -> None:
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("data_root: .\nderivatives_root: derivatives\n")
+    profile = default_intent_profiles()["quick_qc"]
+    plan = compile_intent_plan(profile, config_path=str(cfg), subjects=["A2002"])
+    assert "m1" in plan.resolved_stages
+    assert "m3" in plan.resolved_stages
+    assert plan.command_kind == "submit"
+    assert "--skip-fmriprep-submit" in plan.runtime_args
+    assert "--meg-skip" in plan.runtime_args
+
+
+def test_detect_intent_capabilities_graceful_on_bad_config(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(":\n")
+    caps = detect_intent_capabilities(str(bad))
+    assert set(caps.keys()) == {"has_repocli", "has_quarto", "has_freesurfer", "has_fmri"}

@@ -48,6 +48,7 @@ Issues = "https://github.com/JonathanWade24/MOUS/issues"
 mous-pipeline = "mous_pipeline.cli:main"
 
 [project.optional-dependencies]
+# Deprecated transition extra; remove alongside `mous-pipeline gui` in v0.3.0.
 gui = [
   "streamlit>=1.35",
 ]

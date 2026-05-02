@@ -10,6 +10,24 @@
 
 set -euo pipefail
 cd /scratch/jonathanwade/MOUS
+
+# Opt-in sync: only runs when MOUS_SYNC_ON_START=1 is set in the job environment.
+# Requires a clean working tree to prevent silent data loss.
+# Usage: add '#SBATCH --export=ALL,MOUS_SYNC_ON_START=1' or set in your submission env.
+if [[ "${MOUS_SYNC_ON_START:-0}" == "1" ]]; then
+  echo "[sync] MOUS_SYNC_ON_START=1: syncing from origin/HPC..."
+  _dirty="$(git status --porcelain 2>/dev/null)"
+  if [[ -n "$_dirty" ]]; then
+    echo "[sync] ERROR: working tree is dirty; refusing to reset --hard." >&2
+    echo "[sync] Commit or stash changes, or unset MOUS_SYNC_ON_START." >&2
+    git status --short >&2
+    exit 1
+  fi
+  git fetch origin
+  git reset --hard origin/HPC
+  echo "[sync] Now at: $(git log -1 --oneline)"
+fi
+
 source "$HOME/.venvs/mous-palmetto/bin/activate"
 
 scripts/palmetto_submit.sh \
