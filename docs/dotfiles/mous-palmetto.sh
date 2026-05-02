@@ -57,3 +57,69 @@ mousq() {
 mousstat() {
   git -C "$MOUS_REPO" status --short --branch "$@"
 }
+
+# Pull the latest HPC deploy branch into the cluster working tree.
+# Aborts if the working tree is dirty unless --force is passed.
+# Usage: mousupdate [--force]
+mousupdate() {
+  local force=0
+  [[ "${1:-}" == "--force" ]] && force=1
+
+  local _dirty
+  _dirty="$(git -C "$MOUS_REPO" status --porcelain 2>/dev/null)"
+  if [[ -n "$_dirty" && "$force" -eq 0 ]]; then
+    echo "[mous] ERROR: working tree is dirty. Stash or commit first, or run: mousupdate --force" >&2
+    git -C "$MOUS_REPO" status --short >&2
+    return 1
+  fi
+
+  git -C "$MOUS_REPO" fetch origin
+  git -C "$MOUS_REPO" reset --hard origin/HPC
+  echo "[mous] cluster repo now at: $(git -C "$MOUS_REPO" log -1 --oneline)"
+}
+
+# Promote main → HPC deploy branch and push.
+# Fetches first and verifies local main matches origin/main before promoting.
+# Always returns to the original branch, even on failure.
+# Run after merging a PR to main.
+mousdeploy() {
+  local _prev _prev_is_branch=1 _rc=0
+  _prev="$(git -C "$MOUS_REPO" symbolic-ref --short HEAD 2>/dev/null)" || {
+    _prev_is_branch=0
+    _prev="$(git -C "$MOUS_REPO" rev-parse HEAD 2>/dev/null)"
+  }
+
+  git -C "$MOUS_REPO" fetch origin || { echo "[mous] ERROR: fetch failed" >&2; return 1; }
+
+  local _local_main _remote_main
+  _local_main="$(git -C "$MOUS_REPO" rev-parse main 2>/dev/null)" \
+    || { echo "[mous] ERROR: branch 'main' not found locally" >&2; return 1; }
+  _remote_main="$(git -C "$MOUS_REPO" rev-parse origin/main 2>/dev/null)" \
+    || { echo "[mous] ERROR: origin/main not found" >&2; return 1; }
+
+  if [[ "$_local_main" != "$_remote_main" ]]; then
+    echo "[mous] ERROR: local main is not in sync with origin/main." >&2
+    echo "[mous]   local:  $_local_main" >&2
+    echo "[mous]   remote: $_remote_main" >&2
+    echo "[mous] Run: git -C \$MOUS_REPO pull --ff-only origin main" >&2
+    return 1
+  fi
+
+  git -C "$MOUS_REPO" switch HPC \
+    && git -C "$MOUS_REPO" merge --ff-only main \
+    && git -C "$MOUS_REPO" push origin HPC \
+    || _rc=$?
+
+  if [[ "$_prev_is_branch" -eq 1 ]]; then
+    git -C "$MOUS_REPO" switch "$_prev"
+  else
+    git -C "$MOUS_REPO" switch --detach "$_prev"
+  fi
+
+  if [[ "$_rc" -eq 0 ]]; then
+    echo "[mous] HPC branch promoted: $(git -C "$MOUS_REPO" log -1 --oneline origin/HPC)"
+  else
+    echo "[mous] ERROR: deploy failed (rc=$_rc); returned to '$_prev'" >&2
+    return "$_rc"
+  fi
+}

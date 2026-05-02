@@ -53,6 +53,9 @@ Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
 ```
 
+GUI deprecation notice: `mous-pipeline gui` is deprecated and will be removed in v0.3.0.
+Use CLI-first workflows (`run`, `watch`, `verify-run`) for ongoing use.
+
 Before full runs that include `m8`, verify Quarto runtime dependencies:
 
 ```bash
@@ -177,7 +180,7 @@ mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 
 | `group` | Aggregate manifests under `derivatives_root` → `group_summary.json` (and trial CSV if present) |
 | `bids-convert` | Add in-place BIDS sidecars for a subject |
 | `bids-validate` | Check BIDS layout with `mne_bids` + `bids_validator` (dataset at `data_root` or `--root`) |
-| `gui` | Start Streamlit app; prints proxy/localhost URLs |
+| `gui` | Start deprecated Streamlit app (sunset; planned removal in v0.3.0) |
 
 ## Get data into `data_root`
 
@@ -198,6 +201,18 @@ Override collection path if needed:
 mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
 ```
 
+Fetch every valid `sub-A####` subject advertised by the RDR collection and
+continue past missing/invalid entries:
+
+```bash
+mous-pipeline fetch-rdr \
+  --config configs/palmetto_hpcnirc_A2003_A2012.yaml \
+  --all-remote-subjects \
+  --manifest-out reports/rdr_subject_manifest.json \
+  --skip-invalid \
+  --execute
+```
+
 ### Cyberduck CLI (`duck`)
 
 ```bash
@@ -212,7 +227,10 @@ mous-pipeline fetch-subject \
 
 Add `--execute` to run the printed command.
 
-## Neurodesk / Jupyter GUI
+## Deprecated Neurodesk / Jupyter GUI (sunset)
+
+`mous-pipeline gui` and the Streamlit app are in deprecation mode and planned for
+removal in v0.3.0. Keep using this path only as a short-term bridge.
 
 Neurodesk-oriented setup script (creates `.venv`, installs `.[gui]`, downloads Linux `repocli` into `~/bin`):
 
@@ -232,6 +250,13 @@ mous-pipeline gui
 ```
 
 On JupyterHub, use the printed proxy URL (often `/proxy/8501/`) to open the app.
+For new usage, prefer:
+
+```bash
+mous-pipeline run --config <cfg> --subject <id>
+mous-pipeline watch --config <cfg> --subject <id>
+mous-pipeline verify-run --config <cfg> --subject <id> --strict-mode
+```
 
 ## Group-level analysis
 

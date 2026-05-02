@@ -21,7 +21,12 @@ from .m0_intake.cyberduck import build_duck_download_command, duck_available, ex
 from .m0_intake.bids_convert import convert_subject_to_bids
 from .m0_intake.repocli_rdr import (
     build_repocli_get_command,
+    build_repocli_ls_command,
     execute_repocli_command,
+    is_valid_mous_subject_id,
+    normalize_subject_id,
+    parse_repocli_ls_subjects,
+    parse_subjects_arg,
     remote_subject_path,
     repocli_available,
 )
@@ -73,6 +78,10 @@ _QUARTO_REQUIRED_R_PACKAGES: tuple[str, ...] = (
     "readr",
     "rmarkdown",
     "reticulate",
+)
+_GUI_DEPRECATION_MESSAGE = (
+    "DEPRECATION: `mous-pipeline gui` (Streamlit/JupyterHub workflow) is deprecated and "
+    "scheduled for removal in v0.3.0. Prefer `mous-pipeline run` + `watch` + `verify-run`."
 )
 
 
@@ -142,6 +151,28 @@ def _latest_existing_path(candidates: list[Path]) -> Path | None:
     if not existing:
         return None
     return max(existing, key=lambda p: p.stat().st_mtime_ns)
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _write_subject_manifest(path: Path, *, collection_path: str, subjects: list[str], skipped_invalid: list[str]) -> None:
+    payload = {
+        "collection_path": collection_path,
+        "n_subjects": len(subjects),
+        "subjects": subjects,
+        "skipped_invalid": skipped_invalid,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
 def _fmt_dur(seconds: float) -> str:
@@ -521,7 +552,28 @@ def main() -> None:
         help="Download a subject folder from RDR via repocli (run `repocli config` once; base URL https://webdav.data.ru.nl)",
     )
     rdr_parser.add_argument("--config", default=None, help="YAML config with rdr.collection_path and data_root")
-    rdr_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
+    rdr_parser.add_argument("--subject", default=None, help="Subject ID, e.g., A2002 or sub-A2002")
+    rdr_parser.add_argument("--subjects", default="", help="Comma/whitespace-separated subject IDs")
+    rdr_parser.add_argument(
+        "--all-config-subjects",
+        action="store_true",
+        help="Fetch every subject listed under config subjects:",
+    )
+    rdr_parser.add_argument(
+        "--all-remote-subjects",
+        action="store_true",
+        help="List rdr.collection_path with repocli and fetch every valid sub-A#### subject found",
+    )
+    rdr_parser.add_argument(
+        "--manifest-out",
+        default=None,
+        help="Optional JSON path where the resolved valid subject manifest is written",
+    )
+    rdr_parser.add_argument(
+        "--skip-invalid",
+        action="store_true",
+        help="Skip invalid subject IDs and failed per-subject downloads instead of aborting the whole fetch batch",
+    )
     rdr_parser.add_argument(
         "--collection-path",
         default=None,
@@ -544,6 +596,16 @@ def main() -> None:
         help="Derivatives root containing <subject>/m9_orchestration/*_run_manifest.json",
     )
     group_parser.add_argument("--test", default="wilcoxon", choices=["wilcoxon", "lme"])
+    group_parser.add_argument(
+        "--subjects",
+        default="",
+        help="Optional comma-separated subject IDs to include (e.g. A2002,A2003)",
+    )
+    group_parser.add_argument(
+        "--quarto-only",
+        action="store_true",
+        help="Skip group model recompute and only render group Quarto from existing group_summary.json",
+    )
     bids_convert_parser = sub.add_parser("bids-convert", help="Add in-place BIDS metadata sidecars for a subject")
     bids_convert_parser.add_argument("--config", required=True)
     bids_convert_parser.add_argument("--subject", required=True, help="Subject ID, e.g., A2002 or sub-A2002")
@@ -563,7 +625,10 @@ def main() -> None:
         "check-quarto-env",
         help="Check Quarto + R runtime dependencies for cumulative report rendering",
     )
-    gui_parser = sub.add_parser("gui", help="Launch Streamlit GUI with printed access URLs")
+    gui_parser = sub.add_parser(
+        "gui",
+        help="Launch Streamlit GUI with printed access URLs (deprecated; remove in v0.3.0)",
+    )
     gui_parser.add_argument("--port", type=int, default=8501, help="Port to run Streamlit on")
     gui_parser.add_argument(
         "--config",
@@ -839,6 +904,7 @@ def main() -> None:
     elif args.cmd == "fetch-rdr":
         collection_path = args.collection_path
         dest: Path
+        cfg = None
         if args.config:
             cfg = load_config(args.config)
             if not collection_path:
@@ -852,10 +918,74 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        remote = remote_subject_path(collection_path, args.subject)
-        cmd = build_repocli_get_command(remote_path=remote, local_dir=dest.resolve())
-        print("Repocli command (credentials: repocli config; base URL https://webdav.data.ru.nl):")
-        print(" ".join(shlex.quote(c) for c in cmd))
+
+        requested: list[str] = []
+        if args.subject:
+            requested.append(normalize_subject_id(args.subject))
+        requested.extend(parse_subjects_arg(args.subjects))
+        if args.all_config_subjects:
+            if cfg is None:
+                print("--all-config-subjects requires --config.", file=sys.stderr)
+                sys.exit(2)
+            requested.extend(normalize_subject_id(str(s)) for s in cfg.subjects)
+        if args.all_remote_subjects:
+            if not repocli_available():
+                print("repocli is not on PATH. Install from Donders-Institute/dr-tools releases.", file=sys.stderr)
+                sys.exit(1)
+            ls_cmd = build_repocli_ls_command(collection_path)
+            print("Repocli manifest command:")
+            print(" ".join(shlex.quote(c) for c in ls_cmd))
+            ls_proc = execute_repocli_command(ls_cmd)
+            if ls_proc.returncode != 0:
+                err = (ls_proc.stderr or "").strip() or (ls_proc.stdout or "").strip() or "unknown repocli error"
+                print(f"Failed to list RDR subjects: {err}", file=sys.stderr)
+                sys.exit(ls_proc.returncode)
+            requested.extend(parse_repocli_ls_subjects(ls_proc.stdout or ""))
+
+        valid_subjects: list[str] = []
+        skipped_invalid: list[str] = []
+        for subject in _ordered_unique(requested):
+            if is_valid_mous_subject_id(subject):
+                valid_subjects.append(subject)
+            else:
+                skipped_invalid.append(subject)
+
+        if skipped_invalid:
+            msg = "Skipping invalid subject IDs: " + ", ".join(skipped_invalid)
+            if args.skip_invalid:
+                print(msg, file=sys.stderr)
+            else:
+                print(msg + " (pass --skip-invalid to continue)", file=sys.stderr)
+                sys.exit(2)
+
+        if args.manifest_out:
+            _write_subject_manifest(
+                Path(args.manifest_out),
+                collection_path=collection_path,
+                subjects=valid_subjects,
+                skipped_invalid=skipped_invalid,
+            )
+            print(f"Wrote subject manifest: {args.manifest_out}")
+
+        if not valid_subjects:
+            print(
+                "No valid subjects resolved. Pass --subject, --subjects, --all-config-subjects, or --all-remote-subjects.",
+                file=sys.stderr,
+            )
+            if args.skip_invalid:
+                return
+            sys.exit(2)
+
+        print("Repocli command(s) (credentials: repocli config; base URL https://webdav.data.ru.nl):")
+        commands = [
+            build_repocli_get_command(
+                remote_path=remote_subject_path(collection_path, subject),
+                local_dir=dest.resolve(),
+            )
+            for subject in valid_subjects
+        ]
+        for cmd in commands:
+            print(" ".join(shlex.quote(c) for c in cmd))
         if not args.execute:
             print("Preview only. Add --execute to run.")
             return
@@ -863,25 +993,55 @@ def main() -> None:
             print("repocli is not on PATH. Install from Donders-Institute/dr-tools releases.", file=sys.stderr)
             sys.exit(1)
         dest.mkdir(parents=True, exist_ok=True)
-        proc = execute_repocli_command(cmd)
-        if proc.stdout:
-            print(proc.stdout)
-        if proc.returncode != 0:
-            if proc.stderr:
-                print(proc.stderr, file=sys.stderr)
-            sys.exit(proc.returncode)
+        successes: list[str] = []
+        failures: list[tuple[str, int]] = []
+        for subject, cmd in zip(valid_subjects, commands):
+            proc = execute_repocli_command(cmd)
+            if proc.stdout:
+                print(proc.stdout)
+            if proc.returncode != 0:
+                if proc.stderr:
+                    print(proc.stderr, file=sys.stderr)
+                failures.append((subject, proc.returncode))
+                if not args.skip_invalid:
+                    sys.exit(proc.returncode)
+                print(f"Skipping sub-{subject}: repocli exited {proc.returncode}", file=sys.stderr)
+                continue
+            successes.append(subject)
+        if successes:
+            print(f"Downloaded {len(successes)} subject(s): {', '.join(successes)}")
+        if failures:
+            failed = ", ".join(f"{sid}({code})" for sid, code in failures)
+            print(f"Skipped {len(failures)} failed subject fetch(es): {failed}", file=sys.stderr)
     elif args.cmd == "group":
         root = Path(args.derivatives_root)
+        selected_subjects = {s.strip().removeprefix("sub-") for s in args.subjects.split(",") if s.strip()}
+        out_path = root / "group_summary.json"
+        if args.quarto_only:
+            if not out_path.exists():
+                print(f"group_summary.json not found for --quarto-only: {out_path}", file=sys.stderr)
+                sys.exit(2)
+            try:
+                group_report = render_group_quarto(derivatives_root=root, summary_json=out_path)
+                if group_report is not None:
+                    print(f"Wrote group report: {group_report}")
+            except Exception as exc:
+                print(f"Group Quarto report render failed (non-fatal): {exc}", file=sys.stderr)
+                sys.exit(1)
+            return
         metrics_list = []
         trial_tables = []
         qc_tables = []
         for mf in root.glob("*/m9_orchestration/*_run_manifest.json"):
             try:
+                sid = mf.parent.parent.name.removeprefix("sub-")
+                if selected_subjects and sid not in selected_subjects:
+                    continue
                 payload = json.loads(mf.read_text())
                 metrics = payload.get("metrics", {})
                 if metrics:
                     metrics = dict(metrics)
-                    metrics.setdefault("subject_id", mf.parent.parent.name.removeprefix("sub-"))
+                    metrics.setdefault("subject_id", sid)
                     metrics_list.append(metrics)
             except Exception:
                 continue
@@ -889,7 +1049,10 @@ def main() -> None:
             try:
                 df = pd.read_csv(tf)
                 if not df.empty:
-                    df["subject"] = tf.parts[-4].removeprefix("sub-")
+                    sid = tf.parts[-4].removeprefix("sub-")
+                    if selected_subjects and sid not in selected_subjects:
+                        continue
+                    df["subject"] = sid
                     trial_tables.append(df)
             except Exception:
                 continue
@@ -897,6 +1060,9 @@ def main() -> None:
             try:
                 qd = pd.read_csv(qf)
                 if not qd.empty:
+                    sid = qf.parts[-4].removeprefix("sub-")
+                    if selected_subjects and sid not in selected_subjects:
+                        continue
                     qc_tables.append(qd)
             except Exception:
                 continue
@@ -904,7 +1070,6 @@ def main() -> None:
             print("No subject manifests found for group analysis.", file=sys.stderr)
             sys.exit(1)
         summary = run_group_model(metrics_list, test=args.test)
-        out_path = root / "group_summary.json"
         out_path.write_text(json.dumps(summary, indent=2))
         print(f"Wrote group summary: {out_path}")
         if trial_tables:
@@ -948,6 +1113,7 @@ def main() -> None:
         if not ok:
             sys.exit(1)
     elif args.cmd == "gui":
+        print(_GUI_DEPRECATION_MESSAGE, file=sys.stderr)
         service_prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
         if args.base_url_path:
             base_url_path = args.base_url_path

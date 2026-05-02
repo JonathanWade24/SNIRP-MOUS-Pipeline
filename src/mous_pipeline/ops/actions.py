@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
 from ..config import RuntimeOverrides, load_config, resolve_runtime_overrides
+from ..m9_orchestration.parallelization_plan import recommend_subject_parallelism
 from ..m0_intake.repocli_rdr import build_repocli_ls_command, parse_repocli_ls_subjects, repocli_available
-from .models import JobRecord, WorkflowPreset
+from ..stage_dependencies import STAGE_DEPENDENCIES, STAGE_ORDER
+from .models import IntentExecutionPlan, IntentProfile, JobRecord, WorkflowPreset
 
 MODE_TO_PRESET_DEFAULTS: dict[str, WorkflowPreset] = {
     "full_pipeline": WorkflowPreset(
@@ -34,6 +37,132 @@ MODE_TO_PRESET_DEFAULTS: dict[str, WorkflowPreset] = {
         fetch_missing=True,
     ),
 }
+
+
+def detect_intent_capabilities(config_path: str) -> dict[str, bool]:
+    caps = {
+        "has_repocli": repocli_available(),
+        "has_quarto": shutil.which("quarto") is not None,
+        "has_freesurfer": False,
+        "has_fmri": False,
+    }
+    try:
+        cfg = load_config(Path(config_path).expanduser())
+        caps["has_freesurfer"] = bool(getattr(getattr(cfg, "source", None), "subjects_dir", ""))
+        fmri_cfg = getattr(cfg, "fmri", None)
+        caps["has_fmri"] = bool(fmri_cfg and (getattr(fmri_cfg, "bold_path", "") or not getattr(fmri_cfg, "skip_fmriprep", True)))
+    except Exception:
+        return caps
+    return caps
+
+
+def _closure_with_notes(requested: list[str]) -> tuple[list[str], list[str]]:
+    selected = {s for s in requested if s in STAGE_ORDER}
+    notes: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+        for stage in list(selected):
+            for dep in STAGE_DEPENDENCIES.get(stage, set()):
+                if dep not in selected:
+                    selected.add(dep)
+                    notes.append(f"{stage} requires {dep}")
+                    changed = True
+    ordered = [s for s in STAGE_ORDER if s in selected]
+    return ordered, notes
+
+
+def intent_profile_from_legacy_preset(preset: WorkflowPreset) -> tuple[IntentProfile, str]:
+    if preset.mode == "download":
+        profile = IntentProfile(
+            intent_id=f"legacy_{preset.name}",
+            label=f"Legacy: {preset.name}",
+            description=preset.description or "Legacy preset translated to intent profile.",
+            requested_stages=["m1", "m2", "m3", "m4", "m6a", "m7", "m8", "m9"],
+            default_fetch_missing=True,
+            default_include_m5=bool(preset.include_m5),
+            default_dry_run=bool(preset.dry_run),
+            legacy_preset_name=preset.name,
+        )
+        return profile, "Legacy download preset translated to intent workflow."
+    profile = IntentProfile(
+        intent_id=f"legacy_{preset.name}",
+        label=f"Legacy: {preset.name}",
+        description=preset.description or "Legacy preset translated to intent profile.",
+        requested_stages=["m1", "m2", "m3", "m4", "m4_trial", "m6a", "m7", "m8", "m9"],
+        default_fetch_missing=bool(preset.fetch_missing),
+        default_include_m5=bool(preset.include_m5),
+        default_dry_run=bool(preset.dry_run),
+        legacy_preset_name=preset.name,
+    )
+    return profile, "Legacy preset translated to intent profile with compatibility mode."
+
+
+def compile_intent_plan(
+    profile: IntentProfile,
+    *,
+    config_path: str,
+    subjects: list[str],
+    preferred_constraint: str = "balanced",
+) -> IntentExecutionPlan:
+    capabilities = detect_intent_capabilities(config_path)
+    resolved_stages, dep_notes = _closure_with_notes(profile.requested_stages)
+    warnings: list[str] = []
+    resolved_flags = {
+        "fetch_missing": bool(profile.default_fetch_missing),
+        "include_m5": bool(profile.default_include_m5),
+        "dry_run": bool(profile.default_dry_run),
+        "bids_convert": False,
+        "bids_validate": False,
+    }
+    if not capabilities["has_repocli"] and resolved_flags["fetch_missing"]:
+        resolved_flags["fetch_missing"] = False
+        warnings.append("repocli unavailable: disabled fetch-missing behavior.")
+    if not capabilities["has_freesurfer"] and resolved_flags["include_m5"]:
+        resolved_flags["include_m5"] = False
+        warnings.append("FreeSurfer subjects_dir not configured: disabled m5 include.")
+    if "m10" in resolved_stages and not capabilities["has_fmri"]:
+        warnings.append("fMRI capabilities not detected; m10/m11 may be skipped at runtime.")
+    if profile.target == "group" and not capabilities["has_quarto"]:
+        warnings.append("Quarto not detected; group report regeneration may fail.")
+    if preferred_constraint == "fastest":
+        resolved_flags["dry_run"] = False
+    if preferred_constraint == "safest":
+        resolved_flags["dry_run"] = True
+        warnings.append("Constraint=safest enabled dry-run by default.")
+    base_preset_name = profile.legacy_preset_name or "full_submit"
+    if base_preset_name == "bids_convert_validate":
+        base_preset_name = "full_submit"
+    runtime_args: list[str] = []
+    selected = set(resolved_stages)
+    # Encode intent-resolved behavior into runtime args consumed by palmetto wrappers.
+    if "m10" not in selected and "m11" not in selected:
+        runtime_args.extend(["--skip-fmriprep-submit", "--skip-fmri-stages-submit"])
+    if "m5" not in selected:
+        runtime_args.append("--skip-m5")
+    meg_subject_stages = {"m1", "m2", "m3", "m4", "m4_trial", "m5", "m6a", "m6_extra", "m7", "m8", "m9", "m12"}
+    meg_skip = [s for s in STAGE_ORDER if s in meg_subject_stages and s not in selected]
+    if meg_skip:
+        runtime_args.extend(["--meg-skip", ",".join(meg_skip)])
+    if "m8" not in selected and "m9" not in selected:
+        runtime_args.append("--skip-group")
+    if "m4_trial" not in selected:
+        runtime_args.append("--skip-aim1-audit")
+    return IntentExecutionPlan(
+        intent_id=profile.intent_id,
+        command_kind=profile.target,
+        base_preset_name=base_preset_name,
+        resolved_stages=resolved_stages,
+        resolved_flags=resolved_flags,
+        runtime_args=runtime_args,
+        dependency_notes=dep_notes,
+        warnings=warnings,
+        legacy_translation_note=(
+            f"Using legacy preset compatibility path: {profile.legacy_preset_name}"
+            if profile.legacy_preset_name
+            else ""
+        ),
+    )
 
 
 def _is_repo_root(path: Path) -> bool:
@@ -159,6 +288,13 @@ def compute_undownloaded_subjects(local_subjects: list[str], remote_subjects: li
     return sorted(remote - local)
 
 
+def merge_subject_ids(discovered: list[str], selected: list[str]) -> list[str]:
+    discovered_clean = [s.removeprefix("sub-") for s in discovered if s.strip()]
+    selected_clean = [s.removeprefix("sub-") for s in selected if s.strip()]
+    discovered_set = set(discovered_clean)
+    return list(dict.fromkeys(discovered_clean + [s for s in selected_clean if s not in discovered_set]))
+
+
 def build_submit_cmd(
     preset: WorkflowPreset,
     *,
@@ -170,6 +306,7 @@ def build_submit_cmd(
     mem: str,
     cpus_per_task: str,
     overrides: RuntimeOverrides | None = None,
+    extra_runtime_args: list[str] | None = None,
 ) -> list[str]:
     preset_overrides = RuntimeOverrides(
         fetch_missing=preset.fetch_missing,
@@ -201,6 +338,8 @@ def build_submit_cmd(
     if resolved.dry_run:
         cmd.append("--dry-run")
     cmd.extend(preset.extra_args)
+    if extra_runtime_args:
+        cmd.extend(extra_runtime_args)
     return cmd
 
 
@@ -214,6 +353,59 @@ def build_bids_convert_cmd(config: str, subject: str) -> list[str]:
 
 def build_bids_validate_cmd(root: str, subject: str) -> list[str]:
     return ["mous-pipeline", "bids-validate", "--root", root, "--subject", subject, "--verbose"]
+
+
+def build_group_cmd(
+    *,
+    derivatives_root: str,
+    subjects: list[str] | None = None,
+    quarto_only: bool = False,
+    use_cache: bool = False,
+    test: str = "wilcoxon",
+) -> list[str]:
+    cmd = [
+        "mous-pipeline",
+        "group",
+        "--derivatives-root",
+        derivatives_root,
+        "--test",
+        test,
+    ]
+    clean_subjects = sorted({s.removeprefix("sub-") for s in (subjects or []) if s.strip()})
+    if clean_subjects:
+        cmd.extend(["--subjects", ",".join(clean_subjects)])
+    if quarto_only or use_cache:
+        cmd.append("--quarto-only")
+    return cmd
+
+
+def recommend_resources(
+    *,
+    n_subjects: int,
+    partition_info: dict[str, int],
+    peak_rss_gb: float,
+    os_reserve_gb: float = 6.0,
+) -> dict[str, str | int | float]:
+    total_ram_gb = float(partition_info.get("max_node_mem_gb", 0))
+    n_cpus = int(partition_info.get("max_node_cpus", 1))
+    rec = recommend_subject_parallelism(
+        total_ram_gb=total_ram_gb,
+        os_reserve_gb=os_reserve_gb,
+        peak_rss_gb=peak_rss_gb,
+        n_cpus=n_cpus,
+    )
+    suggested_parallel_subjects = max(1, min(max(1, n_subjects), int(rec["n_subjects_max_conservative"]) or 1))
+    cpus_per_task = max(1, int(rec["suggested_omp_num_threads_per_process"]))
+    mem_per_subject_gb = max(1, int(round(max(1.0, peak_rss_gb) * 1.25)))
+    total_mem_gb = min(int(total_ram_gb), max(mem_per_subject_gb, mem_per_subject_gb * suggested_parallel_subjects))
+    return {
+        "partition": str(partition_info.get("partition", "")),
+        "suggested_parallel_subjects": suggested_parallel_subjects,
+        "suggested_cpus_per_task": str(cpus_per_task),
+        "suggested_mem": f"{total_mem_gb}G",
+        "suggested_time": "24:00:00" if suggested_parallel_subjects > 1 else "12:00:00",
+        "peak_rss_gb": peak_rss_gb,
+    }
 
 
 def build_recon_submit_cmd(

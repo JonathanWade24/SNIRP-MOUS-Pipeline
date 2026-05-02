@@ -5,6 +5,7 @@ def test_parse_repocli_ls_subjects_extracts_unique_subject_ids() -> None:
     output = """
     drwxr-xr-x  user  group  sub-A2002
     drwxr-xr-x  user  group  sub-A2003
+    drwxr-xr-x  user  group  sub-not-a-subject
     drwxr-xr-x  user  group  sub-A2002
     """
     subjects = parse_repocli_ls_subjects(output)

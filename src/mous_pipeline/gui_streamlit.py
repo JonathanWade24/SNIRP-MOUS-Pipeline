@@ -1,4 +1,8 @@
-"""Streamlit GUI for MOUS pipeline workflow."""
+"""Deprecated Streamlit GUI for MOUS pipeline workflow.
+
+This module remains for transition only and is scheduled for removal in v0.3.0.
+Prefer the CLI workflow (`mous-pipeline run`, `watch`, and `verify-run`).
+"""
 
 from __future__ import annotations
 
@@ -1173,6 +1177,11 @@ def _files_section() -> None:
 
 def main() -> None:
     st.set_page_config(page_title="MOUS Pipeline", layout="wide")
+    st.warning(
+        "Deprecated: this GUI is in sunset mode and is planned for removal in v0.3.0. "
+        "Prefer the CLI workflow (`mous-pipeline run`, `watch`, `verify-run`).",
+        icon="⚠️",
+    )
     _init_state()
     _sidebar()
 

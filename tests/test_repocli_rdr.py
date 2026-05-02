@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from mous_pipeline.m0_intake.repocli_rdr import build_repocli_get_command, remote_subject_path
+from mous_pipeline.m0_intake.repocli_rdr import (
+    build_repocli_get_command,
+    is_valid_mous_subject_id,
+    parse_subjects_arg,
+    remote_subject_path,
+)
 
 
 def test_remote_subject_path():
@@ -14,3 +19,9 @@ def test_build_repocli_get_command():
     assert cmd[1] == "get"
     assert cmd[2] == "dccn/DSC_3011020.09_236_v1/sub-A2002"
     assert Path(cmd[3]) == Path("/tmp/mous").resolve()
+
+
+def test_subject_arg_helpers_normalize_and_validate():
+    assert parse_subjects_arg("A2002, sub-A2003\nA2004") == ["A2002", "A2003", "A2004"]
+    assert is_valid_mous_subject_id("sub-A2002")
+    assert not is_valid_mous_subject_id("sub-not-a-subject")

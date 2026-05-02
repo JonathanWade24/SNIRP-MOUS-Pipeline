@@ -8,11 +8,35 @@ import re
 from pathlib import Path
 
 
+_MOUS_SUBJECT_RE = re.compile(r"^A\d{4}$")
+
+
+def normalize_subject_id(subject_id: str) -> str:
+    """Return a canonical MOUS subject ID without the ``sub-`` prefix."""
+    return str(subject_id or "").strip().removeprefix("sub-")
+
+
+def is_valid_mous_subject_id(subject_id: str) -> bool:
+    """Return true for canonical MOUS IDs such as ``A2002``."""
+    return bool(_MOUS_SUBJECT_RE.fullmatch(normalize_subject_id(subject_id)))
+
+
+def parse_subjects_arg(value: str) -> list[str]:
+    """Parse a comma/whitespace separated subject list."""
+    if not value:
+        return []
+    return [
+        normalize_subject_id(part)
+        for part in re.split(r"[\s,]+", value)
+        if part.strip()
+    ]
+
+
 def remote_subject_path(collection_path: str, subject_id: str) -> str:
     """Path relative to RDR WebDAV root, e.g. dccn/DSC_.../sub-A2002."""
-    sid = subject_id if subject_id.startswith("sub-") else f"sub-{subject_id}"
+    sid = normalize_subject_id(subject_id)
     base = collection_path.strip().strip("/")
-    return f"{base}/{sid}"
+    return f"{base}/sub-{sid}"
 
 
 def build_repocli_get_command(*, remote_path: str, local_dir: str | Path) -> list[str]:
@@ -30,7 +54,7 @@ def execute_repocli_command(cmd: list[str]) -> subprocess.CompletedProcess:
 
 def parse_repocli_ls_subjects(output: str) -> list[str]:
     """Extract unique subject IDs from `repocli ls` output."""
-    matches = re.findall(r"sub-([A-Za-z0-9_-]+)", output or "")
+    matches = re.findall(r"\bsub-(A\d{4})\b", output or "")
     return sorted(set(matches))
 
 
