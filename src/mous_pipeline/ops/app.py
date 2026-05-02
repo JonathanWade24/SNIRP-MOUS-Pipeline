@@ -803,10 +803,18 @@ class RunOptionsScreen(Screen):
             subjects=self.app.wizard_subjects or ["A2002"],
             preferred_constraint=self._current_constraint(),
         )
-        # user overrides remain possible from quick toggles
-        plan.resolved_flags["fetch_missing"] = self.query_one("#flag-fetch", Checkbox).value
-        plan.resolved_flags["include_m5"] = self.query_one("#flag-m5", Checkbox).value
-        plan.resolved_flags["dry_run"] = self.query_one("#flag-dry", Checkbox).value
+        # Apply checkbox overrides only for flags the compiler left enabled.
+        # If compile_intent_plan() downgraded a flag to False (capability warning),
+        # the checkbox cannot silently re-enable it and produce a command that
+        # contradicts the warning.
+        _checkbox_overrides = {
+            "fetch_missing": self.query_one("#flag-fetch", Checkbox).value,
+            "include_m5": self.query_one("#flag-m5", Checkbox).value,
+            "dry_run": self.query_one("#flag-dry", Checkbox).value,
+        }
+        for _flag, _cb_val in _checkbox_overrides.items():
+            if plan.resolved_flags.get(_flag, True):
+                plan.resolved_flags[_flag] = _cb_val
         self.app.wizard_intent_plan = plan
         defaults = self.app.state.defaults
         base = self.app.state.workflow_presets.get(plan.base_preset_name, MODE_TO_PRESET_DEFAULTS["full_pipeline"])

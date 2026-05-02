@@ -231,14 +231,8 @@ else
   printf "%s\n" "${SUBJECTS[@]}" > "$SUBJECTS_FILE"
 fi
 
-if [[ "$SKIP_FMRIPREP_SUBMIT" -eq 1 ]]; then
-  echo "[fmri] Skipping fMRIPrep array submission by request"
-  FMRIPREP_JOB_ID=""
-else
-echo "[fmri] submitting fMRI preprocessing array: 0-$ARRAY_MAX"
-SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
-SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
-SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
+# Build shared SBATCH flags once; used by both the fMRIPrep array submission
+# and the downstream fMRI-stages job so neither path hits nounset on SBATCH_EXTRA.
 SBATCH_EXTRA=()
 if [[ -n "$PARTITION" ]]; then
   SBATCH_EXTRA+=(--partition "$PARTITION")
@@ -258,6 +252,15 @@ fi
 if [[ -n "$CPUS_PER_TASK" ]]; then
   SBATCH_EXTRA+=(--cpus-per-task "$CPUS_PER_TASK")
 fi
+
+if [[ "$SKIP_FMRIPREP_SUBMIT" -eq 1 ]]; then
+  echo "[fmri] Skipping fMRIPrep array submission by request"
+  FMRIPREP_JOB_ID=""
+else
+echo "[fmri] submitting fMRI preprocessing array: 0-$ARRAY_MAX"
+SBATCH_OUTPUT="$SLURM_DIR/fmriprep_%A_%a.out"
+SBATCH_ERROR="$SLURM_DIR/fmriprep_%A_%a.err"
+SBATCH_LOG="$SLURM_DIR/fmriprep_submit_$(date +%Y%m%d_%H%M%S).log"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
   FMRIPREP_JOB_ID="<fmriprep_job_id>"

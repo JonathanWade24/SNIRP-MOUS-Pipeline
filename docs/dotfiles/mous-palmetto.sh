@@ -83,8 +83,11 @@ mousupdate() {
 # Always returns to the original branch, even on failure.
 # Run after merging a PR to main.
 mousdeploy() {
-  local _prev _rc=0
-  _prev="$(git -C "$MOUS_REPO" symbolic-ref --short HEAD 2>/dev/null || echo "(detached)")"
+  local _prev _prev_is_branch=1 _rc=0
+  _prev="$(git -C "$MOUS_REPO" symbolic-ref --short HEAD 2>/dev/null)" || {
+    _prev_is_branch=0
+    _prev="$(git -C "$MOUS_REPO" rev-parse HEAD 2>/dev/null)"
+  }
 
   git -C "$MOUS_REPO" fetch origin || { echo "[mous] ERROR: fetch failed" >&2; return 1; }
 
@@ -107,7 +110,11 @@ mousdeploy() {
     && git -C "$MOUS_REPO" push origin HPC \
     || _rc=$?
 
-  git -C "$MOUS_REPO" switch "$_prev"
+  if [[ "$_prev_is_branch" -eq 1 ]]; then
+    git -C "$MOUS_REPO" switch "$_prev"
+  else
+    git -C "$MOUS_REPO" switch --detach "$_prev"
+  fi
 
   if [[ "$_rc" -eq 0 ]]; then
     echo "[mous] HPC branch promoted: $(git -C "$MOUS_REPO" log -1 --oneline origin/HPC)"
