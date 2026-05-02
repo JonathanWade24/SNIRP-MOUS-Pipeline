@@ -960,7 +960,7 @@ class PipelineScreen(Screen):
                     if st not in _PIPELINE_STAGE_IDS:
                         continue
                     with Horizontal(classes="frow"):
-                        yield Checkbox(False, id=f"cb-stage-{st}")
+                        yield Checkbox("", value=False, id=f"cb-stage-{st}")
                         yield Static(_STAGE_HELP.get(st, st), id=f"lbl-stage-{st}")
                         yield Static("", id=f"cache-stage-{st}")
         yield Label("  Subjects", classes="section-title")
