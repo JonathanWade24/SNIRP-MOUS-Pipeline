@@ -91,6 +91,19 @@ class RunResult:
         return f"Subject {self.subject}: status={self.status}, pilot verdict={verdict}{skipped}"
 
 
+def _prestim_n_unique_scale_aware(finite_vals: np.ndarray, sig_figs: int = 8) -> int:
+    """Count distinct prestim values without fixed-decimal rounding (scale-free vs ~1e-28 PSD)."""
+    v = np.asarray(finite_vals, dtype=float).ravel()
+    if v.size == 0:
+        return 0
+    ax = float(np.max(np.abs(v)))
+    if ax == 0.0:
+        return int(np.unique(v).size)
+    exp = np.floor(np.log10(ax))
+    factor = 10 ** (sig_figs - 1 - exp)
+    return int(np.unique(np.round(v * factor)).size)
+
+
 def _prestim_diagnostics(prestim_beta: np.ndarray, y: np.ndarray) -> dict[str, float | int | bool]:
     arr = np.asarray(prestim_beta, dtype=float)
     labels = np.asarray(y, dtype=int)
@@ -107,15 +120,20 @@ def _prestim_diagnostics(prestim_beta: np.ndarray, y: np.ndarray) -> dict[str, f
             "n_class1": int((labels == 1).sum()),
         }
     std = float(np.std(finite_vals))
-    n_unique = int(np.unique(np.round(finite_vals, decimals=12)).size)
+    scale_ref = max(float(np.max(np.abs(finite_vals))), float(np.mean(np.abs(finite_vals))), np.finfo(float).tiny)
+    cv = std / scale_ref
+    n_unique = _prestim_n_unique_scale_aware(finite_vals)
     n0 = int((labels == 0).sum())
     n1 = int((labels == 1).sum())
-    is_degenerate = (std <= 1e-12) or (n_unique <= 1) or (min(n0, n1) == 0)
+    # Absolute 1e-12 was scale-blind (flagged real ~1e-28 PSD spread); use CV + sig-fig uniqueness.
+    is_low_variance = (std == 0.0) or (cv <= 1e-14)
+    is_degenerate = is_low_variance or (n_unique <= 1) or (min(n0, n1) == 0)
     return {
         "n_total": int(arr.size),
         "n_finite": int(finite_vals.size),
         "n_unique_finite": n_unique,
         "std_finite": std,
+        "prestim_cv": float(cv),
         "min_finite": float(np.min(finite_vals)),
         "max_finite": float(np.max(finite_vals)),
         "is_degenerate": bool(is_degenerate),
@@ -506,9 +524,8 @@ def _run_subject_body(
     result.metrics["n_trials"] = len(trials)
     result.metrics["n_zinnen"] = int((trials["condition"] == "ZINNEN").sum())
     result.metrics["n_woorden"] = int((trials["condition"] == "WOORDEN").sum())
-    # trial_meta is set after make_epochs (which trims to surviving epochs).
-    # Initialised here so cache-hit paths that skip make_epochs can restore it
-    # from the stored trial_id array in the npz.
+    # Full trial table from events; trimmed to surviving epochs in m3 (inhouse
+    # make_epochs / bids epochs.selection) or when restoring from m4_trial cache.
     trial_meta = make_events_metadata(trials)
     trial_meta_aligned = trial_meta.copy()
 
@@ -623,6 +640,11 @@ def _run_subject_body(
         if task_raw_clean is not None:
             task_raw_alpha = apply_band(task_raw_clean.copy(), 8, 13)
             epochs_alpha, _ = make_epochs(task_raw_alpha, trials, cfg)
+        trial_meta_aligned = trial_meta.copy()
+    elif _needs_epochs and backend == "mne_bids_pipeline":
+        assert epochs is not None
+        trial_meta = make_events_metadata(trials).iloc[list(epochs.selection)].reset_index(drop=True)
+        trial_meta_aligned = trial_meta.copy()
     result.stage_timings_s["m3"] = perf_counter() - t0
     _emit("done", "m3")
     if progress_callback and _stage_selected("m3", only, skip):
@@ -659,6 +681,7 @@ def _run_subject_body(
             prestim_beta, n400m, _cached_ids = _m4trial_cache
             # Restore trial_meta to the post-rejection subset recorded in the cache.
             trial_meta = trial_meta[trial_meta["trial_id"].isin(_cached_ids)].reset_index(drop=True)
+            trial_meta_aligned = trial_meta.copy()
         else:
             assert epochs is not None
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta_aligned)
