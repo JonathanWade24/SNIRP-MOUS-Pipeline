@@ -1,0 +1,66 @@
+%%{init: {
+  "theme": "base",
+  "flowchart": { "curve": "basis", "padding": 18 },
+  "themeVariables": {
+    "fontFamily": "system-ui, -apple-system, Segoe UI, sans-serif",
+    "primaryColor": "#dbeafe",
+    "primaryTextColor": "#0f172a",
+    "primaryBorderColor": "#2563eb",
+    "secondaryColor": "#f1f5f9",
+    "secondaryBorderColor": "#64748b",
+    "tertiaryColor": "#dcfce7",
+    "tertiaryBorderColor": "#16a34a",
+    "lineColor": "#64748b"
+  }
+}}%%
+flowchart TB
+  subgraph REQ["Required inputs"]
+    direction LR
+    cfg(["YAML config · paths + pipeline toggles"])
+    raw(["CTF MEG · task + rest .ds"])
+    events(["events.tsv · trial metadata"])
+  end
+
+  subgraph OPTIN["Optional prerequisites"]
+    direction LR
+    fs(["FreeSurfer · subjects_dir (m5)"])
+    fmri(["BOLD / fMRIPrep (m10–m11)"])
+  end
+
+  subgraph STAGES["Subject runner · execution order"]
+    direction LR
+    m1(["m1 Events"]) --> m2(["m2 Preprocess"]) --> m3(["m3 Epoching"]) --> m4(["m4 Features"]) --> m4t(["m4_trial"]) --> m6a(["m6a Waves"]) --> m5(["m5 Source"]) --> m6x(["m6_extra"]) --> m7(["m7 Stats"]) --> m9(["m9 Orchestration"]) --> m10(["m10 fMRI"]) --> m11(["m11 Coupling"]) --> m12(["m12 Validation"]) --> m8(["m8 Reports"])
+  end
+
+  subgraph ART["Derivative artifacts"]
+    direction LR
+    dfeat[("m4_features · caches")]
+    dorch[("m9_orchestration · manifest + state + log")]
+    drep[("m8_reports · HTML + Quarto + exports")]
+    dgroup[("group · summary + Aim2 HTML")]
+  end
+
+  cfg --> m1 & m2 & m5 & m10
+  raw --> m2
+  events --> m1
+  fs -.->|when m5 runs| m5
+  fmri -.->|when fMRI runs| m10
+
+  m4 --> dfeat
+  m9 --> dorch
+  m8 --> drep & dgroup
+
+  style REQ fill:#f8fafc,stroke:#e2e8f0,stroke-width:1.5px
+  style OPTIN fill:#fffbeb,stroke:#fde68a,stroke-width:1.5px
+  style STAGES fill:#ffffff,stroke:#cbd5e1,stroke-width:1.5px
+  style ART fill:#f0fdf4,stroke:#bbf7d0,stroke-width:1.5px
+
+  classDef reqNode fill:#eff6ff,stroke:#2563eb,color:#0c1222,stroke-width:2px
+  classDef optNode fill:#fffbeb,stroke:#ca8a04,color:#422006,stroke-width:2px
+  classDef stageNode fill:#ffffff,stroke:#475569,color:#0f172a,stroke-width:1.5px
+  classDef artNode fill:#ecfdf5,stroke:#15803d,color:#052e16,stroke-width:2px
+
+  class cfg,raw,events reqNode
+  class fs,fmri optNode
+  class m1,m2,m3,m4,m4t,m6a,m5,m6x,m7,m9,m10,m11,m12,m8 stageNode
+  class dfeat,dorch,drep,dgroup artNode
