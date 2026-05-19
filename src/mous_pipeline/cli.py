@@ -689,7 +689,7 @@ def main() -> None:
     ops_run.add_argument("--account", default="")
     ops_run.add_argument("--partition", default="hpcnirc")
     ops_run.add_argument("--time", default="12:00:00")
-    ops_run.add_argument("--mem", default="256G")
+    ops_run.add_argument("--mem", default="128G")
     ops_run.add_argument("--cpus-per-task", default="8")
     ops_run.add_argument("--fetch-missing", dest="fetch_missing", action="store_true")
     ops_run.add_argument("--no-fetch-missing", dest="fetch_missing", action="store_false")

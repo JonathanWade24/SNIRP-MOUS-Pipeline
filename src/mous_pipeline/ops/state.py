@@ -129,11 +129,16 @@ def load_state(path: Path | None = None) -> OpsState:
         st.intent_profiles = default_intent_profiles()
         return st
     payload = json.loads(p.read_text())
+    schema_version = int(payload.get("schema_version", 1))
+    defaults = dict(OpsState().defaults)
+    defaults.update(payload.get("defaults", {}) or {})
+    if schema_version < 3 and defaults.get("mem") in {"256G", "280G"}:
+        defaults["mem"] = "128G"
     st = OpsState(
-        schema_version=int(payload.get("schema_version", 1)),
+        schema_version=OpsState().schema_version,
         last_config=payload.get("last_config", "configs/palmetto_hpcnirc_fmri.yaml"),
         recent_configs=list(payload.get("recent_configs", [])),
-        defaults=payload.get("defaults", OpsState().defaults),
+        defaults=defaults,
         env_profile=payload.get("env_profile", {}),
     )
     if not st.recent_configs:

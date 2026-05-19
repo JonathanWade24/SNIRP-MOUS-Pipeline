@@ -71,14 +71,14 @@ class JobRecord:
 
 @dataclass
 class OpsState:
-    schema_version: int = 2
+    schema_version: int = 3
     last_config: str = "configs/palmetto_hpcnirc_fmri.yaml"
     recent_configs: list[str] = field(default_factory=lambda: ["configs/palmetto_hpcnirc_fmri.yaml"])
     defaults: dict[str, str] = field(
         default_factory=lambda: {
             "account": "",
             "partition": "hpcnirc",
-            "mem": "256G",
+            "mem": "128G",
             "time": "12:00:00",
             "cpus_per_task": "8",
             "venv_path": "~/.venvs/mous-palmetto",
