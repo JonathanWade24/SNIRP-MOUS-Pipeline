@@ -53,3 +53,9 @@ Thumbs.db
 .tmp_review_bundle_A2003/review_bundle/pilot_A2003_fmri.yaml
 .tmp_review_bundle_A2003/review_bundle/m10_fmri/A2003_trials_joined.csv
 .tmp_review_bundle_A2003/review_bundle/sub-A2003_run_state.json
+/search me
+scripts/generate_results_figures.py
+scripts/generate_predicted_figures.py
+scripts/generate_overview_talk.py
+docs/mous_overview_talk.pptx
+docs/mous_overview_talk.html
