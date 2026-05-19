@@ -1,0 +1,94 @@
+direction: right
+theme-overrides: {
+  N1: "#111827"
+  N2: "#1f2937"
+  N3: "#475569"
+  N4: "#64748b"
+  N5: "#cbd5e1"
+  N6: "#e2e8f0"
+  N7: "#f8fafc"
+  B1: "#3b82f6"
+  B2: "#d97706"
+  B3: "#16a34a"
+}
+
+title: "MOUS Pipeline - Option B (D2)"
+
+inputs: {
+  label: "Inputs"
+  style.fill: "#f8fafc"
+  style.stroke: "#cbd5e1"
+  near: top-left
+
+  cfg: "YAML Config\n(data_root, derivatives_root,\npipeline toggles)"
+  raw: "Raw MEG CTF .ds\n(task + rest)"
+  events: "events.tsv\n(trial metadata)"
+  fs: "FreeSurfer subjects_dir\n(optional for m5)"
+  fmri_in: "BOLD/fMRIPrep\n(optional for m10/m11)"
+
+  cfg.style: { fill: "#eef4ff"; stroke: "#3b82f6" }
+  raw.style: { fill: "#eef4ff"; stroke: "#3b82f6" }
+  events.style: { fill: "#eef4ff"; stroke: "#3b82f6" }
+  fs.style: { fill: "#fffbeb"; stroke: "#d97706"; stroke-dash: 4 }
+  fmri_in.style: { fill: "#fffbeb"; stroke: "#d97706"; stroke-dash: 4 }
+}
+
+pipeline: {
+  label: "Core pipeline flow"
+  style.fill: "#f8fafc"
+  style.stroke: "#cbd5e1"
+
+  m1: "m1 Events\nparse trials"
+  m2: "m2 Preprocess\nnotch/resample/ICA"
+  m3: "m3 Epoching\ntask + rest"
+  m4: "m4 Features\nanalytic + PSD"
+  m4t: "m4_trial\npre-stim beta + N400m"
+  m6a: "m6a Waves\nphase gradient + DCI"
+  m5: "m5 Source\nforward/inverse ROI"
+  m6x: "m6_extra\nCFC/FFT/flow"
+  m7: "m7 Stats\nperm/circular/trialwise"
+  m9: "m9 Orchestration\nmanifest/state/pilot gate"
+  m10: "m10 fMRI\ntrialwise GLM + joins"
+  m11: "m11 Coupling\nMEG-fMRI models"
+  m12: "m12 Validation\nnull/simulation"
+  m8: "m8 Reports\nexports + HTML + Quarto"
+}
+
+outputs: {
+  label: "Outputs"
+  style.fill: "#f8fafc"
+  style.stroke: "#cbd5e1"
+  near: bottom-right
+
+  out4: "m4_features cache"
+  out9: "m9_orchestration\nmanifest + state + live log"
+  out8: "m8_reports\nsubject dashboard + exports"
+  outg: "group outputs\ngroup_summary + aim2 HTML"
+
+  out4.style: { fill: "#ecfdf5"; stroke: "#16a34a" }
+  out9.style: { fill: "#ecfdf5"; stroke: "#16a34a" }
+  out8.style: { fill: "#ecfdf5"; stroke: "#16a34a" }
+  outg.style: { fill: "#ecfdf5"; stroke: "#16a34a" }
+}
+
+inputs.cfg -> pipeline.m1
+inputs.cfg -> pipeline.m2
+inputs.cfg -> pipeline.m5
+inputs.cfg -> pipeline.m10
+inputs.raw -> pipeline.m2
+inputs.events -> pipeline.m1
+inputs.fs -> pipeline.m5: "optional" {
+  style.stroke: "#d97706"
+  style.stroke-dash: 4
+}
+inputs.fmri_in -> pipeline.m10: "optional" {
+  style.stroke: "#d97706"
+  style.stroke-dash: 4
+}
+
+pipeline.m1 -> pipeline.m2 -> pipeline.m3 -> pipeline.m4 -> pipeline.m4t -> pipeline.m6a -> pipeline.m5 -> pipeline.m6x -> pipeline.m7 -> pipeline.m9 -> pipeline.m10 -> pipeline.m11 -> pipeline.m12 -> pipeline.m8
+
+pipeline.m4 -> outputs.out4
+pipeline.m9 -> outputs.out9
+pipeline.m8 -> outputs.out8
+pipeline.m8 -> outputs.outg
