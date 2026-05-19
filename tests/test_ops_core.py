@@ -46,6 +46,10 @@ def test_state_persistence_round_trip(tmp_path: Path) -> None:
     assert loaded.workflow_presets["custom"].include_m5 is True
 
 
+def test_ops_state_default_mem_is_cohort_friendly() -> None:
+    assert OpsState().defaults["mem"] == "128G"
+
+
 def test_build_submit_cmd_for_m5_preset() -> None:
     preset = WorkflowPreset(
         name="m5_enabled_submit",
@@ -200,7 +204,43 @@ def test_state_migration_seeds_recent_configs_and_defaults(tmp_path: Path) -> No
     loaded = load_state(path=state_path)
     assert loaded.last_config == "configs/legacy.yaml"
     assert loaded.recent_configs[0] == "configs/legacy.yaml"
+    assert loaded.defaults["mem"] == "128G"
     assert isinstance(loaded.workflow_presets, dict)
+
+
+def test_state_migration_lowers_legacy_high_memory_default(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "last_config": "configs/legacy.yaml",
+  "defaults": {"account": "acct", "mem": "280G"},
+  "workflow_presets": {},
+  "recent_jobs": []
+}
+""".strip()
+    )
+    loaded = load_state(path=state_path)
+    assert loaded.defaults["account"] == "acct"
+    assert loaded.defaults["mem"] == "128G"
+
+
+def test_state_migration_preserves_custom_memory_default(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 3,
+  "last_config": "configs/current.yaml",
+  "defaults": {"account": "acct", "mem": "96G"},
+  "workflow_presets": {},
+  "recent_jobs": []
+}
+""".strip()
+    )
+    loaded = load_state(path=state_path)
+    assert loaded.defaults["mem"] == "96G"
 
 
 def test_submit_flag_contract_with_palmetto_wrapper() -> None:

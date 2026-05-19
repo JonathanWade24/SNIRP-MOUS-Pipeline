@@ -4,7 +4,7 @@
 #SBATCH -A rcd_project_jabsher_hpcnirc
 #SBATCH -t 12:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=256G
+#SBATCH --mem=128G
 #SBATCH -o /scratch/jonathanwade/mous_derivatives/slurm/mous_driver_%j.out
 #SBATCH -e /scratch/jonathanwade/mous_derivatives/slurm/mous_driver_%j.err
 
@@ -35,5 +35,5 @@ scripts/palmetto_submit.sh \
   --subjects A2002 \
   --account rcd_project_jabsher_hpcnirc \
   --time 12:00:00 \
-  --mem 256G \
+  --mem 128G \
   --cpus-per-task 8

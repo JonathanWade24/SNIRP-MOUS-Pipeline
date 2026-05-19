@@ -677,7 +677,7 @@ class WizardContextStrip(Horizontal):
         short = Path(cfg).name if cfg else "(no config)"
         d = app.state.defaults
         hpc = (
-            f"{d.get('partition', 'hpcnirc')} / {d.get('mem', '256G')} / "
+            f"{d.get('partition', 'hpcnirc')} / {d.get('mem', '128G')} / "
             f"{d.get('time', '12:00:00')} / {d.get('cpus_per_task', '8')} CPU"
         )
         self.query_one("#ctx-cfg-line", Static).update(f"[dim]Config[/dim]  [bold]{short}[/bold]")
@@ -713,7 +713,7 @@ class HpcEditScreen(Screen):
             yield Input(value=d.get("time", "12:00:00"), id="hpc-edit-time")
         with Horizontal(classes="frow"):
             yield Label("Mem:", classes="flabel")
-            yield Input(value=d.get("mem", "256G"), id="hpc-edit-mem")
+            yield Input(value=d.get("mem", "128G"), id="hpc-edit-mem")
             yield Label("CPUs:", classes="flabel")
             yield Input(value=d.get("cpus_per_task", "8"), id="hpc-edit-cpus")
         with Horizontal(classes="nav-bar"):
@@ -1096,7 +1096,7 @@ class PipelineScreen(Screen):
             account=defaults.get("account", ""),
             partition=defaults.get("partition", "hpcnirc"),
             time_limit=defaults.get("time", "12:00:00"),
-            mem=defaults.get("mem", "256G"),
+            mem=defaults.get("mem", "128G"),
             cpus_per_task=defaults.get("cpus_per_task", "8"),
             overrides=RuntimeOverrides(
                 fetch_missing=plan.resolved_flags["fetch_missing"],
@@ -1297,7 +1297,7 @@ class LaunchScreen(Screen):
                 yield Label("Time:", classes="flabel")
                 yield Input(value=d.get("time", "12:00:00"), id="time-input")
                 yield Label("Mem:", classes="flabel")
-                yield Input(value=d.get("mem", "256G"), id="mem-input")
+                yield Input(value=d.get("mem", "128G"), id="mem-input")
                 yield Label("CPUs:", classes="flabel")
                 yield Input(value=d.get("cpus_per_task", "8"), id="cpus-input")
         yield Static(
