@@ -19,6 +19,17 @@ def test_prestim_diagnostics_flags_degenerate_distribution():
     assert diag["n_unique_finite"] == 1
 
 
+def test_prestim_diagnostics_allows_tiny_psd_scale_variation():
+    """PSD-scale prestim (~1e-28) must not be flagged by absolute std floors."""
+    x = np.linspace(1.0e-28, 1.1e-28, 20, dtype=float)
+    y = np.array([0, 1] * 10, dtype=int)
+    diag = _prestim_diagnostics(x, y)
+    assert diag["is_degenerate"] is False
+    assert diag["n_unique_finite"] > 1
+    assert diag["std_finite"] < 1e-12
+    assert diag["prestim_cv"] > 1e-14
+
+
 def test_guarded_auc_returns_nan_for_single_class_labels():
     x = np.linspace(0.1, 1.0, 10)
     y = np.ones(10, dtype=int)
