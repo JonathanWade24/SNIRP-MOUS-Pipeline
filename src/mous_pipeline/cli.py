@@ -138,6 +138,38 @@ def _run_log_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     ]
 
 
+def _failed_run_state_payload(
+    existing: dict | None,
+    *,
+    subject: str,
+    selected_stages: list[str],
+    error: Exception,
+    now: float | None = None,
+) -> dict:
+    """Build a failed run_state payload while preserving stage progress."""
+    payload = dict(existing or {})
+    timestamp = time.time() if now is None else now
+    payload.update(
+        {
+            "subject": payload.get("subject") or subject,
+            "status": "failed",
+            "selected_stages": payload.get("selected_stages") or selected_stages,
+            "current_stage": None,
+            "current_stage_description": None,
+            "current_stage_started_at": None,
+            "stage_index": payload.get("stage_index") or 0,
+            "stage_total": payload.get("stage_total") or len(selected_stages),
+            "completed_stages": payload.get("completed_stages") or [],
+            "stage_timings_s": payload.get("stage_timings_s") or {},
+            "error": str(error),
+            "started_at": payload.get("started_at") or timestamp,
+            "updated_at": timestamp,
+            "last_event": "failed",
+        }
+    )
+    return payload
+
+
 def _run_manifest_candidates(derivatives_root: Path, subject: str) -> list[Path]:
     sid = subject.removeprefix("sub-")
     return [
@@ -755,21 +787,20 @@ def main() -> None:
         except Exception as exc:
             state_path = next((p for p in state_candidates if p.exists()), state_candidates[0])
             state_path.parent.mkdir(parents=True, exist_ok=True)
-            failed_payload = {
-                "subject": sid,
-                "status": "failed",
-                "selected_stages": selected,
-                "current_stage": None,
-                "current_stage_started_at": None,
-                "stage_index": 0,
-                "stage_total": len(selected),
-                "completed_stages": [],
-                "stage_timings_s": {},
-                "error": str(exc),
-                "started_at": time.time(),
-                "updated_at": time.time(),
-                "last_event": "failed",
-            }
+            existing_state = None
+            if state_path.exists():
+                try:
+                    loaded = json.loads(state_path.read_text())
+                    if isinstance(loaded, dict):
+                        existing_state = loaded
+                except Exception:
+                    existing_state = None
+            failed_payload = _failed_run_state_payload(
+                existing_state,
+                subject=sid,
+                selected_stages=selected,
+                error=exc,
+            )
             state_path.write_text(json.dumps(failed_payload, indent=2))
             raise
         print(result.summary())

@@ -620,6 +620,7 @@ def _run_subject_body(
     if _needs_epochs and backend != "mne_bids_pipeline":
         assert task_raw is not None
         epochs, trial_meta = make_epochs(task_raw, trials, cfg)
+        trial_meta_aligned = trial_meta.copy()
         if task_raw_clean is not None:
             task_raw_alpha = apply_band(task_raw_clean.copy(), 8, 13)
             epochs_alpha, _ = make_epochs(task_raw_alpha, trials, cfg)
@@ -658,7 +659,8 @@ def _run_subject_body(
             assert _m4trial_cache is not None
             prestim_beta, n400m, _cached_ids = _m4trial_cache
             # Restore trial_meta to the post-rejection subset recorded in the cache.
-            trial_meta = trial_meta[trial_meta["trial_id"].isin(_cached_ids)].reset_index(drop=True)
+            trial_meta_aligned = trial_meta[trial_meta["trial_id"].isin(_cached_ids)].reset_index(drop=True)
+            trial_df = trial_meta_aligned.copy()
         else:
             assert epochs is not None
             prestim_beta = prestim_beta_power(epochs, subject, cfg, trial_meta_aligned)
