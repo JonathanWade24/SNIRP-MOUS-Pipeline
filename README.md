@@ -1,21 +1,28 @@
 # MOUS Pipeline
 
-Python package for MOUS MEG analysis: events, CTF preprocessing, epoching, spectral and trial features, optional source space, phase-gradient / wave metrics, stats, and HTML/Quarto reports. Optional stages cover fMRI (m10/m11) and wave-validation nulls (m12).
+[![CI](https://github.com/JonathanWade24/MOUS/actions/workflows/ci.yml/badge.svg)](https://github.com/JonathanWade24/MOUS/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![MNE](https://img.shields.io/badge/MNE-Python-7c3aed.svg)](https://mne.tools/)
 
-- Python 3.10+ (`pyproject.toml`)
-- CLI: `mous-pipeline`
-- Code: `src/mous_pipeline/`
+> Automated MEG analysis from raw CTF recordings to group-level inference.
 
-## System requirements
+The MOUS study (Mother Of all Unification Studies) investigates how oscillatory dynamics and traveling waves relate to language processing—and, in Aim 2, how those signals couple to fMRI. Running the analysis by hand meant downloading subjects from the Radboud Data Repository one at a time, chaining preprocessing scripts, and hoping nothing drifted between runs.
 
-- **Python:** 3.10+
-- **FreeSurfer** (optional): Required for stage **m5** (source reconstruction). Set `source.subjects_dir` in config and ensure `fsaverage` is available.
-- **repocli** (optional): For RDR data fetch. Download from [Donders-Institute/dr-tools releases](https://github.com/Donders-Institute/dr-tools/releases).
-- **Cyberduck CLI (`duck`)** (optional): For SFTP/FTP/WebDAV data fetch.
+This repository is a modular Python pipeline that does that work end-to-end: one config file, one CLI, and reproducible derivatives at every stage.
+
+## At a glance
+
+- **Modular stages** (`m1`–`m12`) with dependency-aware partial runs (`--only`, `--skip`)
+- **Pydantic-validated YAML configs**; run manifest and live state for observability
+- **MNE / scipy / statsmodels** stack; optional fMRI (nilearn) and wave-validation null models
+- **Quarto + R** reporting pipeline (HTML dashboards and cumulative subject reports)
+- **pytest** suite with fast (`make test-quick`) and full (`make test-full`) targets; GitHub Actions CI on PRs
+- **HPC-ready**: SLURM scripts, Palmetto workflow, SSH ops TUI
 
 ## Install
 
-From the repository root (required for relative paths used by the GUI CLI):
+From the repository root:
 
 ```bash
 python3 -m venv .venv
@@ -23,14 +30,54 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-Optional extras:
+For most development and cluster work, install the practical extras together:
 
 ```bash
-pip install -e ".[gui]"     # Streamlit UI
+pip install -e ".[bids,fmri,ops]"
+```
+
+Individual extras:
+
+```bash
+pip install -e ".[gui]"     # Streamlit UI (deprecated; removal planned v0.3.0)
 pip install -e ".[bids]"    # MNE-BIDS-Pipeline backend for preprocessing
 pip install -e ".[fmri]"    # Aim 2 fMRI / nilearn stack
 pip install -e ".[ops]"     # SSH-first Textual operations UI
 ```
+
+### System requirements
+
+- **Python:** 3.10+
+- **FreeSurfer** (optional): Required for stage **m5** (source reconstruction). Set `source.subjects_dir` in config and ensure `fsaverage` is available.
+- **repocli** (optional): For RDR data fetch. Download from [Donders-Institute/dr-tools releases](https://github.com/Donders-Institute/dr-tools/releases).
+- **Cyberduck CLI (`duck`)** (optional): For SFTP/FTP/WebDAV data fetch.
+
+## Quickstart
+
+Canonical configs live under [`configs/`](configs/): `palmetto_hpcnirc_fmri.yaml` and `palmetto_hpcnirc_A2004_A2014.yaml`. See [`configs/README.md`](configs/README.md) for key fields and pipeline toggles.
+
+```bash
+# 1. Plan the run (no data touched)
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --dry-run
+
+# 2. Execute
+mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
+
+# 3. Verify acceptance checks
+mous-pipeline verify-run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --strict-mode
+```
+
+Monitor a run in another terminal with `mous-pipeline watch --config <cfg> --subject <id> --verbose`.
+
+Before runs that include **m8** reports, check Quarto and R dependencies:
+
+```bash
+mous-pipeline check-quarto-env
+```
+
+The command exits non-zero when `quarto`, `Rscript`, or required R packages are missing (`ggplot2`, `dplyr`, `knitr`, `lmerTest`, `readr`).
+
+**Outputs:** Derivatives land under `derivatives_root/<subject>/` by stage (e.g. `m4_features/`, `m9_orchestration/`, `m8_reports/`). m8 writes a Python dashboard (`<subject>_report.html`) and a cumulative Quarto report (`<subject>_quarto_report.html`). The run manifest and live state live in `m9_orchestration/`. Aim 2 HTML summaries are written alongside subject and group reports in m8.
 
 ## Expected data structure
 
@@ -47,109 +94,17 @@ data_root/
 
 Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 
-## Quickstart
+## Pipeline architecture
 
-```bash
-mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
-```
-
-GUI deprecation notice: `mous-pipeline gui` is deprecated and will be removed in v0.3.0.
-Use CLI-first workflows (`run`, `watch`, `verify-run`) for ongoing use.
-
-Before full runs that include `m8`, verify Quarto runtime dependencies:
-
-```bash
-mous-pipeline check-quarto-env
-```
-
-The command exits non-zero when `quarto`, `Rscript`, or required R packages are missing (`ggplot2`, `dplyr`, `knitr`, `lmerTest`, `readr`).
-
-Canonical configs live under `configs/`: `palmetto_hpcnirc_fmri.yaml` and `palmetto_hpcnirc_A2004_A2014.yaml`. YAML fields include `data_root`, `derivatives_root`, `rdr`, `preprocess`, `epoching`, `features`, `source`, optional `fmri` / `wave_validation`, and `pipeline`.
-
-Pipeline behavior toggles can be set under `pipeline`, for example:
-- `strict_stage_failures` (default true in CI): hard-fail critical stage errors (`m10`, `m11`),
-- `m10_n_jobs` (default `1`): nilearn `FirstLevelModel` worker count for m10 GLM,
-- `m10_force_gc` (default `true`): force cleanup pass after m10.
-
-**Outputs:** Derivatives land under `derivatives_root/<subject>/` organized by stage (e.g. `m4_features/`, `m9_orchestration/`, `m8_reports/`). m8 writes a Python dashboard (`<subject>_report.html`) and a single cumulative Quarto report (`<subject>_quarto_report.html`) under `m8_reports/`; the run manifest lives in `m9_orchestration/`.
-Legacy per-aim Quarto templates remain in `reports/` for ad-hoc use, but the pipeline now renders only `reports/subject_full_report.qmd`.
-Aim2-specific HTML summaries are also generated in m8:
-- Subject: `<derivatives_root>/<subject>/m8_reports/<subject>_aim2_summary.html`
-- Group: `<derivatives_root>/group_aim2_summary.html`
-
-## Pipeline stages
-
-Stages run in this order (see `src/mous_pipeline/stage_dependencies.py`). Dependencies between stages are enforced when you use `--only`.
-
-### Pipeline flow diagram
+Execution order follows `src/mous_pipeline/m9_orchestration/runner.py` (**m8 reports run last**).
 
 ```mermaid
-%%{init: {
-  "theme": "base",
-  "flowchart": { "curve": "basis", "padding": 18 },
-  "themeVariables": {
-    "fontFamily": "system-ui, -apple-system, Segoe UI, sans-serif",
-    "primaryColor": "#dbeafe",
-    "primaryTextColor": "#0f172a",
-    "primaryBorderColor": "#2563eb",
-    "secondaryColor": "#f1f5f9",
-    "secondaryBorderColor": "#64748b",
-    "tertiaryColor": "#dcfce7",
-    "tertiaryBorderColor": "#16a34a",
-    "lineColor": "#64748b"
-  }
-}}%%
-flowchart TB
-  subgraph REQ["Required inputs"]
-    direction LR
-    cfg(["YAML config · paths + pipeline toggles"])
-    raw(["CTF MEG · task + rest .ds"])
-    events(["events.tsv · trial metadata"])
-  end
-
-  subgraph OPTIN["Optional prerequisites"]
-    direction LR
-    fs(["FreeSurfer · subjects_dir (m5)"])
-    fmri(["BOLD / fMRIPrep (m10–m11)"])
-  end
-
-  subgraph STAGES["Subject runner · execution order"]
-    direction LR
-    m1(["m1 Events"]) --> m2(["m2 Preprocess"]) --> m3(["m3 Epoching"]) --> m4(["m4 Features"]) --> m4t(["m4_trial"]) --> m6a(["m6a Waves"]) --> m5(["m5 Source"]) --> m6x(["m6_extra"]) --> m7(["m7 Stats"]) --> m9(["m9 Orchestration"]) --> m10(["m10 fMRI"]) --> m11(["m11 Coupling"]) --> m12(["m12 Validation"]) --> m8(["m8 Reports"])
-  end
-
-  subgraph ART["Derivative artifacts"]
-    direction LR
-    dfeat[("m4_features · caches")]
-    dorch[("m9_orchestration · manifest + state + log")]
-    drep[("m8_reports · HTML + Quarto + exports")]
-    dgroup[("group · summary + Aim2 HTML")]
-  end
-
-  cfg --> m1 & m2 & m5 & m10
-  raw --> m2
-  events --> m1
-  fs -.->|when m5 runs| m5
-  fmri -.->|when fMRI runs| m10
-
-  m4 --> dfeat
-  m9 --> dorch
-  m8 --> drep & dgroup
-
-  style REQ fill:#f8fafc,stroke:#e2e8f0,stroke-width:1.5px
-  style OPTIN fill:#fffbeb,stroke:#fde68a,stroke-width:1.5px
-  style STAGES fill:#ffffff,stroke:#cbd5e1,stroke-width:1.5px
-  style ART fill:#f0fdf4,stroke:#bbf7d0,stroke-width:1.5px
-
-  classDef reqNode fill:#eff6ff,stroke:#2563eb,color:#0c1222,stroke-width:2px
-  classDef optNode fill:#fffbeb,stroke:#ca8a04,color:#422006,stroke-width:2px
-  classDef stageNode fill:#ffffff,stroke:#475569,color:#0f172a,stroke-width:1.5px
-  classDef artNode fill:#ecfdf5,stroke:#15803d,color:#052e16,stroke-width:2px
-
-  class cfg,raw,events reqNode
-  class fs,fmri optNode
-  class m1,m2,m3,m4,m4t,m6a,m5,m6x,m7,m9,m10,m11,m12,m8 stageNode
-  class dfeat,dorch,drep,dgroup artNode
+flowchart LR
+  m1["m1 Events"] --> m2["m2 Preprocess"] --> m3["m3 Epoching"]
+  m3 --> m4["m4 Features"] --> m4t["m4_trial"] --> m6a["m6a Waves"]
+  m6a --> m5["m5 Source"] --> m6x["m6_extra"] --> m7["m7 Stats"]
+  m7 --> m9["m9 Gating"] --> m10["m10 fMRI"] --> m11["m11 Coupling"]
+  m11 --> m12["m12 Validation"] --> m8["m8 Reports"]
 ```
 
 | Stage | Package folder | Role |
@@ -159,19 +114,23 @@ flowchart TB
 | **m3** | `m3_epoching` | Task and rest epochs |
 | **m4** | `m4_features` | Analytic signal, PSD |
 | **m4_trial** | `m4_features` | Pre-stim beta, N400m; Aim 1 trial metrics |
-| **m5** | `m5_source` | Forward / inverse, ROI time series |
 | **m6a** | `m6_waves` | Phase gradient, DCI, sliding metrics |
+| **m5** | `m5_source` | Forward / inverse, ROI time series |
 | **m6_extra** | `m6_waves` | CFC, 2D FFT, flow, rotational detectors (uses m4 cache when possible) |
+| **m7** | `m7_stats` | Permutation, circular stats, trial-wise models |
+| **m9** | `m9_orchestration` | Pilot gating verdict (GO / MARGINAL / NO-GO); manifest and live state under `m9_orchestration/` |
 | **m10** | `m10_fmri` | Optional: BOLD prep / trial-wise GLM, MEG–fMRI join |
 | **m11** | `m11_coupling` | Optional: coupling models on joined trials |
 | **m12** | `m12_wave_validation` | Optional: simulation / null DCI (`wave_validation.enabled`) |
-| **m7** | `m7_stats` | Permutation, circular stats, trial-wise models |
 | **m8** | `m8_reports` | Exports, figures, cumulative Quarto report, dashboard, Aim2 subject/group HTML summaries |
-| **m9** | `m9_orchestration` | Manifest, run state, live log under subject derivatives |
 
-A full `run` executes every stage in `STAGE_ORDER`. **m10 / m11** need fMRI configuration and data; they may record a skip reason if BOLD or joins are missing. **m12** runs substantive work only when `wave_validation.enabled` is true in config.
+A full `run` executes every stage in runner order. **m10 / m11** need fMRI configuration and data; they may record a skip reason if BOLD or joins are missing. **m12** runs substantive work only when `wave_validation.enabled` is true in config.
+
+**m0** (intake: `fetch-rdr`, `bids-convert`) is CLI-only and not part of the subject runner.
 
 ### Runner flags
+
+Use these to control partial runs, caching, and optional blocks:
 
 ```bash
 # Plan only: print resolved stages without touching data
@@ -195,51 +154,16 @@ mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --
 
 `--include-fmri` / `--include-waves-validation` **add** `m10,m11` or `m12` to an explicit `--only` list. If you omit `--only`, the runner already selects all stages, so those flags are unnecessary.
 
-### Full-run verification (with m5)
+### Verification
 
-Use this protocol after FreeSurfer recon-all outputs are available under
-`source.subjects_dir`:
+For full runs with source reconstruction (**m5**), see [`docs/TODO_m5_fullrun.md`](docs/TODO_m5_fullrun.md). Common patterns:
 
 ```bash
-mous-pipeline run --config <cfg> --subject <id> --dry-run
-mous-pipeline run --config <cfg> --subject <id> --force
-mous-pipeline watch --config <cfg> --subject <id> --verbose
 mous-pipeline verify-run --config <cfg> --subject <id> --require-m5 --strict-mode
-```
-
-Expected acceptance checks:
-- run manifest `metrics.run_status` is `done` or `completed_with_skips`,
-- `metrics.skipped_stages` does not include `m5`,
-- `metrics.source_dci_zinnen` or `metrics.m5_n_stcs` is present,
-- strict verification has no `m10_error` or `m11_error`.
-
-### Full-run verification (skip m5)
-
-Use this protocol before Neurodesk pull/runs when source reconstruction (`m5`) is deferred:
-
-```bash
-mous-pipeline run --config <cfg> --subject <id> --skip m5 --dry-run
-mous-pipeline run --config <cfg> --subject <id> --skip m5 --force
-mous-pipeline watch --config <cfg> --subject <id> --verbose
 mous-pipeline verify-run --config <cfg> --subject <id> --require-skip-m5 --strict-mode
 ```
 
-Expected acceptance checks:
-- run manifest `metrics.run_status` is `done` or `completed_with_skips`,
-- `metrics.skipped_stages` includes `m5`,
-- strict verification has no `m10_error` or `m11_error`,
-- manifest contains non-empty outputs.
-
-### Watch a run
-
-Polls `derivatives/.../m9_orchestration/sub-<id>_run_state.json` written during `run`:
-
-```bash
-mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
-mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --verbose
-```
-
-## CLI commands (overview)
+## CLI commands
 
 | Command | Purpose |
 |---------|---------|
@@ -251,7 +175,9 @@ mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 
 | `group` | Aggregate manifests under `derivatives_root` → `group_summary.json` (and trial CSV if present) |
 | `bids-convert` | Add in-place BIDS sidecars for a subject |
 | `bids-validate` | Check BIDS layout with `mne_bids` + `bids_validator` (dataset at `data_root` or `--root`) |
-| `gui` | Start deprecated Streamlit app (sunset; planned removal in v0.3.0) |
+| `check-quarto-env` | Verify Quarto, R, and required R packages for m8 reports |
+| `ops` | SSH-first operations TUI and non-interactive cluster helpers |
+| `gui` | Deprecated Streamlit app (sunset; planned removal in v0.3.0) |
 
 ## Get data into `data_root`
 
@@ -266,23 +192,7 @@ mous-pipeline watch --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 
 mous-pipeline fetch-rdr --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002 --execute
 ```
 
-Override collection path if needed:
-
-```bash
-mous-pipeline fetch-rdr --subject A2003 --collection-path dccn/DSC_3011020.09_236_v1 --dest . --execute
-```
-
-Fetch every valid `sub-A####` subject advertised by the RDR collection and
-continue past missing/invalid entries:
-
-```bash
-mous-pipeline fetch-rdr \
-  --config configs/palmetto_hpcnirc_A2003_A2012.yaml \
-  --all-remote-subjects \
-  --manifest-out reports/rdr_subject_manifest.json \
-  --skip-invalid \
-  --execute
-```
+Bulk cohort fetch options are documented in [`configs/README.md`](configs/README.md).
 
 ### Cyberduck CLI (`duck`)
 
@@ -298,37 +208,6 @@ mous-pipeline fetch-subject \
 
 Add `--execute` to run the printed command.
 
-## Deprecated Neurodesk / Jupyter GUI (sunset)
-
-`mous-pipeline gui` and the Streamlit app are in deprecation mode and planned for
-removal in v0.3.0. Keep using this path only as a short-term bridge.
-
-Neurodesk-oriented setup script (creates `.venv`, installs `.[gui]`, downloads Linux `repocli` into `~/bin`):
-
-```bash
-bash setup.sh
-repocli config   # baseurl: https://webdav.data.ru.nl
-```
-
-**Platform note:** `setup.sh` is Linux x86_64 only (downloads `repocli.x86_64`). On **macOS**, **Windows**, or other platforms, skip the script and install manually (`pip install -e ".[gui]"` + download `repocli` from [releases](https://github.com/Donders-Institute/dr-tools/releases)).
-
-From the repo root:
-
-```bash
-source .venv/bin/activate
-mous-pipeline gui
-# or: streamlit run src/mous_pipeline/gui_streamlit.py
-```
-
-On JupyterHub, use the printed proxy URL (often `/proxy/8501/`) to open the app.
-For new usage, prefer:
-
-```bash
-mous-pipeline run --config <cfg> --subject <id>
-mous-pipeline watch --config <cfg> --subject <id>
-mous-pipeline verify-run --config <cfg> --subject <id> --strict-mode
-```
-
 ## Group-level analysis
 
 After subject runs, manifests live under `<derivatives_root>/<subject>/m9_orchestration/*_run_manifest.json`. Then:
@@ -338,98 +217,26 @@ mous-pipeline group --derivatives-root derivatives/mous_pipeline
 mous-pipeline group --derivatives-root derivatives/mous_pipeline --test lme
 ```
 
-## SLURM automation (Workflow tracks)
+## HPC and cluster operations
 
-For cluster-oriented orchestration, use:
+For Clemson Palmetto / SLURM cohort runs, operational detail lives in the docs rather than here:
 
-```bash
-scripts/analysis_00_hpc_setup.sh --check-data
-sbatch scripts/analysis_02_freesurfer_recon.sh
-scripts/analysis_00_hpc_setup.sh --check-freesurfer
-sbatch scripts/analysis_01_cohort_fetch_and_run.sh
-```
+- [`docs/palmetto_hpcnirc.md`](docs/palmetto_hpcnirc.md) — full `hpcnirc` workflow
+- [`docs/palmetto_workspace_map.md`](docs/palmetto_workspace_map.md) — laptop/Palmetto workspace map and path reference
+- [`docs/ssh_ops_tui.md`](docs/ssh_ops_tui.md) — SSH ops TUI and non-interactive workflows
 
-`analysis_00_hpc_setup.sh` creates the expected `logs/` and `derivatives/`
-subdirectories, checks the FreeSurfer license and cohort T1w inputs, and can
-optionally submit the FreeSurfer or full-cohort SLURM jobs with
-`--submit-recon` / `--submit-cohort`.
-
-For prioritized automation across workflow tracks without mandatory m5 FreeSurfer work, use:
+Representative entry points:
 
 ```bash
-scripts/run_aims_priority.sh \
-  --config configs/palmetto_hpcnirc_fmri.yaml \
-  --subjects A2003,A2004 \
-  --fetch-missing \
-  --partition hpcnirc
-```
-
-What it does:
-- resolves subjects from config `subjects:` or `--subjects` override,
-- optionally fetches missing subjects via `mous-pipeline fetch-rdr --execute`,
-- runs a post-merge MEG trial-metrics regression/QC audit on the first subject,
-- submits fMRI preprocessing as detached `sbatch --array` jobs,
-- runs per-subject MEG stages (`--skip m5,m10,m11` by default),
-- runs MEG group aggregation and writes group summary/null artifacts.
-
-Why this can look surprising:
-- `mous_driver` is an orchestrator, so it can exit before detached `mous_fmriprep` array jobs finish.
-- Treat `mous_driver_*` and `fmriprep_*` logs as separate tracks when monitoring completion.
-
-Preview all commands without executing:
-
-```bash
-scripts/run_aims_priority.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2003 --fetch-missing --dry-run
-```
-
-Palmetto-specific wrapper and setup docs:
-
-```bash
-bash scripts/palmetto_setup.sh
 scripts/palmetto_submit.sh --config configs/palmetto_hpcnirc_fmri.yaml --account YOUR_ACCOUNT --dry-run
-scripts/palmetto_recon_all.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
-scripts/palmetto_prep_bem.sh --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
-```
-
-For Quarto cumulative reports on Palmetto, install R runtime dependencies once in your `mous-palmetto` conda env:
-
-```bash
-conda install -n mous-palmetto -c conda-forge r-base r-ggplot2 r-dplyr r-knitr r-lmertest r-readr
-mous-pipeline check-quarto-env
-```
-
-See `docs/palmetto_hpcnirc.md` for a full `hpcnirc` workflow and
-`docs/palmetto_workspace_map.md` for the Git-first laptop/Palmetto workspace
-map, path reference, and selected-result sync commands.
-
-SSH-first operations interface:
-
-```bash
-mous-pipeline ops ui
 mous-pipeline ops run --preset full_submit --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT
-mous-pipeline ops prep-m5 --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --with-bem --dry-run
-mous-pipeline ops prep-bem --config configs/palmetto_hpcnirc_fmri.yaml --subjects A2002 --account YOUR_ACCOUNT --dry-run
-mous-pipeline ops status
 ```
 
-See `docs/ssh_ops_tui.md` for full TUI + non-interactive workflow details.
+Cohort automation scripts (`scripts/run_aims_priority.sh`, `scripts/analysis_*.sh`) and FreeSurfer helpers are in [`scripts/`](scripts/).
 
-Neurodesk single-subject FreeSurfer helper (safe with spaces in source paths):
+## Deprecated GUI
 
-```bash
-chmod +x scripts/recon_all_neurodesk_safe.sh
-scripts/recon_all_neurodesk_safe.sh --subject A2027
-```
-
-Optional overrides:
-
-```bash
-scripts/recon_all_neurodesk_safe.sh \
-  --subject A2027 \
-  --data-root "/home/jovyan/MOUS/Pipeline WIP/mous_data" \
-  --subjects-dir derivatives/freesurfer \
-  --openmp 3
-```
+`mous-pipeline gui` and the Streamlit app are deprecated and will be removed in v0.3.0. Use CLI workflows (`run`, `watch`, `verify-run`) instead.
 
 ## Testing
 
@@ -444,17 +251,11 @@ make test-quick-parallel        # quick smoke + xdist if installed
 pytest tests/test_m1_events.py -v  # run specific test
 ```
 
-`integration` and `slow` markers are assigned in `tests/conftest.py`. Quick runs use
-`-m "not integration and not slow"` to keep local feedback fast while preserving full
-assertion coverage in `test-full`/CI runs.
+CI on pull requests runs a fast regression subset: `test_runner_dry_run`, `test_m1_events`, `test_runner_failure_policy`, `test_m10_stub`, and `test_parallelization_plan`.
 
-For parallel execution, install xdist once:
+`integration` and `slow` markers are assigned in `tests/conftest.py`. Quick runs use `-m "not integration and not slow"` to keep local feedback fast.
 
-```bash
-pip install pytest-xdist
-```
-
-Tests use fixtures in `tests/conftest.py` for sample data and configs.
+For parallel execution, install xdist once: `pip install pytest-xdist`.
 
 ## Troubleshooting
 
@@ -467,24 +268,20 @@ Tests use fixtures in `tests/conftest.py` for sample data and configs.
 **"No BOLD file found"** (m10)
 : Stage m10 requires fMRI data. Either configure `fmri.bold_path` in your YAML, run fMRIPrep, or skip m10/m11 with `--skip m10,m11`.
 
-**"too many indices for array: array is 1-dimensional, but 2 were indexed"** (m10)
-: This indicates an ROI signal shape mismatch during trial-wise beta extraction. The current `trialwise_betas` implementation tolerates both 1D and 2D masker outputs; if you still see this, update to latest `main` and rerun.
-
 **"repocli is not on PATH"**
 : Install [repocli](https://github.com/Donders-Institute/dr-tools/releases) and run `repocli config` once with base URL `https://webdav.data.ru.nl`.
-
-**GUI shows "Streamlit not installed"**
-: Install with `pip install -e ".[gui]"`.
-
-**Import errors for nilearn/templateflow**
-: Install fMRI extras: `pip install -e ".[fmri]"`.
 
 **Watch command shows "Waiting for run_state.json"**
 : Start a `run` in another terminal first. The `watch` command polls the live state file written during pipeline execution.
 
-**FreeSurfer fails with `mri_convert: extra argument`**
-: The input path usually contains spaces. Use `scripts/recon_all_neurodesk_safe.sh` (or the updated SLURM scripts in `scripts/`), which stage T1w into a no-space path before calling `recon-all`.
+More edge cases: see [Issues](https://github.com/JonathanWade24/MOUS/issues) or [`docs/`](docs/).
 
 ## Contributing
 
-See `CONTRIBUTING.md`.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
+
+Developed for the MOUS study. Questions and bug reports: [GitHub Issues](https://github.com/JonathanWade24/MOUS/issues) · [JonathanWade24](https://github.com/JonathanWade24)
