@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from ..io import stage_output_dir
+from ..paths import reports_dir
 
 _LOG = logging.getLogger(__name__)
 _REQUIRED_R_PACKAGES = (
@@ -124,8 +125,7 @@ def _render_quarto_template(
 
 def render_quarto(subject: str, cfg) -> Path | None:
     """Render the cumulative subject Quarto report when quarto is available."""
-    root = Path.cwd()
-    qmd_path = root / "reports" / "subject_full_report.qmd"
+    qmd_path = reports_dir() / "subject_full_report.qmd"
     out_dir = stage_output_dir(cfg, subject, "m8_reports")
     exports_dir = out_dir / "exports"
     return _render_quarto_template(
@@ -139,11 +139,10 @@ def render_quarto(subject: str, cfg) -> Path | None:
 
 def render_group_quarto(*, derivatives_root: Path, summary_json: Path) -> Path | None:
     """Render the group Quarto report after group summary export."""
-    root = Path.cwd()
     out_dir = derivatives_root / "group_reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     return _render_quarto_template(
-        qmd_path=root / "reports" / "group_report.qmd",
+        qmd_path=reports_dir() / "group_report.qmd",
         out_dir=out_dir,
         output_name="group_quarto_report.html",
         params={"summary_json": str(summary_json)},

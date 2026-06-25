@@ -1,0 +1,42 @@
+# Docker / Apptainer template — bind-mount host dirs to /data and /derivatives.
+# Run with: MOUS_DATA_ROOT=/data MOUS_DERIVATIVES_ROOT=/derivatives
+
+data_root: "/data"
+derivatives_root: "/derivatives"
+
+subjects:
+  - "A2002"
+
+rdr:
+  collection_path: "dccn/DSC_3011020.09_236_v1"
+
+preprocess:
+  backend: "inhouse"
+  notch_freqs: [50, 100, 150]
+  resample_hz: 300.0
+
+epoching:
+  tmin: -0.85
+  tmax: 3.0
+  baseline: [-0.5, 0.0]
+  min_trials_per_condition: 50
+
+features:
+  bands:
+    theta: [4.0, 8.0]
+    alpha: [8.0, 13.0]
+    beta: [13.0, 30.0]
+    gamma: [30.0, 80.0]
+
+source:
+  subjects_dir: "/derivatives/freesurfer"
+  use_fsaverage: true
+
+fmri:
+  skip_fmriprep: true
+
+wave_validation:
+  enabled: false
+
+pipeline:
+  m10_reuse_fmriprep: true

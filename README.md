@@ -15,11 +15,18 @@ Python package for MOUS MEG analysis: events, CTF preprocessing, epoching, spect
 
 ## Install
 
-From the repository root (required for relative paths used by the GUI CLI):
+From the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.lock
+pip install --no-deps -e .
+```
+
+For a minimal editable install without the lockfile:
+
+```bash
 pip install -e .
 ```
 
@@ -30,7 +37,25 @@ pip install -e ".[gui]"     # Streamlit UI
 pip install -e ".[bids]"    # MNE-BIDS-Pipeline backend for preprocessing
 pip install -e ".[fmri]"    # Aim 2 fMRI / nilearn stack
 pip install -e ".[ops]"     # SSH-first Textual operations UI
+pip install -e ".[dev]"     # pytest, ruff (also in requirements-dev.lock)
 ```
+
+See [docs/reproducibility.md](docs/reproducibility.md) for environment variables, lockfile regeneration, Docker, and Apptainer.
+
+## Run with Docker
+
+Build and run the core pipeline (MEG stages; fMRIPrep/FreeSurfer/Quarto remain external):
+
+```bash
+docker build -t mous-pipeline:latest .
+docker run --rm \
+  -v "$PWD/data:/data" \
+  -v "$PWD/derivatives:/derivatives" \
+  -v "$PWD/configs/example_container.yaml:/config.yaml:ro" \
+  mous-pipeline:latest run --config /config.yaml --subject A2002 --dry-run
+```
+
+Mount pre-fetched data at `/data` and write derivatives to `/derivatives`. Use `configs/example_container.yaml` or set `MOUS_DATA_ROOT` / `MOUS_DERIVATIVES_ROOT` in your own config.
 
 ## Expected data structure
 
@@ -50,7 +75,7 @@ Optional BIDS sidecars can be generated with `mous-pipeline bids-convert`.
 ## Quickstart
 
 ```bash
-mous-pipeline run --config configs/palmetto_hpcnirc_fmri.yaml --subject A2002
+mous-pipeline run --config configs/pilot_A2002.yaml --subject A2002
 ```
 
 GUI deprecation notice: `mous-pipeline gui` is deprecated and will be removed in v0.3.0.

@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+from .paths import resolve_derivatives_root
+
+__all__ = [
+    "PipelineConfig",
+    "PreprocessConfig",
+    "EpochingConfig",
+    "FeatureConfig",
+    "RdrConfig",
+    "SourceConfig",
+    "FmriConfig",
+    "WaveValidationConfig",
+    "RuntimeOverrides",
+    "load_config",
+    "resolve_runtime_overrides",
+    "apply_runtime_overrides",
+    "resolve_derivatives_root",
+]
 
 
 @dataclass
@@ -154,10 +173,28 @@ def _to_tuple_bands(bands: dict[str, list[float] | tuple[float, float]]) -> dict
     return out
 
 
+def _expand_vars(obj: Any) -> Any:
+    """Recursively expand ``${VAR}`` / ``$VAR`` placeholders in YAML values."""
+    if isinstance(obj, dict):
+        return {key: _expand_vars(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_vars(value) for value in obj]
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    return obj
+
+
+def _resolve_config_path(raw: str | None, env_key: str, default: str) -> Path:
+    value = str(raw or "").strip()
+    if not value:
+        value = os.environ.get(env_key, default)
+    return Path(value).expanduser()
+
+
 def load_config(path: str | Path) -> PipelineConfig:
     """Load YAML config into typed PipelineConfig."""
     config_path = Path(path)
-    raw = yaml.safe_load(config_path.read_text()) or {}
+    raw = _expand_vars(yaml.safe_load(config_path.read_text()) or {})
 
     preprocess = PreprocessConfig(**raw.get("preprocess", {}))
     ep_raw = raw.get("epoching", {})
@@ -219,8 +256,12 @@ def load_config(path: str | Path) -> PipelineConfig:
     )
 
     return PipelineConfig(
-        data_root=Path(raw.get("data_root", ".")).expanduser(),
-        derivatives_root=Path(raw.get("derivatives_root", "derivatives/mous_pipeline")).expanduser(),
+        data_root=_resolve_config_path(raw.get("data_root"), "MOUS_DATA_ROOT", "."),
+        derivatives_root=_resolve_config_path(
+            raw.get("derivatives_root"),
+            "MOUS_DERIVATIVES_ROOT",
+            "derivatives/mous_pipeline",
+        ),
         subjects=raw.get("subjects", []),
         paths=raw.get("paths", {}),
         rdr=rdr,

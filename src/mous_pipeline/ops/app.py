@@ -23,7 +23,7 @@ from textual.widgets import (
     Static,
 )
 
-from ..config import RuntimeOverrides, load_config
+from ..config import RuntimeOverrides, load_config, resolve_derivatives_root
 from ..stage_dependencies import STAGE_ORDER
 from .actions import (
     MODE_TO_PRESET_DEFAULTS,
@@ -347,7 +347,7 @@ FAILURE_HINTS: dict[str, str] = {
     "validation":  "[bold yellow]BIDS VALIDATION[/bold yellow]  →  Run bids-convert, or set skip_bids_validation: true",
     "missing_file":"[bold yellow]MISSING FILE[/bold yellow]  →  Check data_root paths and repocli fetch",
     "container":   "[bold red]CONTAINER ERROR[/bold red]  →  Verify fmriprep_container path and apptainer bind mounts",
-    "permission":  "[bold red]PERMISSION DENIED[/bold red]  →  Check /scratch/jonathanwade directory permissions",
+    "permission":  "[bold red]PERMISSION DENIED[/bold red]  →  Check derivatives directory permissions",
     "unknown":     "[dim]No pattern matched. Scan the log manually.[/dim]",
 }
 
@@ -804,7 +804,7 @@ class SubjectsScreen(Screen):
             cfg = load_config(Path(self.app.wizard_config).expanduser().resolve())
             return str(cfg.derivatives_root)
         except Exception:
-            return self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+            return str(resolve_derivatives_root(self.app.state.defaults))
 
     def _load_subjects(self) -> None:
         cfg = self.app.wizard_config
@@ -990,7 +990,7 @@ class PipelineScreen(Screen):
             cfg = load_config(Path(self.app.wizard_config).expanduser().resolve())
             return str(cfg.derivatives_root)
         except Exception:
-            return self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+            return str(resolve_derivatives_root(self.app.state.defaults))
 
     def on_mount(self) -> None:
         self.query_one("#cb-force-recompute", Checkbox).value = bool(getattr(self.app, "wizard_force", False))
@@ -1108,7 +1108,7 @@ class PipelineScreen(Screen):
         )
         if plan.command_kind == "group":
             preview_cmd = build_group_cmd(
-                derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+                derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
                 subjects=self.app.wizard_subjects,
                 quarto_only=True,
             )
@@ -1459,7 +1459,7 @@ class LaunchScreen(Screen):
         if not info:
             self.notify("Could not query partition resources via sinfo", severity="warning")
             return
-        derivatives_root = self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+        derivatives_root = str(resolve_derivatives_root(self.app.state.defaults))
         peak_rss_gb = _estimate_peak_rss_gb(derivatives_root, self.app.wizard_subjects)
         try:
             recommendation = recommend_resources(
@@ -1505,7 +1505,7 @@ class LaunchScreen(Screen):
             mem=r["mem"],
             cpus_per_task=r["cpus_per_task"],
             venv_path=self.app.state.defaults.get("venv_path", "~/.venvs/mous-palmetto"),
-            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
             repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1535,7 +1535,7 @@ class GroupScreen(Screen):
         yield Static("  Group Analysis  ›  Build + Execute", classes="wizard-header")
         with Horizontal(classes="frow"):
             yield Label("Derivatives:", classes="flabel")
-            yield Input(value=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"), id="group-derivatives")
+            yield Input(value=str(resolve_derivatives_root(self.app.state.defaults)), id="group-derivatives")
             yield Label("Test:", classes="flabel")
             yield Select([("Wilcoxon", "wilcoxon"), ("LME", "lme")], value="wilcoxon", id="group-test")
         with Horizontal(classes="frow"):
@@ -1611,7 +1611,7 @@ class GroupScreen(Screen):
             time_limit=time_limit,
             mem=mem,
             cpus_per_task=cpus,
-            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
             repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1684,7 +1684,7 @@ class RedownloadScreen(Screen):
             time_limit=self.app.state.defaults.get("fetch_time", "02:00:00"),
             mem=self.app.state.defaults.get("fetch_mem", "16G"),
             cpus_per_task=self.app.state.defaults.get("fetch_cpus_per_task", "1"),
-            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
             repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1826,7 +1826,7 @@ class PrepSourceScreen(Screen):
             time_limit=self.query_one("#prep-recon-time-input", Input).value.strip(),
             mem=self.query_one("#prep-recon-mem-input", Input).value.strip(),
             cpus_per_task=self.query_one("#prep-recon-cpus-input", Input).value.strip(),
-            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
             repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1871,7 +1871,7 @@ class PrepSourceScreen(Screen):
             time_limit=self.query_one("#prep-bem-time-input", Input).value.strip(),
             mem=self.query_one("#prep-bem-mem-input", Input).value.strip(),
             cpus_per_task=self.query_one("#prep-bem-cpus-input", Input).value.strip(),
-            derivatives_root=self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives"),
+            derivatives_root=str(resolve_derivatives_root(self.app.state.defaults)),
             repo_root=Path.cwd(),
         )
         out = (proc.stdout or "") + (proc.stderr or "")
@@ -1951,7 +1951,7 @@ class RunResultsScreen(Screen):
         if not job:
             self.notify("Select a run row first", severity="warning")
             return
-        slurm_dir = Path(self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")).expanduser() / "slurm"
+        slurm_dir = resolve_derivatives_root(self.app.state.defaults) / "slurm"
         path = slurm_dir / f"mous_driver_{job.job_id}.err"
         self.app.push_screen(LogScreen(initial_log_path=path))
 
@@ -1961,7 +1961,7 @@ class RunResultsScreen(Screen):
         if not job:
             self.notify("Select a run row first", severity="warning")
             return
-        slurm_dir = Path(self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")).expanduser() / "slurm"
+        slurm_dir = resolve_derivatives_root(self.app.state.defaults) / "slurm"
         path = slurm_dir / f"fmriprep_{job.job_id}_0.err"
         self.app.push_screen(LogScreen(initial_log_path=path))
 
@@ -1971,7 +1971,7 @@ class RunResultsScreen(Screen):
         if not job:
             self.notify("Select a run row first", severity="warning")
             return
-        derivatives_root = self.app.state.defaults.get("derivatives_root", "/scratch/jonathanwade/mous_derivatives")
+        derivatives_root = str(resolve_derivatives_root(self.app.state.defaults))
         lines = [
             f"[bold]Job:[/bold] {job.job_id}  [bold]Type:[/bold] {self._display_run_kind(job.kind)}",
             f"[bold]Subjects:[/bold] {', '.join(job.subjects) if job.subjects else '-'}",
@@ -2039,14 +2039,10 @@ class LogScreen(Screen):
             self._autodetect()
 
     def _candidate_dirs(self) -> list[Path]:
-        deriv = self.app.state.defaults.get("derivatives_root", "")
-        candidates = []
-        if deriv:
-            candidates.append(Path(deriv).expanduser() / "slurm")
-        candidates += [
-            Path("/scratch/jonathanwade/mous_derivatives/slurm"),
-            Path.home() / "mous_derivatives" / "slurm",
-        ]
+        candidates = [resolve_derivatives_root(self.app.state.defaults) / "slurm"]
+        home_slurm = Path.home() / "mous_derivatives" / "slurm"
+        if home_slurm not in candidates:
+            candidates.append(home_slurm)
         return candidates
 
     def _autodetect(self) -> None:

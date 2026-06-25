@@ -1,9 +1,12 @@
-# Palmetto template for hpcnirc partition.
-# Copy and customize all paths for your account/allocation.
+# Palmetto hpcnirc template — set env vars before running (see docs/reproducibility.md).
+# Example (Clemson Palmetto):
+#   export MOUS_DATA_ROOT=/scratch/$USER/mous_data
+#   export MOUS_DERIVATIVES_ROOT=/scratch/$USER/mous_derivatives
+#   export MOUS_CONTAINER_DIR=/scratch/$USER/containers
+#   export FS_LICENSE=/data/freesurfer/license.txt
 
-# Keep paths space-free for fMRIPrep/FSL/ANTs compatibility.
-data_root: "/scratch/jonathanwade/mous_data"
-derivatives_root: "/scratch/jonathanwade/mous_derivatives"
+data_root: "${MOUS_DATA_ROOT}"
+derivatives_root: "${MOUS_DERIVATIVES_ROOT}"
 
 subjects:
   - "A2002"
@@ -35,12 +38,10 @@ features:
     gamma: [30.0, 80.0]
 
 source:
-  # Subject-specific source model: requires recon-all + BEM surfaces under subjects_dir.
-  subjects_dir: "/scratch/jonathanwade/mous_derivatives/freesurfer"
+  subjects_dir: "${MOUS_DERIVATIVES_ROOT}/freesurfer"
   use_fsaverage: false
   beamformer: "lcmv"
   spacing: "oct6"
-  # Keep fsaverage for template-space transform, or set a subject-specific trans path template.
   trans: "fsaverage"
   conductivity: [0.3]
   reg: 0.05
@@ -52,24 +53,19 @@ fmri:
   tr: 2.0
   atlas: "glasser"
   roi: "L_TE1a"
-  # Point to your apptainer/singularity image on Palmetto.
-  fmriprep_container: "/scratch/jonathanwade/containers/fmriprep.sif"
-  # Keep output/work/license paths on mounted, writable filesystems.
-  fmriprep_output: "/scratch/jonathanwade/mous_derivatives/fmriprep"
+  fmriprep_container: "${MOUS_CONTAINER_DIR}/fmriprep.sif"
+  fmriprep_output: "${MOUS_DERIVATIVES_ROOT}/fmriprep"
   skip_fmriprep: false
   skip_bids_validation: false
   neurodesk_module: ""
-  fs_license_file: "/scratch/jonathanwade/licenses/freesurfer/license.txt"
+  fs_license_file: "${FS_LICENSE}"
   onset_shift_s: 0.0
   hrf_lag_sweep_s: [4.0, 5.0, 6.0, 7.0, 8.0]
-  # Optional: force a runtime. Leave empty to auto-detect apptainer->singularity.
   container_runtime: ""
-  # Optional binds in SRC:DST form for container exec.
-  # Example: expose scratch/templateflow caches inside container.
   container_binds:
-    - "/scratch/jonathanwade:/scratch/jonathanwade"
-    - "/scratch/jonathanwade/templateflow:/opt/templateflow"
-    - "/scratch/jonathanwade/licenses:/scratch/jonathanwade/licenses"
+    - "${MOUS_DERIVATIVES_ROOT}:${MOUS_DERIVATIVES_ROOT}"
+    - "${MOUS_DATA_ROOT}:${MOUS_DATA_ROOT}"
+    - "${MOUS_DERIVATIVES_ROOT}/templateflow:/opt/templateflow"
 
 wave_validation:
   enabled: true
